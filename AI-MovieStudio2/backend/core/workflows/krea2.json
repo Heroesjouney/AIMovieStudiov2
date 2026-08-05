@@ -1,0 +1,28 @@
+{
+  "1": {
+    "class_type": "Krea2ImageNode",
+    "inputs": {
+      "prompt": "{prompt}",
+      "model": {
+        "model": "krea 2 medium turbo",
+        "aspect_ratio": "1:1",
+        "resolution": "1k",
+        "creativity": 0.5
+      },
+      "seed": 0
+    },
+    "_meta": {
+      "title": "Krea 2 Image"
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ai_director",
+      "images": ["1", 0]
+    },
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

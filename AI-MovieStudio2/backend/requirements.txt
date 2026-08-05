@@ -1,0 +1,39 @@
+# AI Movie Studio 2 - Backend Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Data Validation
+pydantic>=2.5.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# AI Provider - Fal.ai
+fal-client>=0.4.0
+
+# AI Provider - Replicate
+replicate>=0.31.0
+
+# HTTP Client (async)
+httpx>=0.25.0
+aiohttp>=3.9.0
+
+# Image Processing
+Pillow>=10.0.0
+
+# Video Processing
+moviepy>=1.0.3
+
+# Template Engine (for XML export)
+Jinja2>=3.1.0
+
+# WebSocket support (for real-time generation status)
+websockets>=12.0
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

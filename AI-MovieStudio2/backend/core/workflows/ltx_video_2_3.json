@@ -1,0 +1,84 @@
+{
+  "_comment": "LTX Video 2.3 workflow template for ComfyUI. Placeholders are filled by ComfyVideoDriver._build_workflow(). Requires LTXV nodes installed in ComfyUI.",
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ltx-video-2b-v0.9.5.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "PROMPT_PLACEHOLDER",
+      "clip": ["3", 0]
+    }
+  },
+  "3": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "type": "t5xxl",
+      "device": "cuda"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "NEGATIVE_PROMPT_PLACEHOLDER",
+      "clip": ["3", 0]
+    }
+  },
+  "5": {
+    "class_type": "LTXVEmptyLatent",
+    "inputs": {
+      "width": 1280,
+      "height": 720,
+      "length": 97,
+      "batch_size": 1
+    }
+  },
+  "6": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "FIRST_FRAME_PLACEHOLDER"
+    }
+  },
+  "7": {
+    "class_type": "LTXVImgToVideo",
+    "inputs": {
+      "positive": ["2", 0],
+      "negative": ["4", 0],
+      "vae": ["8", 0],
+      "image": ["6", 0],
+      "latent": ["5", 0],
+      "seed": 0,
+      "steps": 30,
+      "cfg": 3.0,
+      "scheduler": "euler",
+      "denoise_strength": 0.7
+    }
+  },
+  "8": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ltx-video-vae.safetensors"
+    }
+  },
+  "9": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["7", 0],
+      "vae": ["8", 0]
+    }
+  },
+  "10": {
+    "class_type": "SaveAnimatedWEBP",
+    "inputs": {
+      "images": ["9", 0],
+      "filename_prefix": "ltxv_2_3",
+      "fps": 24.0,
+      "lossless": false,
+      "quality": 90,
+      "method": "default"
+    }
+  }
+}

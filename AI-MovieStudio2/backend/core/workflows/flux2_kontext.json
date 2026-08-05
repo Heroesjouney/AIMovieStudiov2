@@ -1,0 +1,186 @@
+{
+  "1": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "_meta": {"title": "Load VAE"}
+  },
+  "2": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "flux",
+      "device": "default"
+    },
+    "_meta": {"title": "Load CLIP Encoders"}
+  },
+  "3": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux1-dev-kontext_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {"title": "Load Flux Kontext UNet"}
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{reference_image_1}"
+    },
+    "_meta": {"title": "Reference Image 1 (Character)"}
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{reference_image_2}"
+    },
+    "_meta": {"title": "Reference Image 2 (Location)"}
+  },
+  "12": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{reference_image_3}"
+    },
+    "_meta": {"title": "Reference Image 3 (Prop)"}
+  },
+  "13": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{reference_image_4}"
+    },
+    "_meta": {"title": "Reference Image 4 (Style/Frame)"}
+  },
+  "20": {
+    "class_type": "ImageStitch",
+    "inputs": {
+      "image1": ["10", 0],
+      "image2": ["11", 0],
+      "match_image_size": "longer_side",
+      "direction": "right",
+      "spacing_width": 0,
+      "spacing_color": "white"
+    },
+    "_meta": {"title": "Stitch Ref 1+2"}
+  },
+  "21": {
+    "class_type": "ImageStitch",
+    "inputs": {
+      "image1": ["12", 0],
+      "image2": ["13", 0],
+      "match_image_size": "longer_side",
+      "direction": "right",
+      "spacing_width": 0,
+      "spacing_color": "white"
+    },
+    "_meta": {"title": "Stitch Ref 3+4"}
+  },
+  "22": {
+    "class_type": "ImageStitch",
+    "inputs": {
+      "image1": ["20", 0],
+      "image2": ["21", 0],
+      "match_image_size": "longer_side",
+      "direction": "right",
+      "spacing_width": 0,
+      "spacing_color": "white"
+    },
+    "_meta": {"title": "Merge Reference Board"}
+  },
+  "23": {
+    "class_type": "FluxKontextImageScale",
+    "inputs": {
+      "image": ["22", 0]
+    },
+    "_meta": {"title": "Flux Kontext Image Scale"}
+  },
+  "24": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["23", 0],
+      "vae": ["1", 0]
+    },
+    "_meta": {"title": "Encode References"}
+  },
+  "25": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{prompt}",
+      "clip": ["2", 0]
+    },
+    "_meta": {"title": "Positive Prompt"}
+  },
+  "26": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{negative_prompt}",
+      "clip": ["2", 0]
+    },
+    "_meta": {"title": "Negative Prompt"}
+  },
+  "27": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "guidance": 3.5,
+      "conditioning": ["25", 0]
+    },
+    "_meta": {"title": "Flux Guidance"}
+  },
+  "28": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": ["26", 0]
+    },
+    "_meta": {"title": "Negative Conditioning"}
+  },
+  "29": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": ["27", 0],
+      "latent": ["24", 0]
+    },
+    "_meta": {"title": "Reference Latent"}
+  },
+  "30": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": "{seed}",
+      "steps": 20,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": "{denoise}",
+      "model": ["3", 0],
+      "positive": ["29", 0],
+      "negative": ["28", 0],
+      "latent_image": ["40", 0]
+    },
+    "_meta": {"title": "Kontext Sampler"}
+  },
+  "31": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["30", 0],
+      "vae": ["1", 0]
+    },
+    "_meta": {"title": "Decode Samples"}
+  },
+  "32": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "flux_kontext",
+      "images": ["31", 0]
+    },
+    "_meta": {"title": "Save Output"}
+  },
+  "40": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": "{width}",
+      "height": "{height}",
+      "batch_size": 1
+    },
+    "_meta": {"title": "Init Latent"}
+  }
+}
