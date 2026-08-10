@@ -6,8 +6,8 @@
       "cfg": 1,
       "sampler_name": "euler",
       "scheduler": "simple",
-      "denoise": "{denoise}",
-      "model": ["143:141", 0],
+      "denoise": 1.0,
+      "model": ["143:140", 0],
       "positive": ["143:123", 0],
       "negative": ["143:122", 0],
       "latent_image": ["143:137", 0]
@@ -29,23 +29,7 @@
       "upload": "image"
     },
     "class_type": "LoadImage",
-    "_meta": {"title": "Load Image 1 (Frame/Character)"}
-  },
-  "79": {
-    "inputs": {
-      "image": "{input_image2}",
-      "upload": "image"
-    },
-    "class_type": "LoadImage",
-    "_meta": {"title": "Load Image 2 (Location)"}
-  },
-  "80": {
-    "inputs": {
-      "image": "{input_image3}",
-      "upload": "image"
-    },
-    "class_type": "LoadImage",
-    "_meta": {"title": "Load Image 3 (Prop/Style)"}
+    "_meta": {"title": "Load Character Reference"}
   },
   "143:119": {
     "inputs": {
@@ -91,9 +75,7 @@
       "prompt": "{negative_prompt}",
       "clip": ["143:127", 0],
       "vae": ["143:120", 0],
-      "image1": ["143:142", 0],
-      "image2": ["143:143", 0],
-      "image3": ["143:144", 0]
+      "image1": ["143:142", 0]
     },
     "class_type": "TextEncodeQwenImageEditPlus",
     "_meta": {"title": "TextEncodeQwenImageEditPlus (Negative)"}
@@ -103,9 +85,7 @@
       "prompt": "{prompt}",
       "clip": ["143:127", 0],
       "vae": ["143:120", 0],
-      "image1": ["143:142", 0],
-      "image2": ["143:143", 0],
-      "image3": ["143:144", 0]
+      "image1": ["143:142", 0]
     },
     "class_type": "TextEncodeQwenImageEditPlus",
     "_meta": {"title": "TextEncodeQwenImageEditPlus (Positive)"}
@@ -136,54 +116,6 @@
     "class_type": "LoraLoaderModelOnly",
     "_meta": {"title": "Lightning LoRA"}
   },
-  "143:131": {
-    "inputs": {
-      "value": 4
-    },
-    "class_type": "PrimitiveInt",
-    "_meta": {"title": "Steps (Lightning)"}
-  },
-  "143:132": {
-    "inputs": {
-      "value": 4
-    },
-    "class_type": "PrimitiveFloat",
-    "_meta": {"title": "CFG (Lightning)"}
-  },
-  "143:133": {
-    "inputs": {
-      "value": 1
-    },
-    "class_type": "PrimitiveFloat",
-    "_meta": {"title": "CFG (Lightning Alt)"}
-  },
-  "143:134": {
-    "inputs": {
-      "switch": "{use_lightning}",
-      "on_false": ["143:132", 0],
-      "on_true": ["143:133", 0]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {"title": "Switch (CFG)"}
-  },
-  "143:135": {
-    "inputs": {
-      "switch": "{use_lightning}",
-      "on_false": ["143:129", 0],
-      "on_true": ["143:130", 0]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {"title": "Switch (Model)"}
-  },
-  "143:136": {
-    "inputs": {
-      "switch": "{use_lightning}",
-      "on_false": ["143:139", 0],
-      "on_true": ["143:131", 0]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {"title": "Switch (Steps)"}
-  },
   "143:137": {
     "inputs": {
       "pixels": ["143:142", 0],
@@ -192,62 +124,25 @@
     "class_type": "VAEEncode",
     "_meta": {"title": "VAE Encode"}
   },
-  "143:138": {
+  "143:140": {
     "inputs": {
-      "value": true
+      "lora_name": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+      "strength_model": 0.8,
+      "model": ["143:130", 0]
     },
-    "class_type": "PrimitiveBoolean",
-    "_meta": {"title": "Enable Lightning LoRA?"}
-  },
-  "143:139": {
-    "inputs": {
-      "value": 40
-    },
-    "class_type": "PrimitiveInt",
-    "_meta": {"title": "Steps (Standard)"}
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {"title": "Multiangle LoRA"}
   },
   "143:142": {
     "inputs": {
       "image": ["78", 0]
     },
     "class_type": "FluxKontextImageScale",
-    "_meta": {"title": "FluxKontextImageScale 1"}
-  },
-  "143:143": {
-    "inputs": {
-      "image": ["79", 0]
-    },
-    "class_type": "FluxKontextImageScale",
-    "_meta": {"title": "FluxKontextImageScale 2"}
-  },
-  "143:144": {
-    "inputs": {
-      "image": ["80", 0]
-    },
-    "class_type": "FluxKontextImageScale",
-    "_meta": {"title": "FluxKontextImageScale 3"}
-  },
-  "143:140": {
-    "inputs": {
-      "lora_name": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
-      "strength_model": 0.8,
-      "model": ["143:135", 0]
-    },
-    "class_type": "LoraLoaderModelOnly",
-    "_meta": {"title": "Multiangle LoRA"}
-  },
-  "143:141": {
-    "inputs": {
-      "switch": "{use_multiangle}",
-      "on_false": ["143:135", 0],
-      "on_true": ["143:140", 0]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {"title": "Switch (Multiangle LoRA)"}
+    "_meta": {"title": "FluxKontextImageScale (Reference)"}
   },
   "60": {
     "inputs": {
-      "filename_prefix": "qwen_multiangle",
+      "filename_prefix": "turnaround_view",
       "images": ["8", 0]
     },
     "class_type": "SaveImage",

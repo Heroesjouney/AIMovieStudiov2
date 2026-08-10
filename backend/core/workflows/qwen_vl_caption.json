@@ -1,0 +1,35 @@
+{
+  "1": {
+    "inputs": {
+      "image": "{input_image}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {"title": "Load Character Image"}
+  },
+  "2": {
+    "inputs": {
+      "model_name": "Qwen2.5-VL-7B-Instruct",
+      "quantization": "None (FP16)",
+      "attention_mode": "auto",
+      "preset_prompt": "🖼️ Detailed Description",
+      "custom_prompt": "Describe this character in detail for a turnaround sheet. Focus on: gender, approximate age, clothing (color, style, material), hair (color, length, style), body type, distinguishing features (scars, tattoos, accessories), footwear, and any props. Write as a single concise paragraph, no bullet points. Example: 'a man in his 40s wearing a dark blue suit with a red tie, short gray hair, athletic build, leather shoes, silver watch on left wrist'",
+      "max_tokens": 300,
+      "keep_model_loaded": true,
+      "seed": 1,
+      "image": ["1", 0]
+    },
+    "class_type": "AILab_QwenVL",
+    "_meta": {"title": "QwenVL Character Description"}
+  },
+  "3": {
+    "inputs": {
+      "string": ["2", 0],
+      "filename_prefix": "{filename_prefix}",
+      "output_folder": "output",
+      "file_extension": ".txt"
+    },
+    "class_type": "SaveStringKJ",
+    "_meta": {"title": "Save Description"}
+  }
+}

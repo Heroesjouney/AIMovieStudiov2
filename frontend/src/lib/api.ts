@@ -232,6 +232,7 @@ export async function generateAssetSheet(
   assetId: string,
   prompt?: string,
   seed?: number,
+  modelId?: string,
 ): Promise<GenerationResponse> {
   const resp = await fetch(`${API_BASE}/generate/asset-sheet`, {
     method: "POST",
@@ -241,8 +242,50 @@ export async function generateAssetSheet(
       asset_id: assetId,
       prompt: prompt || null,
       seed: seed || null,
+      model_id: modelId || null,
     }),
   });
+  return resp.json();
+}
+
+export async function generateTurnaroundSheet(
+  projectId: string,
+  assetId: string,
+  characterDescription?: string,
+  prompt?: string,
+  seed?: number,
+): Promise<GenerationResponse> {
+  const resp = await fetch(`${API_BASE}/generate/turnaround-sheet`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      asset_id: assetId,
+      character_description: characterDescription || null,
+      prompt: prompt || null,
+      seed: seed || null,
+    }),
+  });
+  return resp.json();
+}
+
+export async function analyzeCharacter(
+  projectId: string,
+  assetId: string,
+): Promise<GenerationResponse> {
+  const resp = await fetch(`${API_BASE}/generate/analyze-character`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      asset_id: assetId,
+    }),
+  });
+  return resp.json();
+}
+
+export async function checkAnalysisStatus(jobId: string): Promise<GenerationResponse> {
+  const resp = await fetch(`${API_BASE}/generate/analyze-status/${jobId}`);
   return resp.json();
 }
 

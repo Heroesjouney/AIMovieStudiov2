@@ -99,7 +99,7 @@ class ComfyImageDriver(ImageDriver):
             return self._workflows[name]
         workflow_path = Path(__file__).parent.parent / "workflows" / f"{name}.json"
         if workflow_path.exists():
-            with open(workflow_path, "r") as f:
+            with open(workflow_path, "r", encoding="utf-8") as f:
                 wf = json.load(f)
                 self._workflows[name] = wf
                 return wf
@@ -532,6 +532,191 @@ class ComfyImageDriver(ImageDriver):
             metadata={"prompt_id": prompt_id, "workflow": "character_sheet"},
         )
 
+    TURNAROUND_VIEWS = [
+        ("front", "front view of {desc}, full body, standing pose, facing camera, character turnaround sheet, white background, clean design sheet"),
+        ("side", "side profile view of {desc}, full body, standing pose, facing left, character turnaround sheet, white background, clean design sheet"),
+        ("back", "back view of {desc}, full body, standing pose, seen from behind, character turnaround sheet, white background, clean design sheet"),
+        ("three_quarter", "three-quarter view of {desc}, full body, standing pose, angled 45 degrees, character turnaround sheet, white background, clean design sheet"),
+        ("face_closeup", "extreme close-up portrait of {desc}, face only, detailed facial features, looking at camera, neutral expression, character turnaround sheet, white background, clean design sheet"),
+    ]
+
+    async def generate_turnaround_sheet(
+        self,
+        asset_image_path: str,
+        character_description: str = "",
+        prompt: str = "",
+        negative_prompt: str = "",
+        seed: Optional[int] = None,
+    ) -> ImageGenerationResponse:
+        """Generate a 4-view turnaround sheet by submitting 4 separate view generations and compositing them."""
+        job_id = str(uuid.uuid4())
+        workflow = self._load_workflow("character_turnaround_view")
+
+        if not workflow:
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message="Workflow template 'character_turnaround_view' not found",
+            )
+
+        actual_seed = seed if seed is not None else int(time.time()) % (2**32)
+        desc = character_description or "the character"
+        sheet_negative = negative_prompt or "deformed, blurry, low quality, distorted, watermark, text, inconsistent design"
+
+        local_path = self._resolve_local_path(asset_image_path)
+        if not local_path:
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message=f"Asset image not found: {asset_image_path}",
+            )
+
+        child_prompt_ids: List[str] = []
+        view_labels: List[str] = []
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                comfy_filename = await self._upload_to_comfy(session, local_path)
+
+                for view_name, view_prompt_template in self.TURNAROUND_VIEWS:
+                    if prompt:
+                        view_prompt = f"{prompt}, {view_name} view"
+                    else:
+                        view_prompt = view_prompt_template.format(desc=desc)
+
+                    wf = self._inject_params(
+                        workflow,
+                        prompt=view_prompt,
+                        negative=sheet_negative,
+                        width=1024,
+                        height=1024,
+                        seed=actual_seed,
+                        reference_image_paths=[comfy_filename],
+                    )
+
+                    async with session.post(
+                        f"{self.comfy_url}/prompt",
+                        json={"prompt": wf},
+                    ) as resp:
+                        if resp.status != 200:
+                            error_text = await resp.text()
+                            return ImageGenerationResponse(
+                                job_id=job_id,
+                                status=GenerationStatus.FAILED,
+                                error_message=f"ComfyUI error submitting {view_name} view: {error_text}",
+                            )
+                        result = await resp.json()
+                        pid = result.get("prompt_id")
+                        child_prompt_ids.append(pid)
+                        view_labels.append(view_name)
+                        print(f"[ComfyImageDriver] turnaround view '{view_name}' submitted as prompt_id={pid}")
+        except Exception as e:
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message=f"Failed to connect to ComfyUI: {str(e)}",
+            )
+
+        self._jobs[job_id] = {
+            "type": "turnaround",
+            "status": GenerationStatus.PROCESSING,
+            "child_prompt_ids": child_prompt_ids,
+            "view_labels": view_labels,
+            "child_results": {pid: None for pid in child_prompt_ids},
+            "created_at": time.time(),
+            "output_images": [],
+            "view_images": [],
+            "seed": actual_seed,
+        }
+
+        return ImageGenerationResponse(
+            job_id=job_id,
+            status=GenerationStatus.PROCESSING,
+            metadata={
+                "workflow": "character_turnaround_view",
+                "views": view_labels,
+                "seed": actual_seed,
+                "child_count": len(child_prompt_ids),
+            },
+        )
+
+    def _composite_turnaround_views(self, image_paths: List[str], labels: List[str]) -> str:
+        """Composite individual view images into a poster-style turnaround sheet."""
+        images = [PILImage.open(p).convert("RGB") for p in image_paths]
+        n = len(images)
+
+        # Poster-style layout matching reference: dark bg, large views
+        view_w = 1000
+        view_h = 1000
+        gap = 10
+        header_h = 80
+        footer_h = 40
+        padding = 30
+
+        # Grid: 3 columns, 2 rows
+        cols = 3
+        rows = (n + cols - 1) // cols
+        grid_w = view_w * cols + gap * (cols - 1)
+        grid_h = (view_h + 30) * rows + gap * (rows - 1)  # 30px label per view
+        total_w = grid_w + padding * 2
+        total_h = grid_h + header_h + footer_h + padding * 2
+
+        canvas = PILImage.new("RGB", (total_w, total_h), (17, 17, 17))
+
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(canvas)
+
+        # Try to load fonts
+        try:
+            title_font = ImageFont.truetype("arial.ttf", 36)
+            label_font = ImageFont.truetype("arialbd.ttf", 20)
+        except Exception:
+            try:
+                title_font = ImageFont.truetype("arial.ttf", 36)
+                label_font = ImageFont.truetype("arial.ttf", 20)
+            except Exception:
+                title_font = ImageFont.load_default()
+                label_font = ImageFont.load_default()
+
+        # Header
+        title_text = "CHARACTER TURNAROUND SHEET"
+        title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
+        title_w = title_bbox[2] - title_bbox[0]
+        draw.text(
+            ((total_w - title_w) // 2, padding),
+            title_text,
+            fill=(220, 220, 220),
+            font=title_font,
+        )
+
+        # Place views in grid
+        for i, (img, label) in enumerate(zip(images, labels)):
+            row = i // cols
+            col = i % cols
+            x = padding + col * (view_w + gap)
+            y = padding + header_h + row * (view_h + 30 + gap)
+
+            img_resized = img.resize((view_w, view_h), PILImage.LANCZOS)
+            canvas.paste(img_resized, (x, y))
+
+            # Label below each view
+            label_clean = label.replace("_", " ").upper()
+            label_bbox = draw.textbbox((0, 0), label_clean, font=label_font)
+            label_w = label_bbox[2] - label_bbox[0]
+            draw.text(
+                (x + (view_w - label_w) // 2, y + view_h + 5),
+                label_clean,
+                fill=(180, 180, 180),
+                font=label_font,
+            )
+
+        vault_dir = Path(__file__).parent.parent.parent / "assets" / "generated"
+        vault_dir.mkdir(parents=True, exist_ok=True)
+        out_path = str(vault_dir / f"turnaround_composite_{int(time.time())}.png")
+        canvas.save(out_path)
+        print(f"[ComfyImageDriver] composited {n} views into {out_path} ({total_w}x{total_h})")
+        return out_path
+
     async def check_status(self, job_id: str) -> ImageGenerationResponse:
         job = self._jobs.get(job_id)
         if not job:
@@ -550,6 +735,75 @@ class ComfyImageDriver(ImageDriver):
                 error_message=job.get("error_message"),
             )
 
+        # --- Turnaround multi-job handling ---
+        if job.get("type") == "turnaround":
+            child_prompt_ids = job["child_prompt_ids"]
+            child_results = job["child_results"]
+            view_labels = job["view_labels"]
+
+            try:
+                async with aiohttp.ClientSession() as session:
+                    for pid in child_prompt_ids:
+                        if child_results[pid] is not None:
+                            continue
+                        async with session.get(
+                            f"{self.comfy_url}/history/{pid}"
+                        ) as resp:
+                            if resp.status == 200:
+                                history = await resp.json()
+                                if pid in history:
+                                    outputs = history[pid].get("outputs", {})
+                                    for node_id, node_output in outputs.items():
+                                        if "images" in node_output:
+                                            for img in node_output["images"]:
+                                                filename = img["filename"]
+                                                subfolder = img.get("subfolder", "")
+                                                img_type = img.get("type", "output")
+                                                view_url = f"{self.comfy_url}/view?filename={filename}&subfolder={subfolder}&type={img_type}"
+                                                vault_dir = Path(__file__).parent.parent.parent / "assets" / "generated"
+                                                vault_dir.mkdir(parents=True, exist_ok=True)
+                                                local_filename = f"{job_id}_{pid}_{filename}"
+                                                local_path = vault_dir / local_filename
+                                                async with session.get(view_url) as img_resp:
+                                                    if img_resp.status == 200:
+                                                        img_data = await img_resp.read()
+                                                        local_path.write_bytes(img_data)
+                                                        backend_url = f"/assets/generated/{local_filename}"
+                                                        child_results[pid] = str(local_path)
+                                                        job["view_images"].append(backend_url)
+                                                        print(f"[ComfyImageDriver] turnaround view completed: pid={pid}")
+                    # Check if all children are done
+                    completed_count = sum(1 for v in child_results.values() if v is not None)
+                    if completed_count == len(child_prompt_ids):
+                        local_image_paths = [child_results[pid] for pid in child_prompt_ids]
+                        composite_path = self._composite_turnaround_views(local_image_paths, view_labels)
+                        composite_filename = Path(composite_path).name
+                        composite_url = f"/assets/generated/{composite_filename}"
+                        job["status"] = GenerationStatus.COMPLETED
+                        job["output_images"] = [composite_url]
+                        return ImageGenerationResponse(
+                            job_id=job_id,
+                            status=GenerationStatus.COMPLETED,
+                            image_urls=[composite_url],
+                            image_paths=[composite_url],
+                            metadata={"views": view_labels, "completed_views": completed_count},
+                        )
+                    else:
+                        return ImageGenerationResponse(
+                            job_id=job_id,
+                            status=GenerationStatus.PROCESSING,
+                            metadata={"views": view_labels, "completed_views": completed_count, "total_views": len(child_prompt_ids)},
+                        )
+            except Exception as e:
+                job["status"] = GenerationStatus.FAILED
+                job["error_message"] = str(e)
+                return ImageGenerationResponse(
+                    job_id=job_id,
+                    status=GenerationStatus.FAILED,
+                    error_message=str(e),
+                )
+
+        # --- Single-job handling (existing) ---
         prompt_id = job.get("prompt_id")
         if not prompt_id:
             return ImageGenerationResponse(
@@ -613,6 +867,192 @@ class ComfyImageDriver(ImageDriver):
             job_id=job_id,
             status=GenerationStatus.PROCESSING,
         )
+
+    async def analyze_character(self, image_path: str) -> ImageGenerationResponse:
+        """Analyze a character image using Qwen2.5-VL and return a text description.
+
+        Submits a ComfyUI workflow with a Qwen2_5_VLChat node that generates
+        a detailed character description from the image.
+        """
+        job_id = str(uuid.uuid4())
+        workflow = self._load_workflow("qwen_vl_caption")
+
+        if not workflow:
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message="Workflow template 'qwen_vl_caption' not found. Requires ComfyUI-Qwen2-VL custom node.",
+            )
+
+        local_path = self._resolve_local_path(image_path)
+        if not local_path:
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message=f"Image not found: {image_path}",
+            )
+
+        # Use job_id as filename prefix for SaveStringKJ so we can find the output file
+        filename_prefix = f"qwen_vl_{job_id[:8]}"
+
+        self._jobs[job_id] = {
+            "type": "vl_caption",
+            "workflow": None,
+            "status": GenerationStatus.PENDING,
+            "prompt_id": None,
+            "created_at": time.time(),
+            "output_text": None,
+            "filename_prefix": filename_prefix,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                comfy_filename = await self._upload_to_comfy(session, local_path)
+
+                # Inject the image into the LoadImage node and filename_prefix into SaveStringKJ
+                wf = json.loads(json.dumps(workflow))
+                for node_id, node in wf.items():
+                    if node.get("class_type") == "LoadImage":
+                        img_val = str(node["inputs"].get("image", ""))
+                        if any(ph in img_val for ph in ["{input_image}", "__IMAGE__", "{reference_image_path}"]):
+                            wf[node_id]["inputs"]["image"] = comfy_filename
+                    if node.get("class_type") == "SaveStringKJ":
+                        fp = str(node["inputs"].get("filename_prefix", ""))
+                        if "{filename_prefix}" in fp:
+                            wf[node_id]["inputs"]["filename_prefix"] = filename_prefix
+
+                self._jobs[job_id]["workflow"] = wf
+
+                async with session.post(
+                    f"{self.comfy_url}/prompt",
+                    json={"prompt": wf},
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        self._jobs[job_id]["status"] = GenerationStatus.FAILED
+                        return ImageGenerationResponse(
+                            job_id=job_id,
+                            status=GenerationStatus.FAILED,
+                            error_message=f"ComfyUI error: {error_text}. Ensure ComfyUI-QwenVL custom node is installed.",
+                        )
+                    result = await resp.json()
+                    prompt_id = result.get("prompt_id")
+                    self._jobs[job_id]["prompt_id"] = prompt_id
+                    self._jobs[job_id]["status"] = GenerationStatus.PROCESSING
+        except Exception as e:
+            self._jobs[job_id]["status"] = GenerationStatus.FAILED
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message=f"Failed to connect to ComfyUI: {str(e)}",
+            )
+
+        return ImageGenerationResponse(
+            job_id=job_id,
+            status=GenerationStatus.PROCESSING,
+            metadata={"prompt_id": prompt_id, "workflow": "qwen_vl_caption"},
+        )
+
+    async def check_analysis_status(self, job_id: str) -> ImageGenerationResponse:
+        """Check status of a VLM captioning job. Returns text in metadata.description when complete."""
+        job = self._jobs.get(job_id)
+        if not job:
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message="Job not found",
+            )
+
+        if job["status"] in (GenerationStatus.COMPLETED, GenerationStatus.FAILED):
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=job["status"],
+                error_message=job.get("error_message"),
+                metadata={"description": job.get("output_text", "")},
+            )
+
+        prompt_id = job.get("prompt_id")
+        if not prompt_id:
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.PENDING,
+            )
+
+        filename_prefix = job.get("filename_prefix", "")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.comfy_url}/history/{prompt_id}"
+                ) as resp:
+                    if resp.status == 200:
+                        history = await resp.json()
+                        if prompt_id in history:
+                            status_info = history[prompt_id].get("status", {})
+                            completed = status_info.get("completed", False)
+                            status_str = status_info.get("status_str", "")
+
+                            if completed and status_str == "success":
+                                # SaveStringKJ writes to a file; find it in the output dir
+                                text_content = self._read_saved_string(filename_prefix)
+                                if text_content:
+                                    job["output_text"] = text_content
+                                    job["status"] = GenerationStatus.COMPLETED
+                                    return ImageGenerationResponse(
+                                        job_id=job_id,
+                                        status=GenerationStatus.COMPLETED,
+                                        metadata={"description": text_content},
+                                    )
+                                else:
+                                    # File not found yet — maybe still being written
+                                    pass
+                            elif status_str == "error":
+                                job["status"] = GenerationStatus.FAILED
+                                job["error_message"] = "ComfyUI execution error"
+                                return ImageGenerationResponse(
+                                    job_id=job_id,
+                                    status=GenerationStatus.FAILED,
+                                    error_message="ComfyUI execution error",
+                                )
+        except Exception as e:
+            job["status"] = GenerationStatus.FAILED
+            job["error_message"] = str(e)
+            return ImageGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message=str(e),
+            )
+
+        return ImageGenerationResponse(
+            job_id=job_id,
+            status=GenerationStatus.PROCESSING,
+        )
+
+    def _read_saved_string(self, filename_prefix: str) -> Optional[str]:
+        """Find and read a text file saved by SaveStringKJ in the ComfyUI output directory."""
+        output_dir = self.output_dir or os.getenv("COMFY_OUTPUT_DIR", "")
+        if not output_dir:
+            # Try to find ComfyUI output relative to common locations
+            candidates = [
+                Path("D:/AI_Master/ComfyUI-Easy-Install/ComfyUI-Easy-Install/ComfyUI/output"),
+                Path("./ComfyUI/output"),
+                Path("../ComfyUI/output"),
+            ]
+            for c in candidates:
+                if c.exists():
+                    output_dir = str(c)
+                    break
+        if not output_dir or not Path(output_dir).exists():
+            return None
+
+        # SaveStringKJ names files as: {prefix}_{counter:05}_.txt
+        for p in Path(output_dir).glob(f"{filename_prefix}_*.txt"):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                continue
+        return None
 
     def get_info(self) -> DriverInfo:
         return DriverInfo(

@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
-  generateAssetSheet, checkGenerationStatus, saveGeneratedToAsset, fetchAssets,
-  getAssetThumbnailUrl, type AssetResponse,
+  generateAssetSheet, generateTurnaroundSheet, checkGenerationStatus, saveGeneratedToAsset, fetchAssets,
+  analyzeCharacter, checkAnalysisStatus,
+  getDrivers, getAssetThumbnailUrl, type AssetResponse, type DriverInfo,
 } from "@/lib/api";
 import {
-  Layers, Loader2, X, Save, Download, Check, Sparkles,
+  Layers, Loader2, X, Save, Download, Check, Sparkles, Cloud, HardDrive, Lock, Wand2,
 } from "lucide-react";
 
 const typeIcons: Record<string, string> = {
@@ -32,6 +33,11 @@ interface SheetTemplate {
 
 const sheetTemplates: Record<string, SheetTemplate[]> = {
   character: [
+    {
+      id: "turnaround_pro",
+      label: "Turnaround Pro",
+      prompt: "Multi-step pipeline: 5 separate view generations (front, side, back, three-quarter, face closeup) using Multiangle LoRA, composited into a single sheet.",
+    },
     {
       id: "turnaround",
       label: "Turnaround",
@@ -120,10 +126,42 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [seed, setSeed] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
-  const [selectedTemplate, setSelectedTemplate] = useState<string>("turnaround");
+  const [selectedTemplate, setSelectedTemplate] = useState<string>(
+    asset.type === "character" ? "turnaround_pro" : (sheetTemplates[asset.type]?.[0]?.id || "turnaround_pro")
+  );
   const [promptMode, setPromptMode] = useState<"template" | "custom">("template");
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
   const [savedIndices, setSavedIndices] = useState<Set<number>>(new Set());
+  const [charDescription, setCharDescription] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [drivers, setDrivers] = useState<DriverInfo[]>([]);
+  const [selectedDriver, setSelectedDriver] = useState<string>("qwen_image_edit");
+  const [progressViews, setProgressViews] = useState({ completed: 0, total: 0 });
+  const isTurnaroundPro = asset.type === "character" && selectedTemplate === "turnaround_pro";
+
+  // Fetch available image drivers on mount
+  useEffect(() => {
+    getDrivers().then((data) => {
+      const imageDrivers = data.image.filter((d) => d.supported_features.includes("image_to_image"));
+      setDrivers(imageDrivers);
+      // Default to qwen_image_edit if available, otherwise first driver
+      if (!imageDrivers.find((d) => d.driver_id === "qwen_image_edit")) {
+        setSelectedDriver(imageDrivers[0]?.driver_id || "qwen_image_edit");
+      }
+    }).catch(() => {
+      // Fallback: just use ComfyUI
+      setDrivers([]);
+    });
+  }, []);
+
+  // Lock driver to ComfyUI when Turnaround Pro is selected
+  useEffect(() => {
+    if (isTurnaroundPro) {
+      setSelectedDriver("qwen_image_edit");
+    }
+  }, [isTurnaroundPro]);
+
+  const selectedDriverInfo = drivers.find((d) => d.driver_id === selectedDriver);
 
   const thumbUrl = getAssetThumbnailUrl(asset);
   const sheetLabel = sheetTypeLabels[asset.type] || "Design Sheet";
@@ -142,6 +180,36 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
     } catch {}
   };
 
+  const handleAutoDescribe = async () => {
+    setAnalyzing(true);
+    setError(null);
+    try {
+      const response = await analyzeCharacter(projectId, asset.id);
+      if (response.status === "failed") {
+        setError(response.error_message || "Failed to analyze character");
+        setAnalyzing(false);
+        return;
+      }
+
+      const pollInterval = setInterval(async () => {
+        const statusResp = await checkAnalysisStatus(response.job_id);
+        if (statusResp.status === "completed") {
+          clearInterval(pollInterval);
+          const desc = statusResp.metadata?.description || "";
+          setCharDescription(desc);
+          setAnalyzing(false);
+        } else if (statusResp.status === "failed") {
+          clearInterval(pollInterval);
+          setError(statusResp.error_message || "Failed to analyze character");
+          setAnalyzing(false);
+        }
+      }, 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to analyze character");
+      setAnalyzing(false);
+    }
+  };
+
   const handleGenerateSheet = async () => {
     setGenerating(true);
     setError(null);
@@ -150,12 +218,26 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
     setStatus("Submitting...");
 
     try {
-      const response = await generateAssetSheet(
-        projectId,
-        asset.id,
-        activePrompt || undefined,
-        seed ? Number(seed) : undefined,
-      );
+      let response;
+
+      if (isTurnaroundPro) {
+        response = await generateTurnaroundSheet(
+          projectId,
+          asset.id,
+          charDescription || undefined,
+          customPrompt || undefined,
+          seed ? Number(seed) : undefined,
+        );
+        setProgressViews({ completed: 0, total: 5 });
+      } else {
+        response = await generateAssetSheet(
+          projectId,
+          asset.id,
+          activePrompt || undefined,
+          seed ? Number(seed) : undefined,
+          selectedDriver !== "qwen_image_edit" ? selectedDriver : undefined,
+        );
+      }
 
       if (response.status === "failed") {
         setError(response.error_message || "Sheet generation failed");
@@ -164,18 +246,46 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
       }
 
       const pollInterval = setInterval(async () => {
-        const statusResp = await checkGenerationStatus(response.job_id, "qwen_image_edit");
+        const statusResp = await checkGenerationStatus(response.job_id, isTurnaroundPro ? "qwen_image_edit" : selectedDriver);
         if (statusResp.status === "completed") {
           clearInterval(pollInterval);
-          setResultImages(statusResp.image_urls || []);
+          const images = statusResp.image_urls || [];
+          setResultImages(images);
           setStatus("");
           setGenerating(false);
+          setProgressViews({ completed: 0, total: 0 });
+          // Auto-save the first (composite) image to the asset library
+          if (images.length > 0) {
+            setSavingIndex(0);
+            try {
+              await saveGeneratedToAsset(
+                projectId,
+                images[0],
+                `${asset.name} - ${sheetLabel}`,
+                asset.type,
+                activePrompt || undefined,
+              );
+              setSavedIndices(new Set([0]));
+              await refreshAssets();
+            } catch (err) {
+              console.error("Auto-save failed:", err);
+            } finally {
+              setSavingIndex(null);
+            }
+          }
         } else if (statusResp.status === "failed") {
           clearInterval(pollInterval);
           setError(statusResp.error_message || "Sheet generation failed");
           setGenerating(false);
+          setProgressViews({ completed: 0, total: 0 });
         } else {
-          setStatus(statusResp.status === "in_queue" ? "In queue..." : "Generating...");
+          const meta = statusResp.metadata;
+          if (meta?.completed_views !== undefined && meta?.total_views !== undefined) {
+            setStatus(`Generating ${meta.completed_views}/${meta.total_views} views...`);
+            setProgressViews({ completed: meta.completed_views, total: meta.total_views });
+          } else {
+            setStatus(statusResp.status === "in_queue" ? "In queue..." : "Generating...");
+          }
         }
       }, 2000);
     } catch (err) {
@@ -259,6 +369,49 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
               Generate a multi-view design sheet from this {asset.type}.
             </p>
 
+            {/* Driver / API selector */}
+            <div>
+              <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
+                Generation Backend
+              </label>
+              {drivers.length === 0 ? (
+                <div className="flex items-center gap-2 px-3 py-2 bg-studio-bg border border-studio-border rounded-lg text-xs text-studio-muted">
+                  <HardDrive className="w-3.5 h-3.5" />
+                  Local ComfyUI (default)
+                </div>
+              ) : (
+                <div className="relative">
+                  <select
+                    value={selectedDriver}
+                    onChange={(e) => setSelectedDriver(e.target.value)}
+                    disabled={isTurnaroundPro}
+                    className={`w-full appearance-none bg-studio-bg border border-studio-border rounded-lg px-3 py-2 text-xs text-studio-text focus:border-studio-accent focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed pr-8`}
+                  >
+                    {drivers.map((d) => (
+                      <option key={d.driver_id} value={d.driver_id}>
+                        {d.display_name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                    {selectedDriverInfo?.category === "cloud" ? (
+                      <Cloud className="w-3.5 h-3.5 text-studio-muted" />
+                    ) : (
+                      <HardDrive className="w-3.5 h-3.5 text-studio-muted" />
+                    )}
+                  </div>
+                </div>
+              )}
+              {isTurnaroundPro && (
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <Lock className="w-3 h-3 text-studio-muted" />
+                  <p className="text-[10px] text-studio-muted">
+                    Turnaround Pro requires local ComfyUI (Multiangle LoRA + multi-step pipeline)
+                  </p>
+                </div>
+              )}
+            </div>
+
             {/* Mode toggle: Templates vs Custom */}
             <div className="flex gap-1.5">
               <button
@@ -304,6 +457,33 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                 <div className="p-2.5 bg-studio-bg rounded-lg border border-studio-border/50">
                   <p className="text-[11px] text-studio-text/70 leading-relaxed">{activeTemplate?.prompt}</p>
                 </div>
+                {isTurnaroundPro && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
+                        Character Description <span className="normal-case opacity-50">(recommended for consistency)</span>
+                      </label>
+                      <button
+                        onClick={handleAutoDescribe}
+                        disabled={analyzing}
+                        className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-studio-accent hover:bg-studio-accent/10 rounded-lg transition-colors disabled:opacity-40"
+                      >
+                        {analyzing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                        {analyzing ? "Analyzing..." : "Auto-Describe"}
+                      </button>
+                    </div>
+                    <textarea
+                      value={charDescription}
+                      onChange={(e) => setCharDescription(e.target.value)}
+                      rows={2}
+                      className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-sm text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
+                      placeholder="e.g. a woman in her 30s wearing a brown leather jacket, dark jeans, boots, short black hair"
+                    />
+                    <p className="text-[10px] text-studio-muted mt-1.5 leading-relaxed">
+                      Multi-step pipeline: generates 5 separate views (front, side, back, three-quarter, face closeup) using the Multiangle LoRA, then composites them into a single sheet. Most accurate turnaround method.
+                    </p>
+                  </div>
+                )}
               </div>
             ) : (
               <div>
@@ -342,6 +522,27 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
               {generating ? (status || "Generating...") : `Generate ${sheetLabel}`}
             </button>
+
+            {/* Progress bar for multi-view generation */}
+            {generating && progressViews.total > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex gap-1.5">
+                  {Array.from({ length: progressViews.total }).map((_, i) => (
+                    <div
+                      key={i}
+                      className={`h-1.5 flex-1 rounded-full transition-colors ${
+                        i < progressViews.completed
+                          ? "bg-studio-accent"
+                          : "bg-studio-border"
+                      }`}
+                    />
+                  ))}
+                </div>
+                <p className="text-[10px] text-studio-muted text-center">
+                  {progressViews.completed} of {progressViews.total} views complete
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Error */}
@@ -356,28 +557,36 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
             <div className="space-y-2">
               <p className="text-sm font-semibold text-studio-text">Results</p>
               <div className="space-y-3">
-                {resultImages.map((url, i) => (
-                  <div key={i} className="relative group rounded-xl overflow-hidden border border-studio-border">
-                    <img src={url} alt={`Sheet ${i + 1}`} className="w-full" />
-                    <div className="absolute bottom-2 right-2 flex gap-2">
-                      <button
-                        onClick={() => handleSaveOne(i, url)}
-                        disabled={savingIndex !== null || savedIndices.has(i)}
-                        className="px-3 py-1.5 bg-black/70 backdrop-blur-sm text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60 flex items-center gap-1.5"
-                      >
-                        {savedIndices.has(i) ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Save className="w-3.5 h-3.5" />}
-                        {savedIndices.has(i) ? "Saved" : "Save to Assets"}
-                      </button>
-                      <a
-                        href={url}
-                        download
-                        className="px-3 py-1.5 bg-black/70 backdrop-blur-sm text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </a>
+                {resultImages.map((url, i) => {
+                  const label = isTurnaroundPro
+                    ? i === 0 ? "Composite Sheet" : ["Front", "Side", "Back", "Three-Quarter"][i - 1] || `View ${i}`
+                    : `Sheet ${i + 1}`;
+                  return (
+                    <div key={i} className="relative group rounded-xl overflow-hidden border border-studio-border">
+                      <img src={url} alt={label} className="w-full" />
+                      <div className="absolute top-2 left-2 px-2 py-1 bg-black/70 backdrop-blur-sm text-white text-[10px] font-medium rounded-lg">
+                        {label}
+                      </div>
+                      <div className="absolute bottom-2 right-2 flex gap-2">
+                        <button
+                          onClick={() => handleSaveOne(i, url)}
+                          disabled={savingIndex !== null || savedIndices.has(i)}
+                          className="px-3 py-1.5 bg-black/70 backdrop-blur-sm text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60 flex items-center gap-1.5"
+                        >
+                          {savedIndices.has(i) ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Save className="w-3.5 h-3.5" />}
+                          {savedIndices.has(i) ? "Saved" : "Save to Assets"}
+                        </button>
+                        <a
+                          href={url}
+                          download
+                          className="px-3 py-1.5 bg-black/70 backdrop-blur-sm text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
