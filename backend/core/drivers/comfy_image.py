@@ -425,22 +425,24 @@ class ComfyImageDriver(ImageDriver):
 
     ASSET_SHEET_PROMPTS = {
         "character": (
-            "character sheet, multiple views, front view, side view, back view, "
-            "three-quarter view, different expressions, full body turnaround, "
-            "white background, clean design sheet"
+            "full body character turnaround sheet, front view, side view, back view, "
+            "three-quarter view, face close-up portrait, multiple views of the same character, "
+            "consistent design, pure white background, isolated on white, no background, "
+            "clean design sheet, professional character reference"
         ),
         "prop": (
             "prop design sheet, multiple angles, front view, side view, top view, "
-            "detail close-ups, different orientations, white background, clean design sheet"
+            "detail close-ups, different orientations, pure white background, isolated on white, "
+            "no background, clean design sheet, professional prop reference"
         ),
         "vehicle": (
             "vehicle design sheet, multiple angles, front view, side view, rear view, "
-            "three-quarter view, top-down view, white background, clean design sheet"
+            "three-quarter view, pure white background, isolated on white, no background, "
+            "clean design sheet, professional vehicle reference"
         ),
         "location": (
             "location design sheet, wide establishing shot, different camera angles, "
-            "aerial view, ground level view, interior and exterior views, "
-            "lighting variations, clean design sheet"
+            "aerial view, ground level view, clean design sheet, professional location reference"
         ),
     }
 
@@ -467,7 +469,9 @@ class ComfyImageDriver(ImageDriver):
             asset_type, self.ASSET_SHEET_PROMPTS["character"]
         )
         sheet_negative = negative_prompt or (
-            "deformed, blurry, low quality, distorted, watermark, text"
+            "deformed, blurry, low quality, distorted, watermark, text, "
+            "background, scenery, environment, landscape, gradient background, "
+            "colored background, shadow on background"
         )
 
         # Resolve the asset image to a local path
@@ -533,11 +537,11 @@ class ComfyImageDriver(ImageDriver):
         )
 
     TURNAROUND_VIEWS = [
-        ("front", "front view of {desc}, full body, standing pose, facing camera, character turnaround sheet, white background, clean design sheet"),
-        ("side", "side profile view of {desc}, full body, standing pose, facing left, character turnaround sheet, white background, clean design sheet"),
-        ("back", "back view of {desc}, full body, standing pose, seen from behind, character turnaround sheet, white background, clean design sheet"),
-        ("three_quarter", "three-quarter view of {desc}, full body, standing pose, angled 45 degrees, character turnaround sheet, white background, clean design sheet"),
-        ("face_closeup", "extreme close-up portrait of {desc}, face only, detailed facial features, looking at camera, neutral expression, character turnaround sheet, white background, clean design sheet"),
+        ("front", "front view of {desc}, full body character, head to toe visible, standing pose, facing camera, same character, same outfit, same art style, character turnaround sheet, pure white background, isolated on white, no background, clean design sheet"),
+        ("side", "side profile view of {desc}, full body character, head to toe visible, standing pose, facing left, same character, same outfit, same art style, character turnaround sheet, pure white background, isolated on white, no background, clean design sheet"),
+        ("back", "back view of {desc}, full body character, head to toe visible, standing pose, seen from behind, same character, same outfit, same art style, character turnaround sheet, pure white background, isolated on white, no background, clean design sheet"),
+        ("three_quarter", "three-quarter view of {desc}, full body character, head to toe visible, standing pose, angled 45 degrees, same character, same outfit, same art style, character turnaround sheet, pure white background, isolated on white, no background, clean design sheet"),
+        ("face_closeup", "extreme close-up portrait of {desc}, face only, head and shoulders, detailed facial features, looking at camera, neutral expression, same character, same art style, character turnaround sheet, pure white background, isolated on white, no background, clean design sheet"),
     ]
 
     async def generate_turnaround_sheet(
@@ -561,7 +565,7 @@ class ComfyImageDriver(ImageDriver):
 
         actual_seed = seed if seed is not None else int(time.time()) % (2**32)
         desc = character_description or "the character"
-        sheet_negative = negative_prompt or "deformed, blurry, low quality, distorted, watermark, text, inconsistent design"
+        sheet_negative = negative_prompt or "deformed, blurry, low quality, distorted, watermark, text, inconsistent design, inconsistent clothing, inconsistent hair, different character, cropped body, partial body, cut off, background, scenery, environment, landscape, gradient background, colored background, shadow on background"
 
         local_path = self._resolve_local_path(asset_image_path)
         if not local_path:
@@ -579,10 +583,9 @@ class ComfyImageDriver(ImageDriver):
                 comfy_filename = await self._upload_to_comfy(session, local_path)
 
                 for view_name, view_prompt_template in self.TURNAROUND_VIEWS:
+                    view_prompt = view_prompt_template.format(desc=desc)
                     if prompt:
-                        view_prompt = f"{prompt}, {view_name} view"
-                    else:
-                        view_prompt = view_prompt_template.format(desc=desc)
+                        view_prompt = f"{prompt}. {view_prompt}"
 
                     wf = self._inject_params(
                         workflow,
@@ -740,6 +743,7 @@ class ComfyImageDriver(ImageDriver):
             child_prompt_ids = job["child_prompt_ids"]
             child_results = job["child_results"]
             view_labels = job["view_labels"]
+            job_created_at = job.get("created_at", time.time())
 
             try:
                 async with aiohttp.ClientSession() as session:
@@ -753,6 +757,7 @@ class ComfyImageDriver(ImageDriver):
                                 history = await resp.json()
                                 if pid in history:
                                     outputs = history[pid].get("outputs", {})
+                                    found_image = False
                                     for node_id, node_output in outputs.items():
                                         if "images" in node_output:
                                             for img in node_output["images"]:
@@ -771,28 +776,55 @@ class ComfyImageDriver(ImageDriver):
                                                         backend_url = f"/assets/generated/{local_filename}"
                                                         child_results[pid] = str(local_path)
                                                         job["view_images"].append(backend_url)
+                                                        found_image = True
                                                         print(f"[ComfyImageDriver] turnaround view completed: pid={pid}")
-                    # Check if all children are done
-                    completed_count = sum(1 for v in child_results.values() if v is not None)
-                    if completed_count == len(child_prompt_ids):
-                        local_image_paths = [child_results[pid] for pid in child_prompt_ids]
-                        composite_path = self._composite_turnaround_views(local_image_paths, view_labels)
+                                    # Prompt is in history but produced no images = failed
+                                    if not found_image:
+                                        status_info = history[pid].get("status", {})
+                                        status_str = status_info.get("status_str", "")
+                                        if status_str == "error":
+                                            print(f"[ComfyImageDriver] turnaround view FAILED: pid={pid}, status=error")
+                                            child_results[pid] = "FAILED"
+                    
+                    # Check for timeout (30 minutes — 5 views at 2-5 min each, sequential)
+                    elapsed = time.time() - job_created_at
+                    if elapsed > 1800:
+                        for pid in child_prompt_ids:
+                            if child_results[pid] is None:
+                                print(f"[ComfyImageDriver] turnaround view TIMEOUT: pid={pid}")
+                                child_results[pid] = "FAILED"
+
+                    # Collect successful results
+                    successful_pids = [pid for pid in child_prompt_ids if child_results[pid] not in (None, "FAILED")]
+                    failed_count = sum(1 for v in child_results.values() if v == "FAILED")
+                    pending_count = sum(1 for v in child_results.values() if v is None)
+                    completed_count = len(successful_pids)
+                    print(f"[ComfyImageDriver] turnaround status: {completed_count} done, {pending_count} pending, {failed_count} failed")
+
+                    if completed_count > 0 and (completed_count + failed_count == len(child_prompt_ids)):
+                        # All views done (some may have failed) — composite the successful ones
+                        local_image_paths = [child_results[pid] for pid in child_prompt_ids if child_results[pid] not in (None, "FAILED")]
+                        successful_labels = [view_labels[i] for i, pid in enumerate(child_prompt_ids) if child_results[pid] not in (None, "FAILED")]
+                        composite_path = self._composite_turnaround_views(local_image_paths, successful_labels)
                         composite_filename = Path(composite_path).name
                         composite_url = f"/assets/generated/{composite_filename}"
                         job["status"] = GenerationStatus.COMPLETED
                         job["output_images"] = [composite_url]
+                        result_status = GenerationStatus.COMPLETED
+                        error_msg = f"{failed_count} view(s) failed" if failed_count > 0 else None
                         return ImageGenerationResponse(
                             job_id=job_id,
-                            status=GenerationStatus.COMPLETED,
+                            status=result_status,
                             image_urls=[composite_url],
                             image_paths=[composite_url],
-                            metadata={"views": view_labels, "completed_views": completed_count},
+                            metadata={"views": successful_labels, "completed_views": completed_count, "total_views": len(child_prompt_ids), "failed_views": failed_count},
+                            error_message=error_msg,
                         )
                     else:
                         return ImageGenerationResponse(
                             job_id=job_id,
                             status=GenerationStatus.PROCESSING,
-                            metadata={"views": view_labels, "completed_views": completed_count, "total_views": len(child_prompt_ids)},
+                            metadata={"views": view_labels, "completed_views": completed_count, "total_views": len(child_prompt_ids), "failed_views": failed_count},
                         )
             except Exception as e:
                 job["status"] = GenerationStatus.FAILED

@@ -8,7 +8,7 @@ import {
   getDrivers, getAssetThumbnailUrl, type AssetResponse, type DriverInfo,
 } from "@/lib/api";
 import {
-  Layers, Loader2, X, Save, Download, Check, Sparkles, Cloud, HardDrive, Lock, Wand2,
+  Layers, Loader2, X, Save, Download, Check, Sparkles, Cloud, HardDrive, Lock, Wand2, ZoomIn,
 } from "lucide-react";
 
 const typeIcons: Record<string, string> = {
@@ -34,80 +34,30 @@ interface SheetTemplate {
 const sheetTemplates: Record<string, SheetTemplate[]> = {
   character: [
     {
-      id: "turnaround_pro",
-      label: "Turnaround Pro",
-      prompt: "Multi-step pipeline: 5 separate view generations (front, side, back, three-quarter, face closeup) using Multiangle LoRA, composited into a single sheet.",
-    },
-    {
-      id: "turnaround",
-      label: "Turnaround",
-      prompt: "character sheet, multiple views, front view, side view, back view, three-quarter view, full body turnaround, white background, clean design sheet",
-    },
-    {
-      id: "expressions",
-      label: "Expressions",
-      prompt: "character expression sheet, multiple facial expressions, happy, sad, angry, surprised, neutral, close-up face views, white background, clean design sheet",
-    },
-    {
-      id: "poses",
-      label: "Poses",
-      prompt: "character pose sheet, multiple action poses, standing, sitting, walking, running, dynamic poses, full body, white background, clean design sheet",
-    },
-    {
-      id: "outfits",
-      label: "Outfits",
-      prompt: "character outfit sheet, multiple costume variations, casual, formal, action wear, accessories, full body views, white background, clean design sheet",
+      id: "character_sheet",
+      label: "Character Sheet",
+      prompt: "Multi-view character turnaround sheet with front, side, back, three-quarter, and face closeup views.",
     },
   ],
   prop: [
     {
-      id: "angles",
-      label: "Multi-Angle",
-      prompt: "prop design sheet, multiple angles, front view, side view, top view, three-quarter view, detail close-ups, white background, clean design sheet",
-    },
-    {
-      id: "details",
-      label: "Details",
-      prompt: "prop detail sheet, close-up views, material textures, surface details, different parts labeled, white background, clean design sheet",
-    },
-    {
-      id: "variants",
-      label: "Variants",
-      prompt: "prop variant sheet, multiple design variations, different styles, color options, alternate configurations, white background, clean design sheet",
+      id: "prop_sheet",
+      label: "Prop Sheet",
+      prompt: "prop design sheet, multiple angles, front view, side view, top view, three-quarter view, detail close-ups, pure white background, isolated on white, no background, clean design sheet",
     },
   ],
   vehicle: [
     {
-      id: "angles",
-      label: "Multi-Angle",
-      prompt: "vehicle design sheet, multiple angles, front view, side view, rear view, three-quarter view, top-down view, white background, clean design sheet",
-    },
-    {
-      id: "interior",
-      label: "Interior",
-      prompt: "vehicle interior design sheet, dashboard view, seats, cockpit, controls, interior details, white background, clean design sheet",
-    },
-    {
-      id: "variants",
-      label: "Variants",
-      prompt: "vehicle variant sheet, multiple color schemes, different configurations, alternate designs, side-by-side comparison, white background, clean design sheet",
+      id: "vehicle_sheet",
+      label: "Vehicle Sheet",
+      prompt: "vehicle design sheet, multiple angles, front view, side view, rear view, three-quarter view, pure white background, isolated on white, no background, clean design sheet",
     },
   ],
   location: [
     {
-      id: "angles",
-      label: "Multi-Angle",
+      id: "location_sheet",
+      label: "Location Sheet",
       prompt: "location design sheet, wide establishing shot, different camera angles, aerial view, ground level view, three-quarter view, clean design sheet",
-    },
-    {
-      id: "lighting",
-      label: "Lighting",
-      prompt: "location lighting sheet, same location with different lighting conditions, daytime, sunset, night, dramatic lighting, moody atmosphere, clean design sheet",
-    },
-    {
-      id: "interior",
-      label: "Interior/Exterior",
-      prompt: "location design sheet, interior and exterior views, different rooms, entrance, wide shots, clean design sheet",
     },
   ],
 };
@@ -127,7 +77,7 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
   const [seed, setSeed] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<string>(
-    asset.type === "character" ? "turnaround_pro" : (sheetTemplates[asset.type]?.[0]?.id || "turnaround_pro")
+    asset.type === "character" ? "character_sheet" : (sheetTemplates[asset.type]?.[0]?.id || "character_sheet")
   );
   const [promptMode, setPromptMode] = useState<"template" | "custom">("template");
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
@@ -137,7 +87,8 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
   const [drivers, setDrivers] = useState<DriverInfo[]>([]);
   const [selectedDriver, setSelectedDriver] = useState<string>("qwen_image_edit");
   const [progressViews, setProgressViews] = useState({ completed: 0, total: 0 });
-  const isTurnaroundPro = asset.type === "character" && selectedTemplate === "turnaround_pro";
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const isTurnaroundPro = asset.type === "character";
 
   // Fetch available image drivers on mount
   useEffect(() => {
@@ -180,7 +131,7 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
     } catch {}
   };
 
-  const handleAutoDescribe = async () => {
+  const handleAutoDescribe = async (): Promise<string> => {
     setAnalyzing(true);
     setError(null);
     try {
@@ -188,25 +139,30 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
       if (response.status === "failed") {
         setError(response.error_message || "Failed to analyze character");
         setAnalyzing(false);
-        return;
+        return "";
       }
 
-      const pollInterval = setInterval(async () => {
-        const statusResp = await checkAnalysisStatus(response.job_id);
-        if (statusResp.status === "completed") {
-          clearInterval(pollInterval);
-          const desc = statusResp.metadata?.description || "";
-          setCharDescription(desc);
-          setAnalyzing(false);
-        } else if (statusResp.status === "failed") {
-          clearInterval(pollInterval);
-          setError(statusResp.error_message || "Failed to analyze character");
-          setAnalyzing(false);
-        }
-      }, 2000);
+      return await new Promise<string>((resolve) => {
+        const pollInterval = setInterval(async () => {
+          const statusResp = await checkAnalysisStatus(response.job_id);
+          if (statusResp.status === "completed") {
+            clearInterval(pollInterval);
+            const desc = statusResp.metadata?.description || "";
+            setCharDescription(desc);
+            setAnalyzing(false);
+            resolve(desc);
+          } else if (statusResp.status === "failed") {
+            clearInterval(pollInterval);
+            setError(statusResp.error_message || "Failed to analyze character");
+            setAnalyzing(false);
+            resolve("");
+          }
+        }, 2000);
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to analyze character");
       setAnalyzing(false);
+      return "";
     }
   };
 
@@ -221,11 +177,19 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
       let response;
 
       if (isTurnaroundPro) {
+        // Auto-describe in background if in template mode and no description yet
+        let description = charDescription;
+        if (promptMode === "template" && !description) {
+          setStatus("Auto-describing character...");
+          description = await handleAutoDescribe();
+        }
+
+        setStatus("Submitting...");
         response = await generateTurnaroundSheet(
           projectId,
           asset.id,
-          charDescription || undefined,
-          customPrompt || undefined,
+          description || undefined,
+          promptMode === "custom" ? customPrompt : undefined,
           seed ? Number(seed) : undefined,
         );
         setProgressViews({ completed: 0, total: 5 });
@@ -254,7 +218,7 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
           setStatus("");
           setGenerating(false);
           setProgressViews({ completed: 0, total: 0 });
-          // Auto-save the first (composite) image to the asset library
+          // Auto-save the generated sheet to the asset library
           if (images.length > 0) {
             setSavingIndex(0);
             try {
@@ -343,8 +307,12 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
         <div className="p-4 space-y-4 overflow-y-auto">
           {/* Preview */}
           {thumbUrl && (
-            <div className="relative rounded-xl overflow-hidden border border-studio-border">
-              <img src={thumbUrl} alt={asset.name} className="w-full max-h-48 object-contain bg-studio-bg" />
+            <div className="relative rounded-xl overflow-hidden border border-studio-border group">
+              <img src={thumbUrl} alt={asset.name} className="w-full max-h-48 object-contain bg-studio-bg cursor-zoom-in" onClick={() => setLightboxUrl(thumbUrl)} />
+              <div className="absolute top-2 right-2 p-1.5 bg-black/60 backdrop-blur-sm text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[10px]">
+                <ZoomIn className="w-3 h-3" />
+                Click to enlarge
+              </div>
             </div>
           )}
 
@@ -458,10 +426,30 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                   <p className="text-[11px] text-studio-text/70 leading-relaxed">{activeTemplate?.prompt}</p>
                 </div>
                 {isTurnaroundPro && (
+                  <p className="text-[10px] text-studio-muted mt-1 leading-relaxed">
+                    Generates 5 separate views (front, side, back, three-quarter, face closeup) with auto-described character context, composited into a single sheet.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
+                    Custom Prompt
+                  </label>
+                  <textarea
+                    value={customPrompt}
+                    onChange={(e) => setCustomPrompt(e.target.value)}
+                    rows={3}
+                    className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-sm text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
+                    placeholder="Write your own design sheet prompt..."
+                  />
+                </div>
+                {isTurnaroundPro && (
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
-                        Character Description <span className="normal-case opacity-50">(recommended for consistency)</span>
+                        Character Description <span className="normal-case opacity-50">(optional)</span>
                       </label>
                       <button
                         onClick={handleAutoDescribe}
@@ -479,24 +467,8 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                       className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-sm text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
                       placeholder="e.g. a woman in her 30s wearing a brown leather jacket, dark jeans, boots, short black hair"
                     />
-                    <p className="text-[10px] text-studio-muted mt-1.5 leading-relaxed">
-                      Multi-step pipeline: generates 5 separate views (front, side, back, three-quarter, face closeup) using the Multiangle LoRA, then composites them into a single sheet. Most accurate turnaround method.
-                    </p>
                   </div>
                 )}
-              </div>
-            ) : (
-              <div>
-                <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
-                  Custom Prompt
-                </label>
-                <textarea
-                  value={customPrompt}
-                  onChange={(e) => setCustomPrompt(e.target.value)}
-                  rows={3}
-                  className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-sm text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
-                  placeholder="Write your own design sheet prompt..."
-                />
               </div>
             )}
 
@@ -563,11 +535,18 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                     : `Sheet ${i + 1}`;
                   return (
                     <div key={i} className="relative group rounded-xl overflow-hidden border border-studio-border">
-                      <img src={url} alt={label} className="w-full" />
+                      <img src={url} alt={label} className="w-full cursor-zoom-in" onClick={() => setLightboxUrl(url)} />
                       <div className="absolute top-2 left-2 px-2 py-1 bg-black/70 backdrop-blur-sm text-white text-[10px] font-medium rounded-lg">
                         {label}
                       </div>
                       <div className="absolute bottom-2 right-2 flex gap-2">
+                        <button
+                          onClick={() => setLightboxUrl(url)}
+                          className="px-3 py-1.5 bg-black/70 backdrop-blur-sm text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5"
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                          View
+                        </button>
                         <button
                           onClick={() => handleSaveOne(i, url)}
                           disabled={savingIndex !== null || savedIndices.has(i)}
@@ -592,6 +571,36 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
           )}
         </div>
       </div>
+
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <button
+            onClick={() => setLightboxUrl(null)}
+            className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <img
+            src={lightboxUrl}
+            alt="Full size"
+            className="max-w-full max-h-full object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <a
+            href={lightboxUrl}
+            download
+            onClick={(e) => e.stopPropagation()}
+            className="absolute bottom-4 right-4 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors flex items-center gap-2 text-sm"
+          >
+            <Download className="w-4 h-4" />
+            Download
+          </a>
+        </div>
+      )}
     </div>
   );
 }

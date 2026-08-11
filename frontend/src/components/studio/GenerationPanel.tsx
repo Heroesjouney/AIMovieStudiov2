@@ -16,7 +16,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   } = useStudioStore();
 
   const [prompt, setPrompt] = useState("");
-  const [negativePrompt, setNegativePrompt] = useState("");
+  const [negativePrompt, setNegativePrompt] = useState("background, scenery, environment, landscape, gradient background, colored background, shadow on background");
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
   const [seed, setSeed] = useState("");
@@ -51,8 +51,13 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
 
     try {
       const refPaths = selectedAsset?.primary_image ? [selectedAsset.primary_image] : [];
+      // Auto-append white background for asset types that should be isolated
+      const bgSuffix = assetType !== "location"
+        ? ", pure white background, isolated on white, no background"
+        : "";
+      const finalPrompt = prompt + bgSuffix;
       const response = await generateImage(
-        prompt,
+        finalPrompt,
         selectedImageDriver,
         negativePrompt || undefined,
         width,
@@ -92,7 +97,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
 
   const handleReset = () => {
     setPrompt("");
-    setNegativePrompt("");
+    setNegativePrompt("background, scenery, environment, landscape, gradient background, colored background, shadow on background");
     setSeed("");
     setAssetName("");
     setResultImages([]);
@@ -252,7 +257,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
           value={negativePrompt}
           onChange={(e) => setNegativePrompt(e.target.value)}
           className="w-full bg-studio-panel border border-studio-border rounded-xl p-2.5 text-sm text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none"
-          placeholder="What to avoid..."
+          placeholder="background, scenery, environment..."
         />
       </div>
 
