@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
   generateAssetSheet, generateTurnaroundSheet, checkGenerationStatus, saveGeneratedToAsset, fetchAssets,
-  analyzeCharacter, checkAnalysisStatus,
+  analyzeCharacter, checkAnalysisStatus, updateAsset,
   getDrivers, getAssetThumbnailUrl, type AssetResponse, type DriverInfo,
 } from "@/lib/api";
 import {
@@ -149,6 +149,15 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
             clearInterval(pollInterval);
             const desc = statusResp.metadata?.description || "";
             setCharDescription(desc);
+            // Persist description to the asset so it's available for storyboard generation
+            if (desc) {
+              try {
+                await updateAsset(projectId, asset.id, { description: desc });
+                await refreshAssets();
+              } catch (e) {
+                console.warn("[AssetDetailPanel] failed to persist description:", e);
+              }
+            }
             setAnalyzing(false);
             resolve(desc);
           } else if (statusResp.status === "failed") {
@@ -228,7 +237,14 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                 `${asset.name} - ${sheetLabel}`,
                 asset.type,
                 activePrompt || undefined,
+                charDescription || asset.description || undefined,
               );
+              // Also store the sheet image on the original asset for storyboard reference
+              try {
+                await updateAsset(projectId, asset.id, { character_sheet_path: images[0] });
+              } catch (e) {
+                console.warn('[AssetDetailPanel] failed to store sheet path:', e);
+              }
               setSavedIndices(new Set([0]));
               await refreshAssets();
             } catch (err) {
@@ -267,7 +283,16 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
         `${asset.name} - ${sheetLabel}`,
         asset.type,
         activePrompt || undefined,
+        charDescription || asset.description || undefined,
       );
+      // Also store the sheet image on the original asset for storyboard reference
+      if (index === 0) {
+        try {
+          await updateAsset(projectId, asset.id, { character_sheet_path: imageUrl });
+        } catch (e) {
+          console.warn('[AssetDetailPanel] failed to store sheet path:', e);
+        }
+      }
       setSavedIndices((prev) => new Set(prev).add(index));
       await refreshAssets();
     } catch (err) {

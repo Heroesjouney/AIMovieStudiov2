@@ -77,7 +77,7 @@
       "upload": "image"
     },
     "class_type": "LoadImage",
-    "_meta": {"title": "Load Image 1 (Establishing/Location)"}
+    "_meta": {"title": "Load Image 1 (Location)"}
   },
   "79": {
     "inputs": {
@@ -85,7 +85,15 @@
       "upload": "image"
     },
     "class_type": "LoadImage",
-    "_meta": {"title": "Load Image 2 (Previous Shot Frame)"}
+    "_meta": {"title": "Load Image 2 (Character 1)"}
+  },
+  "80": {
+    "inputs": {
+      "image": "{input_image3}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {"title": "Load Image 3 (Character 2 / Prop)"}
   },
   "89": {
     "inputs": {
@@ -99,11 +107,11 @@
   "90": {
     "inputs": {
       "lora_name": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
-      "strength_model": 0.8,
+      "strength_model": 0.6,
       "model": ["89", 0]
     },
     "class_type": "LoraLoaderModelOnly",
-    "_meta": {"title": "Multi-Angles LoRA"}
+    "_meta": {"title": "Multi-Angles LoRA (establishing)"}
   },
   "122": {
     "inputs": {
@@ -127,7 +135,8 @@
       "clip": ["38", 0],
       "vae": ["39", 0],
       "image1": ["142", 0],
-      "image2": ["143", 0]
+      "image2": ["79", 0],
+      "image3": ["80", 0]
     },
     "class_type": "TextEncodeQwenImageEditPlus",
     "_meta": {"title": "TextEncodeQwenImageEditPlus (Negative)"}
@@ -138,7 +147,8 @@
       "clip": ["38", 0],
       "vae": ["39", 0],
       "image1": ["142", 0],
-      "image2": ["143", 0]
+      "image2": ["79", 0],
+      "image3": ["80", 0]
     },
     "class_type": "TextEncodeQwenImageEditPlus",
     "_meta": {"title": "TextEncodeQwenImageEditPlus (Positive)"}
@@ -157,12 +167,5 @@
     },
     "class_type": "FluxKontextImageScale",
     "_meta": {"title": "FluxKontextImageScale (Image 1)"}
-  },
-  "143": {
-    "inputs": {
-      "image": ["79", 0]
-    },
-    "class_type": "FluxKontextImageScale",
-    "_meta": {"title": "FluxKontextImageScale (Image 2)"}
   }
 }

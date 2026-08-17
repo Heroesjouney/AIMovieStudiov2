@@ -5,42 +5,83 @@ import { useStudioStore } from "@/lib/store";
 import {
   fetchShots, createShot, deleteShot, reorderShots,
   generateShotFrame, checkShotFrameStatus, updateShot, updateScene,
+  fetchScenes,
   type ShotResponse, type SceneResponse,
 } from "@/lib/api";
 import { ScenePanel } from "./ScenePanel";
 import { ShotDetail } from "./ShotDetail";
 import {
   Plus, Trash2, Clapperboard, GripVertical, Camera, Layers, Sparkles,
-  Loader2, X, RefreshCw,
+  Loader2, X, RefreshCw, ChevronDown, ChevronRight, ImageIcon, Link2, Copy
 } from "lucide-react";
+import { CameraAngleWidget, type PreviousShotAngle } from "./CameraAngleWidget";
+import { ShotTypeLibrary } from "./ShotTypeLibrary";
+import {
+  CINEMATIC_PRESETS, getPresetById,
+  wouldCrossLine, suggestReverse,
+} from "@/lib/cinematicPresets";
 
 const SHOT_TYPES = [
-  { value: "wide", label: "Wide Shot" },
-  { value: "medium", label: "Medium Shot" },
-  { value: "close_up", label: "Close Up" },
-  { value: "over_the_shoulder", label: "Over Shoulder" },
-  { value: "establishing", label: "Establishing" },
-  { value: "insert", label: "Insert" },
-  { value: "pov", label: "POV" },
-  { value: "two_shot", label: "Two Shot" },
+  { value: "wide", label: "Wide Shot", prompt: "wide shot" },
+  { value: "medium", label: "Medium Shot", prompt: "medium shot" },
+  { value: "close_up", label: "Close Up", prompt: "close-up shot" },
+  { value: "over_the_shoulder", label: "Over Shoulder", prompt: "over-the-shoulder shot" },
+  { value: "establishing", label: "Establishing", prompt: "wide establishing shot" },
+  { value: "insert", label: "Insert", prompt: "insert shot, extreme close-up" },
+  { value: "pov", label: "POV", prompt: "point of view shot" },
+  { value: "two_shot", label: "Two Shot", prompt: "two shot" },
 ];
+
+const STYLE_OPTIONS = [
+  { value: "", label: "Style: Auto" },
+  { value: "photorealistic, cinematic, realistic photography, natural lighting, film grain", label: "Style: Realistic" },
+  { value: "cinematic film still, dramatic lighting, movie production quality, 35mm film", label: "Style: Cinematic" },
+  { value: "cartoon style, animated, clean lines, vibrant colors, flat shading", label: "Style: Cartoon" },
+  { value: "anime style, cel shading, detailed illustration, studio quality", label: "Style: Anime" },
+  { value: "oil painting, painterly brushstrokes, classical art style, rich textures", label: "Style: Oil Painting" },
+  { value: "digital painting, concept art style, detailed environment art", label: "Style: Concept Art" },
+];
+
+const ASPECT_RATIOS = [
+  { value: "16:9", label: "Ratio: 16:9", width: 1344, height: 768 },
+  { value: "2.39:1", label: "Ratio: 2.39:1 Cinemascope", width: 1344, height: 562 },
+  { value: "2:1", label: "Ratio: 2:1 Univisium", width: 1344, height: 672 },
+  { value: "1.85:1", label: "Ratio: 1.85:1 Widescreen", width: 1344, height: 726 },
+  { value: "4:3", label: "Ratio: 4:3 Classic", width: 1024, height: 768 },
+  { value: "1:1", label: "Ratio: 1:1 Square", width: 1024, height: 1024 },
+  { value: "9:16", label: "Ratio: 9:16 Vertical", width: 768, height: 1344 },
+];
+
+
 
 export function ShotComposer({ projectId }: { projectId: string }) {
   const {
     shots, setShots, selectedShotId, setSelectedShotId, selectedSceneId,
-    scenes, imageDrivers, selectedImageDriver, setSelectedImageDriver,
+    scenes, setScenes, imageDrivers, selectedImageDriver, setSelectedImageDriver,
     assets,
   } = useStudioStore();
 
   const [showCreate, setShowCreate] = useState(false);
   const [newPrompt, setNewPrompt] = useState("");
   const [newShotType, setNewShotType] = useState("medium");
+  const [artStyle, setArtStyle] = useState("");
+  const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [camHorizontal, setCamHorizontal] = useState(0);
+  const [camVertical, setCamVertical] = useState(0);
+  const [camZoom, setCamZoom] = useState(5);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createStatus, setCreateStatus] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [newShotAssets, setNewShotAssets] = useState<any[]>([]);
   const [showAssetPicker, setShowAssetPicker] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advNegativePrompt, setAdvNegativePrompt] = useState("");
+  const [advSeed, setAdvSeed] = useState("");
+  const [advDenoise, setAdvDenoise] = useState("");
+  const [advCfg, setAdvCfg] = useState("");
+  const [advSteps, setAdvSteps] = useState("");
 
   // Drag-and-drop state
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -57,9 +98,13 @@ export function ShotComposer({ projectId }: { projectId: string }) {
   }, []);
 
   const refresh = useCallback(async () => {
-    const data = await fetchShots(projectId, selectedSceneId || undefined);
-    setShots(data);
-  }, [projectId, selectedSceneId, setShots]);
+    const [shotData, sceneData] = await Promise.all([
+      fetchShots(projectId, selectedSceneId || undefined),
+      fetchScenes(projectId),
+    ]);
+    setShots(shotData);
+    setScenes(sceneData);
+  }, [projectId, selectedSceneId, setShots, setScenes]);
 
   useEffect(() => { refresh(); }, [projectId, selectedSceneId]);
 
@@ -72,18 +117,57 @@ export function ShotComposer({ projectId }: { projectId: string }) {
   const sceneShotCount = selectedSceneId ? sortedShots.filter((s) => s.scene_id === selectedSceneId).length : 0;
   const isFirstShotInScene = !!selectedSceneId && sceneShotCount === 0;
 
+  // Find the last generated frame in this scene to show as reference
+  const lastSceneFrame = selectedSceneId
+    ? sortedShots
+        .filter((s) => s.scene_id === selectedSceneId && s.frame_image_path)
+        .sort((a, b) => (b.sequence_order ?? 0) - (a.sequence_order ?? 0))[0]
+    : null;
+  const referenceFrameUrl = selectedScene?.establishing_frame_path || lastSceneFrame?.frame_image_path;
+
+  // Track camera angles used in this scene's shots for 180° rule and coverage
+  const sceneShotsWithAngles = selectedSceneId
+    ? sortedShots
+        .filter((s) => s.scene_id === selectedSceneId && s.generation_recipe?.params?.horizontal_angle != null)
+        .sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0))
+    : [];
+  const lastShotAngle = sceneShotsWithAngles.length > 0
+    ? sceneShotsWithAngles[sceneShotsWithAngles.length - 1].generation_recipe.params.horizontal_angle
+    : null;
+  const usedPresetAngles = sceneShotsWithAngles.map((s) => s.generation_recipe.params.horizontal_angle);
+  const crossesLine = lastShotAngle !== null && wouldCrossLine(lastShotAngle, camHorizontal);
+
+  // Build previous shot angle data for 3D widget ghost markers
+  const widgetPreviousShots: PreviousShotAngle[] = sceneShotsWithAngles.map((s, i) => ({
+    horizontalAngle: s.generation_recipe.params.horizontal_angle,
+    verticalAngle: s.generation_recipe.params.vertical_angle ?? 0,
+    zoom: s.generation_recipe.params.zoom ?? 5,
+    label: `S${i + 1}`,
+  }));
+
+  // Action axis = first shot's horizontal angle (establishing shot direction)
+  const actionAxisAngle = sceneShotsWithAngles.length > 0
+    ? sceneShotsWithAngles[0].generation_recipe.params.horizontal_angle
+    : undefined;
+
   // Assets available to add (have a primary image, not already in newShotAssets)
   const sceneRecipeAssetIds = new Set((selectedScene?.reference_assets || []).map((a: any) => a.asset_id));
   const availableAssets = assets.filter((a) => a.primary_image && !newShotAssets.some((na) => na.asset_id === a.id));
   const extraAssetCount = newShotAssets.filter((a) => !sceneRecipeAssetIds.has(a.asset_id)).length;
 
   const handleCreateAndGenerate = async () => {
-    if (!newPrompt.trim()) return;
+    // Subsequent shots don't require a prompt — camera angles drive generation
+    if (isFirstShotInScene && !newPrompt.trim()) return;
+    const wasFirstShot = isFirstShotInScene;
     setCreating(true); setCreateError(null); setCreateStatus("Creating shot...");
 
     try {
-      const shotName = newPrompt.slice(0, 40) + (newPrompt.length > 40 ? "..." : "");
-      const shot = await createShot(projectId, shotName, newPrompt, selectedSceneId || undefined);
+      const shotName = wasFirstShot
+        ? newPrompt.slice(0, 40) + (newPrompt.length > 40 ? "..." : "")
+        : `Camera: H${camHorizontal}° V${camVertical}° Z${camZoom.toFixed(1)}`;
+      // Force first shot in scene to be a wide establishing shot
+      const effectiveShotType = wasFirstShot ? "establishing" : "subsequent";
+      const shot = await createShot(projectId, shotName, newPrompt || "", selectedSceneId || undefined, effectiveShotType);
       await refresh();
 
       // Bind additional assets to the shot (on top of scene recipe)
@@ -92,16 +176,40 @@ export function ShotComposer({ projectId }: { projectId: string }) {
       }
 
       setCreateStatus("Generating frame...");
-      const refPaths = newShotAssets.map((a: any) => a.image_path).filter(Boolean);
+      // Don't pass asset image_paths — the backend constructs ref_paths
+      // intelligently from the shot's scene, assets, and establishing frame.
 
-      // Force first shot in scene to be a wide establishing shot
-      const effectiveShotType = isFirstShotInScene ? "establishing" : newShotType;
-      const shotTypeLabel = SHOT_TYPES.find((t) => t.value === effectiveShotType)?.label || "Medium Shot";
-      const fullPrompt = isFirstShotInScene
-        ? `Wide establishing shot. ${newPrompt}`
-        : `${shotTypeLabel}. ${newPrompt}`;
+      const shotTypeData = SHOT_TYPES.find((t) => t.value === effectiveShotType);
+      const shotTypePrompt = shotTypeData?.prompt || "";
+      // For establishing shots, build a cinematic prompt with shot type + style.
+      // For subsequent shots, send only optional user text — the backend generates
+      // the <sks> camera angle prompt from the horizontal/vertical/zoom sliders.
+      let fullPrompt: string;
+      if (wasFirstShot) {
+        const cinematicParts = [shotTypePrompt];
+        if (artStyle) cinematicParts.push(artStyle);
+        const cinematicPrefix = cinematicParts.filter(Boolean).join(", ");
+        fullPrompt = `${cinematicPrefix}. ${newPrompt}`;
+      } else {
+        fullPrompt = newPrompt;
+      }
 
-      const resp = await generateShotFrame(shot.id, fullPrompt, selectedImageDriver, undefined, 1344, 768, undefined, refPaths);
+      const aspectData = ASPECT_RATIOS.find((a) => a.value === aspectRatio) || ASPECT_RATIOS[0];
+
+      const resp = await generateShotFrame(
+        shot.id, fullPrompt, selectedImageDriver,
+        advNegativePrompt || undefined,
+        aspectData.width, aspectData.height,
+        advSeed ? parseInt(advSeed) : undefined,
+        undefined, // Let backend handle ref_paths from scene/shot assets
+        advDenoise ? parseFloat(advDenoise) : undefined,
+        advCfg ? parseFloat(advCfg) : undefined,
+        advSteps ? parseInt(advSteps) : undefined,
+        wasFirstShot ? 0 : camHorizontal,
+        wasFirstShot ? 0 : camVertical,
+        wasFirstShot ? 1.0 : camZoom,
+        wasFirstShot ? undefined : (selectedPresetId || undefined),
+      );
       if (resp.status === "failed") {
         setCreateError(resp.error_message || "Generation failed");
         setCreating(false); setCreateStatus("");
@@ -121,16 +229,13 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             await updateShot(projectId, shot.id, {
               frame_image_path: framePath,
               status: "frame_generated",
-              generation_recipe: { prompt: fullPrompt, model_id: selectedImageDriver, reference_image_paths: refPaths, timestamp: new Date().toISOString() },
             });
-            // If this scene has no establishing frame yet, save this as the establishing frame
-            if (selectedSceneId && selectedScene && !selectedScene.establishing_frame_path && framePath) {
-              await updateScene(projectId, selectedSceneId, { establishing_frame_path: framePath });
-              console.log(`[ShotComposer] saved establishing frame for scene ${selectedSceneId}: ${framePath}`);
-            }
+            // Establishing frame is now auto-saved by the backend in update_shot
             setCreating(false); setCreateStatus("");
             setNewPrompt(""); setShowCreate(false);
             setNewShotAssets([]);
+            setAspectRatio("16:9");
+            setCamHorizontal(0); setCamVertical(0); setCamZoom(5); setSelectedPresetId(null);
             setSelectedShotId(shot.id);
             await refresh();
           } else if (st.status === "failed") {
@@ -161,11 +266,29 @@ export function ShotComposer({ projectId }: { projectId: string }) {
 
   const handleRegenerate = async (shot: ShotResponse) => {
     setRegeneratingId(shot.id);
-    const refPaths = (shot.assets || []).map((a: any) => a.image_path).filter(Boolean);
+    // Don't pass asset image_paths — the backend constructs ref_paths
+    // intelligently from the shot's scene, assets, and establishing frame.
+    // Passing asset images directly bypasses that logic and causes wrong refs.
     const prompt = shot.generation_recipe?.prompt || shot.description || shot.name;
+    const recipeWidth = shot.generation_recipe?.params?.width || 1344;
+    const recipeHeight = shot.generation_recipe?.params?.height || 768;
+    const recipeSeed = shot.generation_recipe?.seed;
+    const recipeNegative = shot.generation_recipe?.resolved_negative_prompt;
+    const recipeDenoise = shot.generation_recipe?.denoise;
+    const recipeCfg = shot.generation_recipe?.params?.cfg;
+    const recipeSteps = shot.generation_recipe?.params?.steps;
 
     try {
-      const resp = await generateShotFrame(shot.id, prompt, selectedImageDriver, undefined, 1344, 768, undefined, refPaths);
+      const resp = await generateShotFrame(
+        shot.id, prompt, selectedImageDriver,
+        recipeNegative || undefined,
+        recipeWidth, recipeHeight,
+        recipeSeed,
+        undefined, // Let backend handle ref_paths
+        recipeDenoise,
+        recipeCfg,
+        recipeSteps,
+      );
       if (resp.status === "failed") { setRegeneratingId(null); return; }
 
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
@@ -179,7 +302,7 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             await updateShot(projectId, shot.id, {
               frame_image_path: framePath,
               status: "frame_generated",
-              generation_recipe: { prompt, model_id: selectedImageDriver, reference_image_paths: refPaths, timestamp: new Date().toISOString() },
+              generation_recipe: { prompt, model_id: selectedImageDriver, params: { width: recipeWidth, height: recipeHeight }, seed: recipeSeed, timestamp: new Date().toISOString() },
             });
             setRegeneratingId(null);
             await refresh();
@@ -276,62 +399,302 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             </div>
             <button
               onClick={() => setShowCreate(!showCreate)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-studio-accent hover:bg-studio-accentHover text-white transition-colors"
+              disabled={!selectedSceneId}
+              title={!selectedSceneId ? "Select a scene first" : "Create new shot"}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-studio-accent hover:bg-studio-accentHover text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-3.5 h-3.5" />
               New Shot
             </button>
           </div>
 
-          {showCreate && (
+          {showCreate && !selectedSceneId && (
+            <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-xs text-yellow-400">
+              Select a scene from the left panel first. Shots need a scene to inherit characters, location, and the establishing frame.
+            </div>
+          )}
+          {showCreate && selectedSceneId && (
             <div className="mb-4 p-4 bg-studio-panel rounded-xl border border-studio-border animate-fade-in">
               <div className="flex items-center justify-between mb-2">
-                <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider">New Shot Prompt</label>
-                <button onClick={() => { setShowCreate(false); setCreateError(null); setNewShotAssets([]); }} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted transition-colors">
+                <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
+                  {(isFirstShotInScene || creating) ? "New Shot Prompt" : "Camera Position"}
+                </label>
+                <button onClick={() => { setShowCreate(false); setCreateError(null); setNewShotAssets([]); setArtStyle(""); setAspectRatio("16:9"); setCamHorizontal(0); setCamVertical(0); setCamZoom(5); setSelectedPresetId(null); }} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted transition-colors">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <textarea
-                value={newPrompt}
-                onChange={(e) => setNewPrompt(e.target.value)}
-                placeholder="Describe the shot... (e.g. 'Hero walks into the warehouse, dramatic lighting from above')"
-                rows={3}
-                autoFocus
-                className="w-full bg-studio-bg border border-studio-border rounded-lg p-2.5 text-xs focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
-                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCreateAndGenerate(); }}
-              />
-              <div className="flex items-center gap-3 mt-2">
-                <select
-                  value={isFirstShotInScene ? "establishing" : newShotType}
-                  onChange={(e) => setNewShotType(e.target.value)}
-                  disabled={isFirstShotInScene}
-                  className="bg-studio-bg border border-studio-border rounded-lg px-2 py-1.5 text-xs focus:border-studio-accent focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {SHOT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-                {isFirstShotInScene && (
-                  <span className="text-[10px] text-studio-accent font-medium">
-                    First shot — auto-set as establishing wide shot
-                  </span>
+              {(isFirstShotInScene || (creating && !selectedShotId)) && (
+                <textarea
+                  value={newPrompt}
+                  onChange={(e) => setNewPrompt(e.target.value)}
+                  placeholder="Describe the scene... (e.g. 'Circus tent at dusk, characters facing off')"
+                  rows={3}
+                  autoFocus
+                  className="w-full bg-studio-bg border border-studio-border rounded-lg p-2.5 text-xs focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
+                  onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCreateAndGenerate(); }}
+                />
+              )}
+              {/* Cinematic quick-select options */}
+              <div className="flex items-center gap-2 mt-2 flex-wrap">
+                <Camera className="w-3 h-3 text-studio-muted shrink-0" />
+                {(isFirstShotInScene || creating) && (
+                  <select
+                    value="establishing"
+                    disabled
+                    className="bg-studio-bg border border-studio-border rounded-lg px-2 py-1 text-[10px] focus:border-studio-accent focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="establishing">Establishing</option>
+                  </select>
                 )}
+                <select
+                  value={artStyle}
+                  onChange={(e) => setArtStyle(e.target.value)}
+                  className="bg-studio-bg border border-studio-border rounded-lg px-2 py-1 text-[10px] focus:border-studio-accent focus:outline-none"
+                  title="Art style"
+                >
+                  {STYLE_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+                </select>
+                <select
+                  value={aspectRatio}
+                  onChange={(e) => setAspectRatio(e.target.value)}
+                  className="bg-studio-bg border border-studio-border rounded-lg px-2 py-1 text-[10px] focus:border-studio-accent focus:outline-none"
+                  title="Aspect ratio"
+                >
+                  {ASPECT_RATIOS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                </select>
                 <select
                   value={selectedImageDriver}
                   onChange={(e) => setSelectedImageDriver(e.target.value)}
-                  className="bg-studio-bg border border-studio-border rounded-lg px-2 py-1.5 text-xs focus:border-studio-accent focus:outline-none"
+                  className="bg-studio-bg border border-studio-border rounded-lg px-2 py-1 text-[10px] focus:border-studio-accent focus:outline-none"
                   title="Image model"
                 >
-                  {imageDrivers.map((d) => <option key={d.driver_id} value={d.driver_id}>{d.display_name}</option>)}
+                  {imageDrivers
+                    .filter((d) => d.driver_id === "qwen_image_edit")
+                    .map((d) => <option key={d.driver_id} value={d.driver_id}>{d.display_name}</option>)}
                 </select>
+                {isFirstShotInScene && !creating && (
+                  <span className="text-[10px] text-studio-accent font-medium">
+                    First shot — auto establishing
+                  </span>
+                )}
+                {!isFirstShotInScene && !creating && (
+                  <div className="w-full mt-2 flex flex-col gap-2">
+                    {/* 180° rule warning */}
+                    {crossesLine && (
+                      <div className="flex items-center gap-2 px-2.5 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                        <span className="text-[10px] text-yellow-400 font-medium">
+                          ⚠ 180° Rule: Camera crossed the line
+                        </span>
+                        <button
+                          onClick={() => {
+                            if (lastShotAngle !== null) {
+                              const reversed = suggestReverse(lastShotAngle);
+                              setCamHorizontal(reversed);
+                            }
+                          }}
+                          className="ml-auto text-[9px] px-2 py-0.5 rounded bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 transition-colors"
+                        >
+                          Fix: Reverse Angle
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Action prompt — full width above widget */}
+                    <textarea
+                      value={newPrompt}
+                      onChange={(e) => setNewPrompt(e.target.value)}
+                      placeholder="Action prompt... (e.g. 'knight draws sword, intense expression') — leave empty for camera-only generation"
+                      rows={2}
+                      className="w-full bg-studio-bg border border-studio-border rounded-lg p-2 text-xs focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
+                    />
+
+                    {/* 3D Widget + controls */}
+                    <div className="flex gap-2">
+                      <div className="w-96 h-96 shrink-0">
+                        <CameraAngleWidget
+                          horizontalAngle={camHorizontal}
+                          verticalAngle={camVertical}
+                          zoom={camZoom}
+                          onChange={(h, v, z) => { setCamHorizontal(h); setCamVertical(v); setCamZoom(z); }}
+                          referenceImageUrl={referenceFrameUrl || undefined}
+                          previousShots={widgetPreviousShots}
+                          actionAxisAngle={actionAxisAngle}
+                          isPOV={selectedPresetId === "pov"}
+                        />
+                      </div>
+                      <div className="w-52 shrink-0 flex flex-col gap-2 px-3 py-3 bg-studio-bg rounded-lg border border-studio-border overflow-y-auto" style={{ maxHeight: 384 }}>
+                        {referenceFrameUrl && (
+                          <div className="rounded overflow-hidden border border-studio-border">
+                            <img src={referenceFrameUrl} alt="Reference" className="w-full h-16 object-cover" />
+                          </div>
+                        )}
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <label className="text-[9px] font-semibold text-studio-muted uppercase shrink-0 w-8">Horiz</label>
+                            <input
+                              type="range" min={0} max={360} step={5}
+                              value={camHorizontal}
+                              onChange={(e) => setCamHorizontal(parseInt(e.target.value))}
+                              className="w-16 accent-studio-accent"
+                            />
+                            <span className="text-[9px] text-studio-muted w-7 text-right tabular-nums">{camHorizontal}°</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <label className="text-[9px] font-semibold text-studio-muted uppercase shrink-0 w-8">Vert</label>
+                            <input
+                              type="range" min={-30} max={60} step={5}
+                              value={camVertical}
+                              onChange={(e) => setCamVertical(parseInt(e.target.value))}
+                              className="w-16 accent-studio-accent"
+                            />
+                            <span className="text-[9px] text-studio-muted w-7 text-right tabular-nums">{camVertical}°</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <label className="text-[9px] font-semibold text-studio-muted uppercase shrink-0 w-8">Zoom</label>
+                            <input
+                              type="range" min={0} max={12} step={0.5}
+                              value={camZoom}
+                              onChange={(e) => setCamZoom(parseFloat(e.target.value))}
+                              className="w-16 accent-studio-accent"
+                            />
+                            <span className="text-[9px] text-studio-muted w-8 text-right tabular-nums">{camZoom.toFixed(1)}</span>
+                          </div>
+                        </div>
+                        <div className="mt-1.5 px-2 py-1 bg-studio-bg rounded border border-studio-border/50">
+                          <span className="text-[8px] text-studio-accent/80 font-mono leading-tight">
+                            {(() => {
+                              const h = camHorizontal % 360;
+                              const hDir = h < 22.5 || h >= 337.5 ? "front view"
+                                : h < 67.5 ? "front-right quarter"
+                                : h < 112.5 ? "right side"
+                                : h < 157.5 ? "back-right quarter"
+                                : h < 202.5 ? "back view"
+                                : h < 247.5 ? "back-left quarter"
+                                : h < 292.5 ? "left side"
+                                : "front-left quarter";
+                              const v = camVertical;
+                              const vDir = v < -15 ? "low-angle" : v < 15 ? "eye-level" : v < 45 ? "elevated" : "high-angle";
+                              const z = camZoom;
+                              const dist = z < 1 ? "extreme wide" : z < 2 ? "wide" : z < 4 ? "medium" : z < 7 ? "close-up" : "extreme close-up";
+                              let prompt = `<sks> ${hDir} ${vDir} ${dist}`;
+                              const hints: string[] = [];
+                              if (hDir === "back view") hints.push("character seen from behind");
+                              else if (hDir.includes("back-")) hints.push("partial back view, character turned away");
+                              if (dist === "extreme close-up") hints.push("tight framing on facial features, eyes and mouth detail");
+                              else if (dist === "extreme wide") hints.push("figures small in frame, environment dominates");
+                              if (vDir === "high-angle") hints.push("looking down from above, top-down perspective");
+                              else if (vDir === "low-angle") hints.push("camera tilted upward, dramatic perspective");
+                              if (hints.length > 0) prompt += ` (${hints.join(", ")})`;
+                              return prompt;
+                            })()}
+                          </span>
+                        </div>
+                        <div className="border-t border-studio-border pt-2">
+                          <ShotTypeLibrary
+                            selectedPresetId={selectedPresetId || undefined}
+                            onSelect={(p) => {
+                              setSelectedPresetId(p.id);
+                              setCamHorizontal(p.horizontalAngle);
+                              setCamVertical(p.verticalAngle);
+                              setCamZoom(p.zoom);
+                              setNewPrompt(p.prompt || "");
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {sceneRecipeCount > 0 && (
                   <span className="flex items-center gap-1 text-[10px] text-studio-muted">
                     <Layers className="w-3 h-3" />
-                    {sceneRecipeCount} recipe assets attached
+                    {sceneRecipeCount} recipe
                   </span>
                 )}
+              </div>
+              {/* Advanced settings toggle */}
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded-lg text-xs text-studio-muted hover:text-studio-accent hover:bg-studio-panelHover border border-studio-border transition-colors"
+              >
+                {showAdvanced ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                Advanced Settings
+              </button>
+              {showAdvanced && (
+                <div className="mt-2 p-3 bg-studio-bg rounded-lg border border-studio-border space-y-2">
+                  <div>
+                    <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider block mb-1">Negative Prompt</label>
+                    <textarea
+                      value={advNegativePrompt}
+                      onChange={(e) => setAdvNegativePrompt(e.target.value)}
+                      placeholder="e.g. background characters, crowd, extra people..."
+                      rows={2}
+                      className="w-full bg-studio-panel border border-studio-border rounded-lg p-2 text-[10px] focus:border-studio-accent focus:outline-none resize-none"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider block mb-1">Seed</label>
+                      <input
+                        type="number"
+                        value={advSeed}
+                        onChange={(e) => setAdvSeed(e.target.value)}
+                        placeholder="Random"
+                        className="w-full bg-studio-panel border border-studio-border rounded-lg px-2 py-1.5 text-[10px] focus:border-studio-accent focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider block mb-1">Denoise</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        value={advDenoise}
+                        onChange={(e) => setAdvDenoise(e.target.value)}
+                        placeholder="1.0"
+                        className="w-full bg-studio-panel border border-studio-border rounded-lg px-2 py-1.5 text-[10px] focus:border-studio-accent focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider block mb-1">CFG</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        max="20"
+                        value={advCfg}
+                        onChange={(e) => setAdvCfg(e.target.value)}
+                        placeholder="Default (1)"
+                        className="w-full bg-studio-panel border border-studio-border rounded-lg px-2 py-1.5 text-[10px] focus:border-studio-accent focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider block mb-1">Steps</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={advSteps}
+                        onChange={(e) => setAdvSteps(e.target.value)}
+                        placeholder="Default (4)"
+                        className="w-full bg-studio-panel border border-studio-border rounded-lg px-2 py-1.5 text-[10px] focus:border-studio-accent focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-studio-muted">
+                    Denoise: 1.0 = generate from noise (new composition), 0.75 = edit base image lightly, 0.5 = minimal changes to base image
+                  </p>
+                  <p className="text-[9px] text-studio-muted">
+                    CFG: Higher = stronger prompt adherence (default 1 for Lightning LoRA). Steps: More = higher quality (default 4 for Lightning). Leave blank for defaults.
+                  </p>
+                </div>
+              )}
+              <div className="flex items-center gap-3 mt-2">
                 <div className="flex-1" />
                 <button
                   onClick={handleCreateAndGenerate}
-                  disabled={creating || !newPrompt.trim()}
+                  disabled={creating || (isFirstShotInScene && !newPrompt.trim())}
                   className="flex items-center gap-1.5 px-4 py-1.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
                 >
                   {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}

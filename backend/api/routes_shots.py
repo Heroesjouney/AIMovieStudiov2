@@ -7,6 +7,7 @@ generation recipe for reproducibility.
 
 import json
 import uuid
+import random
 import shutil
 from pathlib import Path
 from typing import List, Optional
@@ -23,6 +24,7 @@ from core.schemas.shot import (
 from core.schemas.camera import (
     CameraParams, CameraMovement, CameraAnglePreset,
     MultiAngleRequest, QWEN_MULTIANGLE_PROMPTS,
+    angles_to_sks_prompt,
 )
 from core.drivers import get_image_driver, get_video_driver
 from core.drivers.base import VideoGenerationRequest, VideoGenerationMode, AspectRatio, GenerationStatus
@@ -102,6 +104,12 @@ def _load_scenes(project_id: str) -> List[dict]:
         with open(idx, "r") as f:
             return json.load(f)
     return []
+
+
+def _save_scenes(project_id: str, scenes: List[dict]):
+    idx = _project_dir(project_id) / "scenes.json"
+    with open(idx, "w") as f:
+        json.dump(scenes, f, indent=2, default=str)
 
 
 def _load_assets(project_id: str) -> List[dict]:
@@ -200,6 +208,10 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     shot = _find_shot("default", req.shot_id)
     shot_assets = (shot or {}).get("assets", [])
 
+    # Load full asset records early (needed for scene context and asset descriptions)
+    all_assets = _load_assets(shot["project_id"]) if shot else []
+    asset_map = {a["id"]: a for a in all_assets}
+
     # Look up scene for lighting/mood/time_of_day context and establishing frame
     scene_context = ""
     establishing_frame = None
@@ -209,12 +221,63 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
         scene_obj = next((s for s in scenes if s["id"] == shot["scene_id"]), None)
         if scene_obj:
             parts = []
+            # Include scene description for narrative context
+            scene_desc = scene_obj.get("description", "")
+            if scene_desc:
+                parts.append(scene_desc)
+            # Include location description (not auto-generated name) for environment context
+            for ref in scene_obj.get("reference_assets", []):
+                if ref.get("asset_type") == "location":
+                    # Look up full asset to get description (name is often auto-generated)
+                    loc_asset = next((a for a in all_assets if a["id"] == ref.get("asset_id")), None)
+                    loc_desc = (loc_asset or {}).get("description", "")
+                    loc_name = (loc_asset or {}).get("name", "")
+                    # Strip style keywords that got saved as part of the description
+                    # (e.g. "Photoreal, realistic, circus tent." -> "circus tent")
+                    style_keywords = [
+                        "photoreal", "photorealistic", "realistic", "8k", "4k",
+                        "high quality", "detailed", "cinematic", "hyperrealistic",
+                        "ultra realistic", "real", "photo", "photography",
+                    ]
+                    if loc_desc:
+                        desc_words = loc_desc.replace(".", "").split(",")
+                        cleaned = [w.strip() for w in desc_words if w.strip().lower() not in style_keywords]
+                        loc_desc = ", ".join(cleaned) if cleaned else loc_desc
+                    # Prefer description if name looks auto-generated
+                    if loc_desc and ("generated" in loc_name.lower() or not loc_name):
+                        parts.append(f"at {loc_desc}")
+                    elif loc_name and "generated" not in loc_name.lower():
+                        parts.append(f"at {loc_name}")
+                    elif loc_desc:
+                        parts.append(f"at {loc_desc}")
+                    break
+            # Always include time of day — even "day" provides useful context
             tod = scene_obj.get("time_of_day", "")
-            if tod and tod != "day":
-                parts.append(tod.replace("_", " "))
+            if tod:
+                tod_labels = {
+                    "dawn": "dawn light, first light of day",
+                    "morning": "morning light, bright clear daylight",
+                    "day": "daytime, bright daylight",
+                    "golden_hour": "golden hour, warm directional sunlight",
+                    "dusk": "dusk, fading light",
+                    "night": "nighttime, darkness",
+                    "interior": "interior setting",
+                }
+                parts.append(tod_labels.get(tod, tod.replace("_", " ")))
+            # Always include mood with professional cinematography adjective
             mood = scene_obj.get("mood", "")
-            if mood and mood != "neutral":
-                parts.append(f"{mood} mood")
+            if mood:
+                mood_labels = {
+                    "neutral": "balanced composition",
+                    "tense": "tense atmosphere, tight framing",
+                    "joyful": "joyful atmosphere, warm tones",
+                    "melancholic": "melancholic atmosphere, muted tones",
+                    "mysterious": "mysterious atmosphere, shadows and fog",
+                    "action": "high energy action, dynamic composition",
+                    "romantic": "romantic atmosphere, soft focus",
+                    "horror": "dread and horror, dark shadows",
+                }
+                parts.append(mood_labels.get(mood, f"{mood} mood"))
             lighting = scene_obj.get("lighting", "")
             if lighting and lighting != "natural":
                 lighting_labels = {
@@ -238,6 +301,8 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
                 print(f"[routes_shots] scene has establishing frame: {establishing_frame}")
 
     # Separate assets by role for multi-reference workflow
+    print(f"[routes_shots] shot_assets={len(shot_assets)}, scene_id={shot.get('scene_id') if shot else 'none'}")
+
     location_image = None
     character_images = []
     other_images = []
@@ -246,11 +311,20 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
         role = a.get("role", a.get("asset_type", ""))
         name = a.get("asset_name", "")
         img = a.get("image_path")
+        asset_id = a.get("asset_id", "")
+        full_asset = asset_map.get(asset_id, {})
+        desc = full_asset.get("description", "")
         if role == "location" and img:
             location_image = img
         elif role == "character":
-            if name:
-                prompt_enrichments.append(f"featuring {name}")
+            # Use description as the character label if name is auto-generated
+            display_name = name
+            if name and "generated" in name.lower():
+                display_name = desc if desc else name
+            if display_name:
+                prompt_enrichments.append(f"featuring {display_name}")
+            # Use primary_image (single portrait) for VL context — multi-view
+            # sheets confuse the VL encoder (5 panels look like 5 characters).
             if img:
                 character_images.append(img)
         elif role == "prop":
@@ -265,67 +339,227 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
                 other_images.append(img)
 
     # Build the effective prompt with scene context and character/prop names
-    prompt_parts = [req.prompt]
-    if scene_context:
-        prompt_parts.append(scene_context)
-    if prompt_enrichments:
-        prompt_parts.append(" ".join(prompt_enrichments))
-    effective_prompt = ", ".join(prompt_parts)
+    # For establishing shots: professional baseline + full character descriptions
+    # + scene context first, user's action prompt LAST (strongest position).
+    # For subsequent shots: continuity prefix + context first, user's composition
+    # instruction last (strongest position for the model).
+    is_establishing = not establishing_frame
+
+    # Detect action verbs in the user's prompt and amplify them.
+    # The VL encoder sees static character portraits, which biases the model
+    # toward static poses. Adding dynamic action descriptors helps override this.
+    action_verbs = [
+        "fight", "fights", "fighting", "battling", "attacks", "attacking",
+        "running", "chasing", "fleeing", "charging", "lunging", "striking",
+        "dodging", "blocking", "parrying", "clashing", "wielding",
+        "punching", "kicking", "grabbing", "pushing", "pulling",
+        "jumping", "leaping", "falling", "diving", "rolling",
+        "shooting", "aiming", "throwing", "catching",
+        "riding", "galloping", "sprinting", "escaping",
+    ]
+    user_prompt_lower = req.prompt.lower()
+    has_action = any(verb in user_prompt_lower for verb in action_verbs)
+    action_prefix = ""
+    if has_action:
+        action_prefix = "dynamic action, characters in motion"
+
+    if is_establishing:
+        # Establishing shot: now uses <sks> camera angle prompt when angles are
+        # provided (front/eye/wide by default from frontend), plus scene context.
+        # The Multi-Angles LoRA (strength 0.6) guides framing while the VL encoder
+        # sees all 3 reference images (location + characters).
+        if req.horizontal_angle is not None:
+            effective_prompt = angles_to_sks_prompt(
+                req.horizontal_angle, req.vertical_angle or 0, req.zoom if req.zoom is not None else 1.0
+            )
+        else:
+            effective_prompt = "wide establishing shot"
+        # Add scene context, character names, and user description
+        context_parts = []
+        if scene_context:
+            context_parts.append(scene_context)
+        if prompt_enrichments:
+            context_parts.append(", ".join(prompt_enrichments))
+        if action_prefix:
+            context_parts.append(action_prefix)
+        if context_parts:
+            effective_prompt += f" {', '.join(context_parts)}"
+        if req.prompt.strip():
+            effective_prompt += f" {req.prompt.strip()}"
+    else:
+        # Subsequent shot: use camera angle controls if provided, otherwise
+        # send the user's prompt directly. The multi-angles LoRA expects
+        # prompts in the format "<sks> {h_direction} {v_direction} {distance}".
+        preset = req.composition_preset or ""
+        is_pov = preset == "pov"
+        is_ots = preset in ("ots_left", "ots_right", "dirty_ots_left", "dirty_ots_right")
+
+        if req.horizontal_angle is not None and not is_pov:
+            # For OTS: reverse the horizontal angle 180° so the <sks> tag
+            # describes the subject facing the camera, not the character
+            # whose shoulder we're behind.
+            sks_h = req.horizontal_angle
+            if is_ots:
+                sks_h = (sks_h + 180) % 360
+            effective_prompt = angles_to_sks_prompt(
+                sks_h, req.vertical_angle or 0, req.zoom if req.zoom is not None else 5.0
+            )
+            # Add scene context and character names for consistency reinforcement
+            # (VL encoder sees the establishing frame, but text helps the model
+            # maintain character identity and scene atmosphere)
+            context_parts = []
+            if scene_context:
+                context_parts.append(scene_context)
+            if prompt_enrichments:
+                context_parts.append(", ".join(prompt_enrichments))
+            if context_parts:
+                effective_prompt += f" {', '.join(context_parts)}"
+            if action_prefix:
+                effective_prompt += f" {action_prefix}"
+            if req.prompt.strip():
+                effective_prompt += f" {req.prompt.strip()}"
+            print(f"[routes_shots] camera angles: h={req.horizontal_angle}, v={req.vertical_angle}, zoom={req.zoom}, preset={preset}")
+        elif is_pov:
+            # POV: the Multi-Angles LoRA cannot handle first-person perspective.
+            # Skip the <sks> tag entirely and use only descriptive text.
+            context_parts = []
+            if scene_context:
+                context_parts.append(scene_context)
+            if prompt_enrichments:
+                context_parts.append(", ".join(prompt_enrichments))
+            if action_prefix:
+                context_parts.append(action_prefix)
+            context_str = ", ".join(context_parts)
+            user_str = req.prompt.strip()
+            if context_str and user_str:
+                effective_prompt = f"{context_str}, {user_str}"
+            else:
+                effective_prompt = context_str or user_str
+            print(f"[routes_shots] POV shot: skipping <sks> tag, using descriptive text only")
+        else:
+            effective_prompt = req.prompt
 
     # Find previous shot in the same scene for action continuity
     prev_frame_image = None
+    establishing_seed = None
+    shot_index_in_scene = 0
     if shot and shot.get("scene_id"):
         all_shots = _load_shots(shot["project_id"])
         scene_shots = [s for s in all_shots if s.get("scene_id") == shot.get("scene_id") and s["id"] != req.shot_id]
         scene_shots.sort(key=lambda s: s.get("sequence_order", 0))
         current_order = shot.get("sequence_order", 0)
         prev_shots = [s for s in scene_shots if s.get("sequence_order", 0) < current_order and s.get("frame_image_path")]
+        shot_index_in_scene = len(prev_shots)
         if prev_shots:
             prev_shots.sort(key=lambda s: s.get("sequence_order", 0), reverse=True)
             prev_frame_image = prev_shots[0]["frame_image_path"]
             print(f"[routes_shots] continuity: using prev shot frame {prev_frame_image}")
+            # Extract seed from the establishing shot's recipe for seed continuity
+            est_recipe = prev_shots[-1].get("generation_recipe") or {}
+            est_seed = est_recipe.get("seed") if isinstance(est_recipe, dict) else None
+            print(f"[routes_shots] continuity: establishing shot recipe seed={est_seed}, recipe type={type(est_recipe).__name__}")
+            if est_seed is not None:
+                establishing_seed = est_seed
+                print(f"[routes_shots] continuity: using establishing seed {est_seed}")
 
-    # Build ref_paths (max 3 for multi-reference workflow):
-    # HYBRID ESTABLISHING SHOT STRATEGY:
-    #   First shot in scene (no establishing_frame on scene yet):
-    #     image1 = location, image2 = character, image3 = prop/vehicle
-    #   Subsequent shots (establishing_frame exists on scene):
-    #     image1 = establishing_frame (scene consistency), image2 = character (character consistency), image3 = previous shot frame (action continuity)
+    # Build ref_paths.
+    # ESTABLISHING SHOT: 3 refs (location + characters/props) — uses the
+    #   qwen_image_edit_establishing workflow with 3 LoadImage nodes.
+    # SUBSEQUENT SHOTS: 2 refs (establishing frame + previous shot frame) — uses
+    #   the qwen_image_edit workflow with LoadImage nodes. The establishing frame
+    #   provides scene/character identity; the previous shot frame provides
+    #   action continuity (e.g. character pose from the prior angle).
     ref_paths = []
     if establishing_frame:
-        # Subsequent shots: establishing + character + previous frame
         ref_paths.append(establishing_frame)
-        if character_images:
-            ref_paths.append(character_images[0])
-        if prev_frame_image:
+        if prev_frame_image and prev_frame_image != establishing_frame:
             ref_paths.append(prev_frame_image)
-        elif location_image:
-            ref_paths.append(location_image)
-        elif len(ref_paths) < 3 and other_images:
-            ref_paths.append(other_images[0])
+            print(f"[routes_shots] ref_paths (subsequent): establishing + prev shot frame")
+        else:
+            print(f"[routes_shots] ref_paths (subsequent): establishing frame only")
     else:
-        # First shot: location + character + prop
         if location_image:
             ref_paths.append(location_image)
         if character_images:
             ref_paths.append(character_images[0])
-        if len(ref_paths) < 3 and other_images:
+        if len(character_images) > 1 and len(ref_paths) < 3:
+            ref_paths.append(character_images[1])
+        elif other_images and len(ref_paths) < 3:
             ref_paths.append(other_images[0])
+        print(f"[routes_shots] ref_paths (establishing): {ref_paths}")
     # Add any explicitly passed refs not already included
     for r in (req.reference_image_paths or []):
         if r not in ref_paths:
             ref_paths.append(r)
 
-    print(f"[routes_shots] effective_prompt={effective_prompt[:120]}..., ref_paths={ref_paths}")
+    print(f"[routes_shots] characters={len(character_images)}, location={'yes' if location_image else 'no'}, has_establishing={'yes' if establishing_frame else 'no'}, action={'yes' if has_action else 'no'}")
+    print(f"[routes_shots] effective_prompt={effective_prompt}")
+    print(f"[routes_shots] ref_paths={ref_paths}")
+
+    # Default negative prompt — kept short for qwen_image_edit (cfg=1 means
+    # minimal negative guidance influence)
+    base_negative = "deformed, extra limbs, blurry, low quality, watermark, text"
+    if has_action:
+        base_negative = "static pose, standing still, " + base_negative
+    if is_establishing:
+        base_negative = "close-up shot, cropped environment, " + base_negative
+    effective_negative = req.negative_prompt or base_negative
+    print(f"[routes_shots] effective_negative={effective_negative}")
+
+    # Denoise: user override > defaults.
+    # For qwen_image_edit: always 1.0. The VL encoder provides scene/character
+    # consistency via reference images. Lower denoise locks the latent and
+    # produces near-identical copies of the establishing frame.
+    denoise = None
+    if req.model_id == "qwen_image_edit":
+        if req.denoise is not None:
+            denoise = req.denoise
+        elif establishing_frame:
+            # All subsequent shots: denoise=1.0. The VL encoder sees the
+            # establishing frame (image1) for scene/character consistency.
+            # At denoise=0.8 with 4 steps, the latent dominates and the output
+            # looks identical to the establishing frame. denoise=1.0 gives the
+            # model freedom to change camera angle and composition while still
+            # maintaining consistency through VL context.
+            denoise = 1.0
+        else:
+            denoise = 1.0
+        print(f"[routes_shots] using denoise={denoise} (action={has_action}, establishing={not bool(establishing_frame)})")
 
     from core.drivers.base import ImageGenerationRequest
+    # Seed: for subsequent shots, use a DIFFERENT seed than the establishing shot.
+    # With denoise=1.0, the model generates from noise. Same seed + same VL refs
+    # = identical output. A different seed ensures the model explores a different
+    # composition/camera angle.
+    effective_seed = req.seed
+    if effective_seed is None:
+        if establishing_seed is not None:
+            # Each subsequent shot gets a unique seed offset by its position
+            # in the scene, so shots 2, 3, 4... all get different seeds.
+            effective_seed = (establishing_seed + 1 + shot_index_in_scene) % (2**32)
+            print(f"[routes_shots] using offset seed for variation: {effective_seed} (establishing was {establishing_seed}, shot index {shot_index_in_scene})")
+        else:
+            effective_seed = random.randint(0, 2**32 - 1)
+            print(f"[routes_shots] using random seed: {effective_seed}")
+
+    extra_params = {}
+    if req.cfg is not None:
+        extra_params["cfg"] = req.cfg
+    if req.steps is not None:
+        extra_params["steps"] = req.steps
+    extra_params["shot_type"] = "establishing" if is_establishing else "subsequent"
+    if req.composition_preset:
+        extra_params["composition_preset"] = req.composition_preset
+
     gen_req = ImageGenerationRequest(
         prompt=effective_prompt,
-        negative_prompt=req.negative_prompt,
+        negative_prompt=effective_negative,
         width=req.width,
         height=req.height,
-        seed=req.seed,
+        seed=effective_seed,
         reference_image_paths=ref_paths,
+        denoise_strength=denoise,
+        extra_params=extra_params,
     )
 
     response = await driver.generate(gen_req)
@@ -335,10 +569,17 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
         recipe = GenerationRecipe(
             resolved_prompt=effective_prompt,
             resolved_negative_prompt=req.negative_prompt,
-            seed=req.seed,
+            seed=effective_seed,
             model_id=req.model_id,
-            params={"width": req.width, "height": req.height},
+            params={
+                "width": req.width, "height": req.height,
+                "cfg": req.cfg, "steps": req.steps,
+                "horizontal_angle": req.horizontal_angle,
+                "vertical_angle": req.vertical_angle,
+                "zoom": req.zoom,
+            },
             reference_paths=ref_paths,
+            denoise=denoise,
         )
         shot["generation_recipe"] = recipe.model_dump()
         shot["status"] = ShotStatus.PLANNED.value
@@ -378,6 +619,27 @@ async def update_shot(project_id: str, shot_id: str, updates: dict):
             s.update(updates)
             s["updated_at"] = datetime.utcnow().isoformat()
             _save_shots(project_id, shots)
+
+            # Auto-save establishing frame for the scene
+            # - If no establishing frame exists yet, set it
+            # - If this shot IS an establishing shot, update it (regenerated)
+            frame_path = updates.get("frame_image_path")
+            scene_id = s.get("scene_id")
+            shot_type = s.get("shot_type", "")
+            if frame_path and scene_id:
+                scenes = _load_scenes(project_id)
+                for sc in scenes:
+                    if sc["id"] == scene_id:
+                        should_update = False
+                        if not sc.get("establishing_frame_path"):
+                            should_update = True
+                        if should_update:
+                            sc["establishing_frame_path"] = frame_path
+                            sc["updated_at"] = datetime.utcnow().isoformat()
+                            _save_scenes(project_id, scenes)
+                            print(f"[routes_shots] auto-saved establishing frame for scene {scene_id}: {frame_path}")
+                        break
+
             return s
     raise HTTPException(status_code=404, detail="Shot not found")
 

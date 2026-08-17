@@ -7,6 +7,7 @@ All assets are stored in the Vault as JSON + media files.
 import json
 import uuid
 import shutil
+import asyncio
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
@@ -377,6 +378,10 @@ async def upload_asset(
     assets = _load_assets(project_id)
     assets.append(asset)
     _save_assets(project_id, assets)
+
+    # Auto-analyze uploaded asset with VLM for rich description
+    asyncio.create_task(_auto_analyze_asset(project_id, asset_id, image_url))
+
     return _asset_to_response(asset)
 
 
@@ -517,11 +522,65 @@ async def save_generated_image(req: SaveGeneratedRequest):
 
     _save_assets(req.project_id, assets)
 
+    # Auto-analyze asset with VLM to generate a rich text description
+    # This runs in the background so the API response isn't delayed
+    asset = next((a for a in assets if a["id"] == asset_id), None)
+    if asset and asset.get("primary_image"):
+        asyncio.create_task(_auto_analyze_asset(req.project_id, asset_id, asset["primary_image"]))
+
     # Return the asset
     for a in assets:
         if a["id"] == asset_id:
             return _asset_to_response(a)
     raise HTTPException(status_code=500, detail="Failed to save asset")
+
+
+async def _auto_analyze_asset(project_id: str, asset_id: str, image_path: str):
+    """Background task: analyze asset image with Qwen2.5-VL and update description.
+
+    Submits a VLM captioning job to ComfyUI, polls for completion, then
+    updates the asset's description with the generated text. This ensures
+    all assets have rich descriptions for storyboard prompt enrichment.
+    """
+    try:
+        from core.drivers import get_image_driver
+        driver = get_image_driver("qwen_image_edit")
+        if not driver:
+            print(f"[auto-analyze] no driver available, skipping asset {asset_id}")
+            return
+
+        print(f"[auto-analyze] starting VLM analysis for asset {asset_id}")
+        response = await driver.analyze_character(image_path)
+        if response.status != "processing" and response.status != "pending":
+            print(f"[auto-analyze] analysis submission failed: {response.error_message}")
+            return
+
+        job_id = response.job_id
+        # Poll for completion (max 120 seconds)
+        for _ in range(60):
+            await asyncio.sleep(2)
+            status_resp = await driver.check_analysis_status(job_id)
+            if status_resp.status == "completed":
+                desc = (status_resp.metadata or {}).get("description", "")
+                if desc:
+                    print(f"[auto-analyze] got description for {asset_id}: {desc[:100]}...")
+                    assets = _load_assets(project_id)
+                    for a in assets:
+                        if a["id"] == asset_id:
+                            a["description"] = desc
+                            a["updated_at"] = datetime.utcnow().isoformat()
+                            _save_assets(project_id, assets)
+                            print(f"[auto-analyze] updated asset {asset_id} description")
+                            break
+                else:
+                    print(f"[auto-analyze] completed but no description returned for {asset_id}")
+                return
+            elif status_resp.status == "failed":
+                print(f"[auto-analyze] analysis failed for {asset_id}: {status_resp.error_message}")
+                return
+        print(f"[auto-analyze] timed out for asset {asset_id}")
+    except Exception as e:
+        print(f"[auto-analyze] error for asset {asset_id}: {e}")
 
 
 # =============================================================================

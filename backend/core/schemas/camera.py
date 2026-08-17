@@ -117,3 +117,76 @@ class CameraDirectionResponse(BaseModel):
     status: str
     angle_images: List[dict] = Field(default_factory=list)
     error_message: Optional[str] = None
+
+
+def angles_to_sks_prompt(horizontal_angle: float, vertical_angle: float, zoom: float) -> str:
+    """Convert camera angles to the <sks> prompt format expected by the
+    Qwen-Image-Edit-2511-Multiple-Angles-LoRA.
+
+    Single source of truth for angle-to-text mapping. Used by both
+    routes_shots.py (shot generation) and routes_generate.py (multi-angle).
+    """
+    h_angle = horizontal_angle % 360
+    if h_angle < 22.5 or h_angle >= 337.5:
+        h_dir = "front view"
+    elif h_angle < 67.5:
+        h_dir = "front-right quarter view"
+    elif h_angle < 112.5:
+        h_dir = "right side view"
+    elif h_angle < 157.5:
+        h_dir = "back-right quarter view"
+    elif h_angle < 202.5:
+        h_dir = "back view"
+    elif h_angle < 247.5:
+        h_dir = "back-left quarter view"
+    elif h_angle < 292.5:
+        h_dir = "left side view"
+    else:
+        h_dir = "front-left quarter view"
+
+    v = vertical_angle
+    if v < -15:
+        v_dir = "low-angle shot"
+    elif v < 15:
+        v_dir = "eye-level shot"
+    elif v < 45:
+        v_dir = "elevated shot"
+    else:
+        v_dir = "high-angle shot"
+
+    if zoom < 1:
+        dist = "extreme wide shot"
+    elif zoom < 2:
+        dist = "wide shot"
+    elif zoom < 4:
+        dist = "medium shot"
+    elif zoom < 7:
+        dist = "close-up"
+    else:
+        dist = "extreme close-up"
+
+    sks_prompt = f"<sks> {h_dir} {v_dir} {dist}"
+
+    # Auto-supplementary hints for ranges where the AI struggles.
+    # These reinforce the <sks> tag with descriptive text to help the model
+    # produce better results in problematic angle/distance combinations.
+    hints = []
+    if "back view" in h_dir:
+        hints.append("character seen from behind")
+    elif "back-" in h_dir:
+        hints.append("partial back view, character turned away")
+
+    if dist == "extreme close-up":
+        hints.append("tight framing on facial features, eyes and mouth detail")
+    elif dist == "extreme wide shot":
+        hints.append("figures small in frame, environment dominates")
+
+    if v_dir == "high-angle shot":
+        hints.append("looking down from above, top-down perspective")
+    elif v_dir == "low-angle shot":
+        hints.append("camera tilted upward, dramatic perspective")
+
+    if hints:
+        sks_prompt += f" ({', '.join(hints)})"
+
+    return sks_prompt

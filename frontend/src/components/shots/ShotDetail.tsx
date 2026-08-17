@@ -12,7 +12,7 @@ import {
   Link2, X, Layers, Sparkles, ChevronDown, Copy, Wand2,
 } from "lucide-react";
 
-const STORYBOARD_MODELS = ["qwen_image_edit", "qwen_multiangle", "flux2_kontext", "flux2", "qwen_image", "z_image"];
+const STORYBOARD_MODELS = ["qwen_image_edit"];
 
 interface Props {
   shot: ShotResponse;

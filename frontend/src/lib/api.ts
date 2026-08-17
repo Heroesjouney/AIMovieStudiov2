@@ -161,6 +161,15 @@ export async function deleteAsset(projectId: string, assetId: string): Promise<v
   await fetch(`${API_BASE}/assets/${projectId}/${assetId}`, { method: "DELETE" });
 }
 
+export async function updateAsset(projectId: string, assetId: string, updates: Record<string, any>): Promise<AssetResponse> {
+  const resp = await fetch(`${API_BASE}/assets/${projectId}/${assetId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  return resp.json();
+}
+
 export async function saveGeneratedToAsset(
   projectId: string,
   imageUrl: string,
@@ -304,11 +313,11 @@ export async function fetchShots(projectId: string, sceneId?: string): Promise<S
   return resp.json();
 }
 
-export async function createShot(projectId: string, name: string, description: string, sceneId?: string): Promise<ShotResponse> {
+export async function createShot(projectId: string, name: string, description: string, sceneId?: string, shotType?: string): Promise<ShotResponse> {
   const resp = await fetch(`${API_BASE}/shots/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId, name, description, scene_id: sceneId }),
+    body: JSON.stringify({ project_id: projectId, name, description, scene_id: sceneId, shot_type: shotType || "medium" }),
   });
   return resp.json();
 }
@@ -343,6 +352,13 @@ export async function generateShotFrame(
   height?: number,
   seed?: number,
   referenceImagePaths?: string[],
+  denoise?: number,
+  cfg?: number,
+  steps?: number,
+  horizontalAngle?: number,
+  verticalAngle?: number,
+  zoom?: number,
+  compositionPreset?: string,
 ): Promise<GenerationResponse> {
   const resp = await fetch(`${API_BASE}/shots/frame`, {
     method: "POST",
@@ -355,7 +371,14 @@ export async function generateShotFrame(
       width: width || 1024,
       height: height || 1024,
       seed,
+      denoise,
+      cfg,
+      steps,
       reference_image_paths: referenceImagePaths || [],
+      horizontal_angle: horizontalAngle,
+      vertical_angle: verticalAngle,
+      zoom,
+      composition_preset: compositionPreset,
     }),
   });
   return resp.json();

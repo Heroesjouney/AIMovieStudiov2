@@ -19,6 +19,9 @@ class ShotType(str, Enum):
     CLOSE_UP = "close_up"
     EXTREME_CLOSE_UP = "extreme_close_up"
     OVER_THE_SHOULDER = "over_the_shoulder"
+    ESTABLISHING = "establishing"
+    SUBSEQUENT = "subsequent"
+    INSERT = "insert"
     POV = "pov"
     AERIAL = "aerial"
     TWO_SHOT = "two_shot"
@@ -52,6 +55,7 @@ class GenerationRecipe(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
     workflow_hash: Optional[str] = None
     reference_paths: List[str] = Field(default_factory=list)
+    denoise: Optional[float] = None
 
 
 class Shot(BaseModel):
@@ -106,8 +110,14 @@ class ShotFrameGenerateRequest(BaseModel):
     width: int = Field(default=1024)
     height: int = Field(default=1024)
     seed: Optional[int] = None
+    denoise: Optional[float] = None
+    cfg: Optional[float] = None
+    steps: Optional[int] = None
     reference_image_paths: List[str] = Field(default_factory=list)
     composition_preset: Optional[str] = None
+    horizontal_angle: Optional[int] = None
+    vertical_angle: Optional[int] = None
+    zoom: Optional[float] = None
 
 
 class ShotVariationRequest(BaseModel):

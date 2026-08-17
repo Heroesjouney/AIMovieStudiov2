@@ -191,7 +191,7 @@ class ComfyImageDriver(ImageDriver):
         print(f"[ComfyImageDriver]   composited {len(local_paths)} refs (base+overlay) into {target_width}x{target_height} -> {output_path}")
         return output_path
 
-    def _inject_params(self, workflow: dict, prompt: str, negative: str, width: int, height: int, seed: Optional[int], reference_path: Optional[str] = None, denoise: Optional[float] = None, reference_image_paths: Optional[List[str]] = None) -> dict:
+    def _inject_params(self, workflow: dict, prompt: str, negative: str, width: int, height: int, seed: Optional[int], reference_path: Optional[str] = None, denoise: Optional[float] = None, reference_image_paths: Optional[List[str]] = None, user_cfg: Optional[float] = None, user_steps: Optional[int] = None) -> dict:
         """Inject generation parameters into a ComfyUI workflow template."""
         wf = json.loads(json.dumps(workflow))  # Deep copy
         actual_seed = seed if seed is not None else int(time.time()) % (2**32)
@@ -239,6 +239,16 @@ class ComfyImageDriver(ImageDriver):
                             inputs["denoise"] = denoise if denoise is not None else (0.55 if ref_paths else 1.0)
                     elif denoise is not None:
                         inputs["denoise"] = denoise
+                # qwen_image_edit: use workflow defaults (cfg=1, steps=4) which
+                # are tuned for the Lightning + multi-angles LoRA combo.
+                # Only override if user explicitly provides values.
+                if self._model_id == "qwen_image_edit":
+                    if user_cfg is not None and "cfg" in inputs:
+                        inputs["cfg"] = user_cfg
+                        print(f"[ComfyImageDriver]   user override: cfg={user_cfg}")
+                    if user_steps is not None and "steps" in inputs:
+                        inputs["steps"] = user_steps
+                        print(f"[ComfyImageDriver]   user override: steps={user_steps}")
             elif ct == "RandomNoise":
                 if "noise_seed" in inputs:
                     inputs["noise_seed"] = actual_seed
@@ -287,20 +297,37 @@ class ComfyImageDriver(ImageDriver):
                 elif "{reference_image_2}" in img_val or "{input_image2}" in img_val:
                     if len(ref_paths) > 1:
                         wf[node_id]["inputs"]["image"] = ref_paths[1]
-                    else:
-                        wf[node_id]["inputs"]["image"] = ref_paths[-1]
                 elif "{reference_image_3}" in img_val or "{input_image3}" in img_val:
                     if len(ref_paths) > 2:
                         wf[node_id]["inputs"]["image"] = ref_paths[2]
-                    else:
-                        wf[node_id]["inputs"]["image"] = ref_paths[-1]
                 elif "{reference_image_4}" in img_val:
                     if len(ref_paths) > 3:
                         wf[node_id]["inputs"]["image"] = ref_paths[3]
-                    else:
-                        wf[node_id]["inputs"]["image"] = ref_paths[-1]
                 elif "{reference_image_path}" in img_val:
                     wf[node_id]["inputs"]["image"] = ref_paths[0]
+
+            # When only 1 ref available, disconnect image2/image3 from the
+            # TextEncodeQwenImageEditPlus nodes so the VL encoder doesn't see
+            # the same image 3 times (over-constrains generation).
+            # Also remove LoadImage nodes with unresolved placeholders to
+            # prevent ComfyUI errors from invalid filenames.
+            if len(ref_paths) < 3:
+                nodes_to_remove = []
+                for nid in wf:
+                    node = wf[nid]
+                    if node.get("class_type") in ("TextEncodeQwenImageEdit", "TextEncodeQwenImageEditPlus"):
+                        inputs = node.get("inputs", {})
+                        if len(ref_paths) < 2 and "image2" in inputs:
+                            del inputs["image2"]
+                        if len(ref_paths) < 3 and "image3" in inputs:
+                            del inputs["image3"]
+                    elif node.get("class_type") == "LoadImage":
+                        img_val = str(node.get("inputs", {}).get("image", ""))
+                        # Check if it still has an unresolved placeholder
+                        if img_val.startswith("{") and img_val.endswith("}"):
+                            nodes_to_remove.append(nid)
+                for nid in nodes_to_remove:
+                    del wf[nid]
 
         return wf
 
@@ -353,6 +380,12 @@ class ComfyImageDriver(ImageDriver):
         if self._model_id == "qwen_image_edit" and not uploaded_refs:
             print(f"[ComfyImageDriver]   no refs for qwen_image_edit, falling back to qwen_image t2i")
             workflow_name = "qwen_image"
+        elif self._model_id == "qwen_image_edit":
+            shot_type = request.extra_params.get("shot_type")
+            if shot_type == "establishing":
+                workflow_name = "qwen_image_edit_establishing"
+            else:
+                workflow_name = "qwen_image_edit"
         else:
             workflow_name = self._workflow_i2i if is_img2img else self._workflow_t2i
         print(f"[ComfyImageDriver]   workflow={workflow_name}, uploaded_refs={uploaded_refs}")
@@ -374,6 +407,8 @@ class ComfyImageDriver(ImageDriver):
             seed=request.seed,
             denoise=request.denoise_strength,
             reference_image_paths=uploaded_refs if uploaded_refs else None,
+            user_cfg=request.extra_params.get("cfg"),
+            user_steps=request.extra_params.get("steps"),
         )
 
         # Debug: log injected LoadImage values and denoise
