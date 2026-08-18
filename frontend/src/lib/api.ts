@@ -19,6 +19,11 @@ export interface DriverInfo {
   max_duration_seconds?: number;
   requires_api_key: boolean;
   api_key_env_var?: string;
+  max_reference_images?: number;
+  max_reference_videos?: number;
+  max_reference_audio?: number;
+  max_total_references?: number;
+  resolution_tiers?: string[];
 }
 
 export interface DriversList {
@@ -71,6 +76,8 @@ export interface VideoTake {
   mode: string;
   created_at: string;
   selected: boolean;
+  retake_of?: string;
+  retake_range?: [number, number];
 }
 
 export interface ShotResponse {
@@ -89,6 +96,7 @@ export interface ShotResponse {
   video_clip_path: string | null;
   video_takes: VideoTake[];
   audio_clip_path: string | null;
+  last_frame_path: string | null;
   camera_params: any;
   camera_movement: any;
   generation_recipe: any;
@@ -103,6 +111,14 @@ export interface ProjectResponse {
   created_at: string;
   asset_count: number;
   shot_count: number;
+}
+
+export interface ShotAssetRef {
+  asset_id: string;
+  asset_type: string;
+  asset_name: string;
+  image_path: string | null;
+  retention?: string;
 }
 
 export interface SceneAssetRef {
@@ -460,8 +476,11 @@ export interface ShotVideoRequest {
   reference_image_paths?: string[];
   reference_video_path?: string;
   reference_audio_path?: string;
-  camera_movement?: { preset: string; intensity: number };
+  camera_movement?: { preset: string; intensity: number; amplitude?: string; speed?: string };
   aspect_ratio?: string;
+  soundscape?: string;
+  music?: string;
+  prompt_override?: string;
   extra_params?: Record<string, any>;
 }
 
@@ -490,6 +509,9 @@ export async function generateShotVideo(req: ShotVideoRequest): Promise<ShotVide
       reference_audio_path: req.reference_audio_path,
       camera_movement: req.camera_movement,
       aspect_ratio: req.aspect_ratio || "16:9",
+      soundscape: req.soundscape,
+      music: req.music,
+      prompt_override: req.prompt_override,
       extra_params: req.extra_params || {},
     }),
   });
@@ -504,6 +526,29 @@ export async function checkShotVideoStatus(jobId: string, modelId: string): Prom
 export async function selectVideoTake(projectId: string, shotId: string, takeId: string): Promise<{ status: string; take_id: string; video_clip_path: string }> {
   const params = new URLSearchParams({ project_id: projectId, shot_id: shotId, take_id: takeId });
   const resp = await fetch(`${API_BASE}/shots/video/take/select?${params}`, { method: "POST" });
+  return resp.json();
+}
+
+// Retake Mode
+export async function retakeVideo(
+  projectId: string,
+  shotId: string,
+  startSeconds: number,
+  endSeconds: number,
+  prompt: string,
+  modelId: string,
+  seed?: number,
+): Promise<ShotVideoResponse> {
+  const params = new URLSearchParams({
+    project_id: projectId,
+    shot_id: shotId,
+    start_seconds: String(startSeconds),
+    end_seconds: String(endSeconds),
+    prompt,
+    model_id: modelId,
+  });
+  if (seed !== undefined) params.set("seed", String(seed));
+  const resp = await fetch(`${API_BASE}/shots/retake?${params}`, { method: "POST" });
   return resp.json();
 }
 

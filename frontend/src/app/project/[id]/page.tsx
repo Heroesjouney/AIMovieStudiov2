@@ -1,18 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useStudioStore } from "@/lib/store";
 import { getDrivers, fetchAssets, fetchShots, fetchScenes } from "@/lib/api";
 import { AssetLibrary } from "@/components/library/MediaLibrary";
-import { GenerationPanel } from "@/components/studio/GenerationPanel";
 import { ShotComposer } from "@/components/shots/ShotComposer";
-import { CameraDirector } from "@/components/camera/CameraDirector";
+import { InspectorPanel } from "@/components/studio/InspectorPanel";
 import { TimelineEditor } from "@/components/timeline/TimelineEditor";
-import { DialoguePanel } from "@/components/timeline/DialoguePanel";
 import { ExportButton } from "@/components/export/ExportButton";
 import { UserMenu } from "@/components/UserMenu";
-import { Film, Image, Clapperboard, Camera, Video, Music, Loader2, Home, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Video, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { useRouter } from "next/navigation";
@@ -22,10 +20,82 @@ export default function ProjectWorkspacePage() {
   const projectId = (params.id as string) || "default";
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-  const { activeTab, setActiveTab, setDrivers, setAssets, setShots, setScenes } = useStudioStore();
+  const {
+    setDrivers, setAssets, setShots, setScenes,
+    timelineDockOpen, setTimelineDockOpen,
+    activeInspector, setSidebarMode, sidebarMode,
+    shots, selectedShotId, setSelectedShotId, setActiveInspector,
+  } = useStudioStore();
+
   const [loaded, setLoaded] = useState(false);
   const [connected, setConnected] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [timelineMaximized, setTimelineMaximized] = useState(false);
+  const [timelineDockHeight, setTimelineDockHeight] = useState(45); // percentage
+  const dragRef = useRef<HTMLDivElement | null>(null);
+
+  // Derive sidebar mode from inspector + dock state
+  useEffect(() => {
+    if (activeInspector === "camera") setSidebarMode("camera");
+    else if (timelineDockOpen) setSidebarMode("timeline");
+    else setSidebarMode("default");
+  }, [activeInspector, timelineDockOpen, setSidebarMode]);
+
+  // Reset maximize when timeline dock closes
+  useEffect(() => {
+    if (!timelineDockOpen && timelineMaximized) setTimelineMaximized(false);
+  }, [timelineDockOpen, timelineMaximized]);
+
+  // When timeline opens, auto-minimize storyboard. When it closes, auto-restore.
+  const handleTimelineToggle = () => {
+    const willOpen = !timelineDockOpen;
+    setTimelineDockOpen(willOpen);
+    setTimelineMaximized(willOpen);
+  };
+
+  // Drag-to-resize for timeline dock
+  useEffect(() => {
+    if (!timelineDockOpen || timelineMaximized) return;
+    const el = dragRef.current;
+    if (!el) return;
+
+    let startY = 0;
+    let startPct = 45;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const container = el.parentElement;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const deltaPx = e.clientY - startY;
+      const deltaPct = (deltaPx / rect.height) * 100;
+      const newPct = Math.max(20, Math.min(80, startPct - deltaPct));
+      setTimelineDockHeight(newPct);
+    };
+
+    const onMouseUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      e.preventDefault();
+      startY = e.clientY;
+      startPct = timelineDockHeight;
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    };
+
+    el.addEventListener("mousedown", onMouseDown);
+    return () => {
+      el.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [timelineDockOpen, timelineMaximized, timelineDockHeight]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -56,14 +126,6 @@ export default function ProjectWorkspacePage() {
     init();
   }, [projectId]);
 
-  const tabs = [
-    { id: "assets" as const, label: "Assets", icon: Image, step: "1" },
-    { id: "shots" as const, label: "Storyboard", icon: Clapperboard, step: "2" },
-    { id: "camera" as const, label: "Camera", icon: Camera, step: "3" },
-    { id: "audio" as const, label: "Audio", icon: Music, step: "4" },
-    { id: "render" as const, label: "Timeline", icon: Video, step: "5" },
-  ];
-
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden">
       {/* Header */}
@@ -76,29 +138,6 @@ export default function ProjectWorkspacePage() {
           <span className="text-sm font-semibold">{projectId}</span>
         </Link>
 
-        {/* Tab navigation */}
-        <nav className="ml-8 flex gap-1">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`relative flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all ${
-                  isActive
-                    ? "bg-studio-accent text-white shadow-md shadow-studio-accent/20"
-                    : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{tab.label}</span>
-                <span className="text-[10px] opacity-50 hidden md:inline">{tab.step}</span>
-              </button>
-            );
-          })}
-        </nav>
-
         {/* Right side */}
         <div className="ml-auto flex items-center gap-3">
           {/* Connection status */}
@@ -109,6 +148,35 @@ export default function ProjectWorkspacePage() {
 
           <div className="w-px h-5 bg-studio-border" />
 
+          {/* Timeline dock toggle */}
+          <button
+            onClick={handleTimelineToggle}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+              timelineDockOpen
+                ? "bg-studio-accent text-white"
+                : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+            }`}
+          >
+            <Video className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Timeline</span>
+            {timelineDockOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+          </button>
+
+          {/* Maximize/restore timeline */}
+          {timelineDockOpen && (
+            <button
+              onClick={() => setTimelineMaximized(!timelineMaximized)}
+              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                timelineMaximized
+                  ? "bg-studio-accent text-white"
+                  : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+              }`}
+              title={timelineMaximized ? "Restore timeline" : "Maximize timeline"}
+            >
+              {timelineMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            </button>
+          )}
+
           <ExportButton projectId={projectId} />
 
           <div className="w-px h-5 bg-studio-border" />
@@ -117,9 +185,9 @@ export default function ProjectWorkspacePage() {
         </div>
       </header>
 
-      {/* Main content */}
+      {/* Main content — 3-pane layout */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Sidebar */}
+        {/* Left pane: Asset Library */}
         <aside className={`bg-studio-panel/50 border-r border-studio-border overflow-hidden shrink-0 transition-all duration-200 ${sidebarCollapsed ? "w-10" : "w-64"}`}>
           {sidebarCollapsed ? (
             <div className="flex flex-col items-center pt-3 gap-3">
@@ -145,14 +213,14 @@ export default function ProjectWorkspacePage() {
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto">
-                <AssetLibrary projectId={projectId} mode={activeTab === "render" ? "timeline" : activeTab === "camera" ? "camera" : "default"} />
+                <AssetLibrary projectId={projectId} mode={sidebarMode} />
               </div>
             </div>
           )}
         </aside>
 
-        {/* Main workspace */}
-        <main className="flex-1 overflow-auto min-h-0 bg-studio-bg">
+        {/* Center pane: Storyboard + Timeline dock */}
+        <main className="flex-1 flex flex-col overflow-hidden min-h-0 bg-studio-bg">
           {!loaded ? (
             <div className="flex flex-col items-center justify-center h-full gap-3">
               <Loader2 className="w-8 h-8 animate-spin text-studio-accent" />
@@ -167,15 +235,105 @@ export default function ProjectWorkspacePage() {
               <p className="text-xs text-studio-muted/50">Make sure the FastAPI server is running on port 8001</p>
             </div>
           ) : (
-            <div className="animate-fade-in h-full">
-              {activeTab === "assets" && <GenerationPanel projectId={projectId} />}
-              {activeTab === "shots" && <ShotComposer projectId={projectId} />}
-              {activeTab === "camera" && <CameraDirector projectId={projectId} />}
-              {activeTab === "audio" && <DialoguePanel projectId={projectId} />}
-              {activeTab === "render" && <TimelineEditor projectId={projectId} />}
-            </div>
+            <>
+              {/* Storyboard area (can be minimized to give timeline full height) */}
+              {!timelineMaximized && (
+                <div className="flex-1 overflow-hidden min-h-0 flex flex-col" style={timelineDockOpen ? { height: `${100 - timelineDockHeight}%` } : undefined}>
+                  {/* Storyboard header bar with minimize button */}
+                  {timelineDockOpen && (
+                    <div className="flex items-center justify-between px-3 py-1 bg-studio-panel/50 border-b border-studio-border shrink-0">
+                      <span className="text-[10px] text-studio-muted/60 uppercase tracking-wider">Storyboard</span>
+                      <button
+                        onClick={() => setTimelineMaximized(true)}
+                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-studio-muted hover:text-studio-accent rounded transition-colors"
+                        title="Minimize storyboard — give timeline full height"
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                        Minimize
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex-1 overflow-hidden min-h-0">
+                    <ShotComposer projectId={projectId} />
+                  </div>
+                </div>
+              )}
+
+              {/* Storyboard minimized bar with thumbnails */}
+              {timelineMaximized && timelineDockOpen && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-studio-panel/50 border-b border-studio-border shrink-0 overflow-x-auto">
+                  <span className="text-[10px] text-studio-muted/60 uppercase tracking-wider shrink-0">Shots</span>
+                  <div className="flex items-center gap-1 overflow-x-auto">
+                    {[...shots].sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0)).map((shot, idx) => (
+                      <button
+                        key={shot.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedShotId(shot.id);
+                          setActiveInspector("shot");
+                        }}
+                        className={`relative shrink-0 rounded border transition-all overflow-hidden ${
+                          selectedShotId === shot.id
+                            ? "border-studio-accent ring-1 ring-studio-accent/40"
+                            : "border-studio-border hover:border-studio-accent/40"
+                        }`}
+                        title={`${idx + 1}. ${shot.name}`}
+                      >
+                        <div className="w-16 h-9 bg-studio-bg flex items-center justify-center">
+                          {shot.frame_image_path ? (
+                            <img src={shot.frame_image_path} alt={shot.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-[8px] text-studio-muted/40">No frame</span>
+                          )}
+                        </div>
+                        <div className="absolute top-0 left-0 px-0.5 text-[8px] font-bold bg-black/60 text-white rounded-br">
+                          {idx + 1}
+                        </div>
+                      </button>
+                    ))}
+                    {shots.length === 0 && (
+                      <span className="text-[10px] text-studio-muted/40">No shots yet</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setTimelineMaximized(false)}
+                    className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-studio-muted hover:text-studio-accent rounded transition-colors shrink-0 ml-auto"
+                    title="Restore storyboard"
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                    Restore
+                  </button>
+                </div>
+              )}
+
+              {/* Timeline dock (collapsible bottom, resizable, maximizable) */}
+              {timelineDockOpen && (
+                <div
+                  className={`border-t border-studio-border animate-fade-in overflow-hidden flex flex-col ${timelineMaximized ? "flex-1" : ""}`}
+                  style={timelineMaximized ? undefined : { height: `${timelineDockHeight}%` }}
+                >
+                  {/* Drag handle for resizing */}
+                  {!timelineMaximized && (
+                    <div
+                      ref={dragRef}
+                      className="h-1.5 bg-studio-border hover:bg-studio-accent/40 cursor-row-resize shrink-0 transition-colors"
+                    />
+                  )}
+                  <div className="flex-1 overflow-hidden min-h-0">
+                    <TimelineEditor projectId={projectId} />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </main>
+
+        {/* Right pane: Inspector */}
+        {!loaded || !connected ? null : (
+          <aside className="w-[420px] shrink-0 overflow-hidden">
+            <InspectorPanel projectId={projectId} />
+          </aside>
+        )}
       </div>
     </div>
   );

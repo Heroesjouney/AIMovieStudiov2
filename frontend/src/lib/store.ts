@@ -34,7 +34,9 @@ interface StudioState {
   selectedAssetId: string | null;
   selectedShotId: string | null;
   selectedSceneId: string | null;
-  activeTab: "assets" | "shots" | "camera" | "audio" | "render";
+  activeInspector: "generate" | "shot" | "camera" | "audio";
+  timelineDockOpen: boolean;
+  sidebarMode: "default" | "timeline" | "camera";
   loading: boolean;
 
   // Timeline state
@@ -53,7 +55,9 @@ interface StudioState {
   setSelectedAssetId: (id: string | null) => void;
   setSelectedShotId: (id: string | null) => void;
   setSelectedSceneId: (id: string | null) => void;
-  setActiveTab: (tab: StudioState["activeTab"]) => void;
+  setActiveInspector: (inspector: StudioState["activeInspector"]) => void;
+  setTimelineDockOpen: (open: boolean) => void;
+  setSidebarMode: (mode: StudioState["sidebarMode"]) => void;
   setLoading: (loading: boolean) => void;
 
   // Timeline actions
@@ -119,7 +123,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   selectedAssetId: null,
   selectedShotId: null,
   selectedSceneId: null,
-  activeTab: "assets",
+  activeInspector: "generate",
+  timelineDockOpen: false,
+  sidebarMode: "default",
   loading: false,
 
   // Undo/Redo stacks
@@ -175,7 +181,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setSelectedAssetId: (id) => set({ selectedAssetId: id }),
   setSelectedShotId: (id) => set({ selectedShotId: id }),
   setSelectedSceneId: (id) => set({ selectedSceneId: id }),
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveInspector: (inspector) => set({ activeInspector: inspector }),
+  setTimelineDockOpen: (open) => set({ timelineDockOpen: open }),
+  setSidebarMode: (mode) => set({ sidebarMode: mode }),
   setLoading: (loading) => set({ loading }),
 
   // Timeline actions

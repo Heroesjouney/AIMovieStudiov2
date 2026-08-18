@@ -5,11 +5,14 @@ import { useStudioStore } from "@/lib/store";
 import {
   type ShotResponse, updateShot, generateShotFrame, checkShotFrameStatus,
   generateCameraAngles, checkAnglesStatus, generateShotVariation, checkShotFrameStatus as checkVariationStatus,
-  CAMERA_ANGLE_PRESETS,
+  CAMERA_ANGLE_PRESETS, retakeVideo, checkShotVideoStatus,
 } from "@/lib/api";
 import {
+  CAMERA_MOVEMENT_PRESETS, CAMERA_AMPLITUDE_OPTIONS, CAMERA_SPEED_OPTIONS,
+} from "@/lib/cinematicPresets";
+import {
   Plus, Loader2, ImageIcon, Camera,
-  Link2, X, Layers, Sparkles, ChevronDown, Copy, Wand2,
+  Link2, X, Layers, Sparkles, ChevronDown, Copy, Wand2, RotateCcw, ChevronRight,
 } from "lucide-react";
 
 const STORYBOARD_MODELS = ["qwen_image_edit"];
@@ -35,20 +38,29 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
   const [angleStatus, setAngleStatus] = useState("");
   const [selectedAngles, setSelectedAngles] = useState<string[]>([]);
   const [showAnglePanel, setShowAnglePanel] = useState(false);
-  const [useFrameAsRef, setUseFrameAsRef] = useState(false);
   const [showVariationPanel, setShowVariationPanel] = useState(false);
   const [variationPrompt, setVariationPrompt] = useState("");
   const [variationName, setVariationName] = useState("");
   const [generatingVariation, setGeneratingVariation] = useState(false);
   const [variationStatus, setVariationStatus] = useState("");
+  const [showRetake, setShowRetake] = useState(false);
+  const [linkedImagePaths, setLinkedImagePaths] = useState<string[]>([]);
+  const [showImageLinker, setShowImageLinker] = useState(false);
+  const [retakeStart, setRetakeStart] = useState(0);
+  const [retakeEnd, setRetakeEnd] = useState(2);
+  const [retakePrompt, setRetakePrompt] = useState("");
+  const [retakeStatus, setRetakeStatus] = useState("");
+  const [generatingRetake, setGeneratingRetake] = useState(false);
   const anglePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const framePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retakePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Clean up any active polling on unmount
   useEffect(() => {
     return () => {
       if (framePollRef.current) clearInterval(framePollRef.current);
       if (anglePollRef.current) clearInterval(anglePollRef.current);
+      if (retakePollRef.current) clearInterval(retakePollRef.current);
     };
   }, []);
 
@@ -79,31 +91,48 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
     await onRefresh();
   };
 
+  const handleAssetRetentionChange = async (assetId: string, retention: string) => {
+    const newAssets = (shot.assets || []).map((a: any) =>
+      a.asset_id === assetId ? { ...a, retention } : a
+    );
+    await updateShot(projectId, shot.id, { assets: newAssets });
+    await onRefresh();
+  };
+
+  const handleRetake = async () => {
+    if (!retakePrompt.trim() || !shot.video_clip_path) return;
+    setGeneratingRetake(true); setError(null); setRetakeStatus("Submitting...");
+    try {
+      const resp = await retakeVideo(projectId, shot.id, retakeStart, retakeEnd, retakePrompt, "minimax_h3");
+      if (resp.status === "failed") { setError(resp.error_message || "Retake failed"); setGeneratingRetake(false); return; }
+      const jobId = resp.job_id;
+      retakePollRef.current = setInterval(async () => {
+        try {
+          const st = await checkShotVideoStatus(jobId, "minimax_h3");
+          if (st.status === "completed") {
+            if (retakePollRef.current) clearInterval(retakePollRef.current);
+            retakePollRef.current = null;
+            setRetakeStatus("Done!"); setGeneratingRetake(false); setShowRetake(false);
+            await onRefresh();
+          } else if (st.status === "failed") {
+            if (retakePollRef.current) clearInterval(retakePollRef.current);
+            retakePollRef.current = null;
+            setError(st.error_message || "Retake failed"); setGeneratingRetake(false);
+          } else { setRetakeStatus(st.status === "in_queue" ? "In queue..." : "Processing..."); }
+        } catch (e) { console.warn("[ShotDetail] retake poll error:", e); }
+      }, 3000);
+    } catch (err) { setError(err instanceof Error ? err.message : "Retake failed"); setGeneratingRetake(false); }
+  };
+
   const handleGenerateFrame = async () => {
     if (!prompt.trim()) return;
     setGenerating(true); setError(null); setStatus("Submitting...");
 
-    const boundRefPaths = (shot.assets || []).map((a: any) => a.image_path).filter(Boolean);
-    // Always use the current frame as the first reference when regenerating,
-    // so the new image stays consistent with the existing one while adding/changing elements
-    let refPaths = boundRefPaths;
-    if (shot.frame_image_path) {
-      refPaths = [shot.frame_image_path, ...boundRefPaths];
-    }
-    if (useFrameAsRef) {
-      const prevShot = allShots
-        .filter((s) => s.frame_image_path && s.id !== shot.id)
-        .sort((a, b) => a.sequence_order - b.sequence_order)
-        .pop();
-      if (prevShot?.frame_image_path && !refPaths.includes(prevShot.frame_image_path)) {
-        refPaths = [...refPaths, prevShot.frame_image_path];
-      }
-    }
-
     try {
       const resp = await generateShotFrame(
         shot.id, prompt, selectedImageDriver,
-        negativePrompt || undefined, 1344, 768, undefined, refPaths,
+        negativePrompt || undefined, 1344, 768, undefined,
+        linkedImagePaths.length > 0 ? linkedImagePaths : undefined,
       );
       if (resp.status === "failed") { setError(resp.error_message || "Failed"); setGenerating(false); return; }
 
@@ -119,7 +148,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
             await updateShot(projectId, shot.id, {
               frame_image_path: st.image_urls?.[0] || "",
               status: "frame_generated",
-              generation_recipe: { prompt, negative_prompt: negativePrompt, model_id: selectedImageDriver, reference_image_paths: refPaths, timestamp: new Date().toISOString() },
+              generation_recipe: { prompt, negative_prompt: negativePrompt, model_id: selectedImageDriver, timestamp: new Date().toISOString() },
             });
             setStatus("Done!"); setGenerating(false); await onRefresh();
           } else if (st.status === "failed") {
@@ -248,13 +277,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
           {/* Frame preview */}
           <div className="aspect-video bg-studio-panel rounded-xl border border-studio-border overflow-hidden flex items-center justify-center relative group">
             {shot.frame_image_path ? (
-              <>
-                <img src={shot.frame_image_path} alt="Frame" className="w-full h-full object-contain" />
-                <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-black/60 backdrop-blur-sm text-white">
-                  <Link2 className="w-3 h-3" />
-                  Frame ref active
-                </div>
-              </>
+              <img src={shot.frame_image_path} alt="Frame" className="w-full h-full object-contain" />
             ) : (
               <div className="text-center text-studio-muted">
                 <ImageIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
@@ -310,13 +333,25 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
 
             <div className="flex gap-2 flex-wrap">
               {(shot.assets || []).map((a: any, i: number) => (
-                <div key={i} className="group flex items-center gap-2 px-3 py-1.5 bg-studio-panel rounded-lg border border-studio-border text-xs">
-                  {a.image_path && <img src={a.image_path} alt="" className="w-6 h-6 rounded object-cover" />}
-                  <span>{a.asset_name}</span>
-                  <span className="text-[10px] text-studio-muted capitalize">{a.role}</span>
-                  <button onClick={() => handleUnbindAsset(a.asset_id)} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-studio-danger/20 text-studio-danger transition-all">
-                    <X className="w-3 h-3" />
-                  </button>
+                <div key={i} className="group flex flex-col gap-1 px-3 py-1.5 bg-studio-panel rounded-lg border border-studio-border text-xs">
+                  <div className="flex items-center gap-2">
+                    {a.image_path && <img src={a.image_path} alt="" className="w-6 h-6 rounded object-cover" />}
+                    <span>{a.asset_name}</span>
+                    <span className="text-[10px] text-studio-muted capitalize">{a.role}</span>
+                    <button onClick={() => handleUnbindAsset(a.asset_id)} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-studio-danger/20 text-studio-danger transition-all">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <select
+                    value={a.retention || "fully_preserved"}
+                    onChange={(e) => handleAssetRetentionChange(a.asset_id, e.target.value)}
+                    className="text-[10px] bg-studio-bg border border-studio-border rounded px-1 py-0.5 focus:outline-none focus:border-studio-accent"
+                  >
+                    <option value="fully_preserved">Preserve Exactly</option>
+                    <option value="partially_preserved">Partial Match</option>
+                    <option value="attribute_transfer">Attribute Transfer</option>
+                    <option value="weak_reference">Loose Reference</option>
+                  </select>
                 </div>
               ))}
               {(shot.assets || []).length === 0 && <p className="text-xs text-studio-muted">No assets bound. Add assets for consistency.</p>}
@@ -327,7 +362,12 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
           <div className="p-4 bg-studio-panel rounded-xl border border-studio-border">
             <h3 className="text-sm font-semibold mb-3">Generate Storyboard Frame</h3>
             <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} placeholder="Describe the shot composition..."
-              className="w-full bg-studio-bg border border-studio-border rounded-xl p-3 text-sm mb-2 focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none" />
+              className="w-full bg-studio-bg border border-studio-border rounded-xl p-3 text-sm mb-1 focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none" />
+            <div className="flex justify-end mb-2">
+              <span className={`text-[10px] ${prompt.trim().split(/\s+/).filter(Boolean).length >= 350 ? "text-green-400" : prompt.trim().split(/\s+/).filter(Boolean).length > 0 ? "text-yellow-400" : "text-studio-muted"}`}>
+                Word count: {prompt.trim().split(/\s+/).filter(Boolean).length} / target 350-500
+              </span>
+            </div>
             <input value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} placeholder="Negative prompt (optional)..."
               className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-xs mb-3 focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none" />
 
@@ -351,22 +391,69 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
               </div>
             </div>
 
-            {shot.frame_image_path && (
-              <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-studio-accent/10 rounded-lg border border-studio-accent/20">
-                <Link2 className="w-3.5 h-3.5 text-studio-accent shrink-0" />
-                <span className="text-xs text-studio-accent">Current frame will be used as reference — new generation stays consistent while adding elements</span>
+            {/* Link existing images as additional references */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs text-studio-muted flex items-center gap-1.5">
+                  <Link2 className="w-3 h-3" />
+                  Linked References {linkedImagePaths.length > 0 && `(${linkedImagePaths.length})`}
+                </label>
+                <button
+                  onClick={() => setShowImageLinker(!showImageLinker)}
+                  className="text-[10px] text-studio-accent hover:text-studio-accentHover transition-colors"
+                >
+                  {showImageLinker ? "Done" : "Add"}
+                </button>
               </div>
-            )}
+              {linkedImagePaths.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {linkedImagePaths.map((p, i) => (
+                    <div key={i} className="relative group">
+                      <img src={p} alt="ref" className="w-12 h-12 rounded-lg object-cover border border-studio-border" />
+                      <button
+                        onClick={() => setLinkedImagePaths(linkedImagePaths.filter((_, idx) => idx !== i))}
+                        className="absolute -top-1 -right-1 p-0.5 rounded-full bg-studio-danger text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showImageLinker && (
+                <div className="p-2 bg-studio-bg rounded-lg border border-studio-border max-h-48 overflow-y-auto">
+                  <div className="grid grid-cols-10 gap-0.5">
+                    {allShots
+                      .filter((s) => s.frame_image_path && s.id !== shot.id)
+                      .sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0))
+                      .map((s) => (
+                        <button
+                          key={s.id}
+                          onClick={() => {
+                            if (!linkedImagePaths.includes(s.frame_image_path!)) {
+                              setLinkedImagePaths([...linkedImagePaths, s.frame_image_path!]);
+                            }
+                          }}
+                          className={`rounded overflow-hidden border transition-all ${
+                            linkedImagePaths.includes(s.frame_image_path!)
+                              ? "border-studio-accent ring-1 ring-studio-accent/40"
+                              : "border-studio-border hover:border-studio-accent/40"
+                          }`}
+                          title={s.name}
+                        >
+                          <img src={s.frame_image_path!} alt={s.name} className="w-full aspect-video object-cover" />
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
 
-            <label className="flex items-center gap-2 mb-3 cursor-pointer">
-              <input type="checkbox" checked={useFrameAsRef} onChange={(e) => setUseFrameAsRef(e.target.checked)} className="w-3.5 h-3.5 rounded accent-studio-accent" />
-              <span className="text-xs text-studio-muted flex items-center gap-1">
-                <Link2 className="w-3 h-3" /> Also use previous shot's frame (continuity chaining)
-              </span>
-            </label>
-
-            <button onClick={handleGenerateFrame} disabled={generating || !prompt.trim()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-all hover:scale-[1.02] shadow-md shadow-studio-accent/20">
+            <button
+              onClick={handleGenerateFrame}
+              disabled={generating || prompt.trim().length === 0}
+              className="flex items-center gap-2 px-5 py-2.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-all hover:scale-[1.02] shadow-md shadow-studio-accent/20"
+            >
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
               {generating ? status : "Generate Frame"}
             </button>
@@ -380,8 +467,8 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
                 <h3 className="text-sm font-semibold flex items-center gap-2">
                   <Camera className="w-4 h-4 text-studio-accent" /> Multi-Angle Generation
                 </h3>
-                <button onClick={() => setShowAnglePanel(!showAnglePanel)} className="text-xs text-studio-muted hover:text-studio-accent transition-colors">
-                  {showAnglePanel ? "Hide" : "Show"} presets
+                <button onClick={() => setShowAnglePanel(!showAnglePanel)} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors">
+                  {showAnglePanel ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                 </button>
               </div>
 
@@ -423,8 +510,8 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
                 <h3 className="text-sm font-semibold flex items-center gap-2">
                   <Wand2 className="w-4 h-4 text-studio-accent" /> Build Scene in Frames
                 </h3>
-                <button onClick={() => setShowVariationPanel(!showVariationPanel)} className="text-xs text-studio-muted hover:text-studio-accent transition-colors">
-                  {showVariationPanel ? "Hide" : "Show"} presets
+                <button onClick={() => setShowVariationPanel(!showVariationPanel)} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors">
+                  {showVariationPanel ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                 </button>
               </div>
 
@@ -476,6 +563,56 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
               {!showVariationPanel && <p className="text-xs text-studio-muted">Create new shots from this frame with different angles, compositions, and actions to build the entire scene.</p>}
             </div>
           )}
+
+          {/* Last frame continuity */}
+          {shot.last_frame_path && (
+            <div className="p-4 bg-studio-panel rounded-xl border border-studio-border">
+              <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
+                <Link2 className="w-4 h-4 text-studio-accent" /> Last Frame (Continuity)
+              </h3>
+              <div className="flex items-center gap-3">
+                <img src={shot.last_frame_path} alt="Last frame" className="w-32 aspect-video object-cover rounded-lg border border-studio-border" />
+                <p className="text-xs text-studio-muted">This frame will auto-pass to the next shot's video generation as the first frame anchor for visual continuity.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Video retake */}
+          {shot.video_clip_path && (
+            <div className="p-4 bg-studio-panel rounded-xl border border-studio-border">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <RotateCcw className="w-4 h-4 text-studio-accent" /> Retake Mode
+                </h3>
+                <button onClick={() => setShowRetake(!showRetake)} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors">
+                  {showRetake ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                </button>
+              </div>
+              {showRetake && (
+                <div className="animate-fade-in space-y-3">
+                  <p className="text-xs text-studio-muted">Mark a time range in the video and regenerate just that portion. The new segment is spliced back into the original.</p>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-studio-muted">Start (s):</label>
+                    <input type="number" min={0} max={retakeEnd - 0.1} step={0.1} value={retakeStart} onChange={(e) => setRetakeStart(parseFloat(e.target.value))}
+                      className="w-20 bg-studio-bg border border-studio-border rounded-lg px-2 py-1 text-xs focus:border-studio-accent focus:outline-none" />
+                    <label className="text-xs text-studio-muted">End (s):</label>
+                    <input type="number" min={retakeStart + 0.1} step={0.1} value={retakeEnd} onChange={(e) => setRetakeEnd(parseFloat(e.target.value))}
+                      className="w-20 bg-studio-bg border border-studio-border rounded-lg px-2 py-1 text-xs focus:border-studio-accent focus:outline-none" />
+                  </div>
+                  <textarea value={retakePrompt} onChange={(e) => setRetakePrompt(e.target.value)} rows={2}
+                    className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-xs focus:border-studio-accent focus:outline-none resize-none"
+                    placeholder="Describe what should happen in the retake segment..." />
+                  <button onClick={handleRetake} disabled={generatingRetake || !retakePrompt.trim()}
+                    className="flex items-center gap-2 px-4 py-2 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-all">
+                    {generatingRetake ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                    {generatingRetake ? (retakeStatus || "Processing...") : "Generate Retake"}
+                  </button>
+                </div>
+              )}
+              {!showRetake && <p className="text-xs text-studio-muted">Regenerate a portion of the video and splice it back into the original.</p>}
+            </div>
+          )}
+
         </div>
       </div>
     </div>

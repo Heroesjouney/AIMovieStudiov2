@@ -67,6 +67,14 @@ class CameraMovementPreset(str, Enum):
     ZOOM_IN = "zoom_in"
     ZOOM_OUT = "zoom_out"
     DOLLY_ZOOM = "dolly_zoom"
+    TRUCK_LEFT = "truck_left"
+    TRUCK_RIGHT = "truck_right"
+    PEDESTAL_UP = "pedestal_up"
+    PEDESTAL_DOWN = "pedestal_down"
+    ARC_LEFT = "arc_left"
+    ARC_RIGHT = "arc_right"
+    SHAKE = "shake"
+    ROLL = "roll"
 
 
 class CameraParams(BaseModel):
@@ -88,6 +96,8 @@ class CameraMovement(BaseModel):
     end_params: Optional[CameraParams] = None
     duration_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
     intensity: float = Field(default=1.0, ge=0.1, le=3.0, description="Movement intensity multiplier")
+    amplitude: Optional[str] = Field(default=None, description="small | medium | large")
+    speed: Optional[str] = Field(default=None, description="slow | normal | fast")
 
 
 class MultiAngleRequest(BaseModel):

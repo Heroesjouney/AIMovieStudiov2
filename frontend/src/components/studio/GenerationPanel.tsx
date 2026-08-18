@@ -314,6 +314,8 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
             <option value="location">Location</option>
             <option value="prop">Prop</option>
             <option value="vehicle">Vehicle</option>
+            <option value="style">Style</option>
+            <option value="effect">Effect</option>
           </select>
         </div>
       </div>

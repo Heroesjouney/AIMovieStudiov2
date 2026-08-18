@@ -49,6 +49,14 @@ COMFY_CAMERA_PROMPTS = {
     "zoom_in": "zoom in",
     "zoom_out": "zoom out",
     "dolly_zoom": "dolly zoom (vertigo effect)",
+    "truck_left": "camera trucks left, moving sideways",
+    "truck_right": "camera trucks right, moving sideways",
+    "pedestal_up": "camera pedestal moves up",
+    "pedestal_down": "camera pedestal moves down",
+    "arc_left": "arc shot curving left around the subject",
+    "arc_right": "arc shot curving right around the subject",
+    "shake": "camera shake, chaotic movement",
+    "roll": "camera rolls, rotating on its axis",
 }
 
 
@@ -176,6 +184,13 @@ class ComfyVideoDriver(VideoDriver):
         if request.camera_movement and caps.get("supports_camera_control", False):
             preset = request.camera_movement.get("preset", "static")
             cam_desc = COMFY_CAMERA_PROMPTS.get(preset, "")
+            # Append amplitude/speed modifiers if provided
+            amplitude = request.camera_movement.get("amplitude")
+            speed = request.camera_movement.get("speed")
+            if amplitude and amplitude != "medium":
+                cam_desc += f" with {amplitude} amplitude"
+            if speed and speed != "normal":
+                cam_desc += f" at {speed} speed"
             if cam_desc and cam_desc not in effective_prompt:
                 effective_prompt = f"{effective_prompt}, {cam_desc}"
 

@@ -267,3 +267,42 @@ export function getNextCoverageStep(
   }
   return null;
 }
+
+// Camera Movement Presets for video generation
+export const CAMERA_MOVEMENT_PRESETS = [
+  { value: "static", label: "Static", icon: "⏸" },
+  { value: "dolly_in", label: "Dolly In", icon: "🔍" },
+  { value: "dolly_out", label: "Dolly Out", icon: "🔎" },
+  { value: "pan_left", label: "Pan Left", icon: "⬅" },
+  { value: "pan_right", label: "Pan Right", icon: "➡" },
+  { value: "tilt_up", label: "Tilt Up", icon: "⬆" },
+  { value: "tilt_down", label: "Tilt Down", icon: "⬇" },
+  { value: "crane_up", label: "Crane Up", icon: "🢁" },
+  { value: "crane_down", label: "Crane Down", icon: "🢃" },
+  { value: "orbit_left", label: "Orbit Left", icon: "↺" },
+  { value: "orbit_right", label: "Orbit Right", icon: "↻" },
+  { value: "handheld", label: "Handheld", icon: "✋" },
+  { value: "zoom_in", label: "Zoom In", icon: "⊕" },
+  { value: "zoom_out", label: "Zoom Out", icon: "⊖" },
+  { value: "dolly_zoom", label: "Dolly Zoom", icon: "🌀" },
+  { value: "truck_left", label: "Truck Left", icon: "⬅" },
+  { value: "truck_right", label: "Truck Right", icon: "➡" },
+  { value: "pedestal_up", label: "Pedestal Up", icon: "⬆" },
+  { value: "pedestal_down", label: "Pedestal Down", icon: "⬇" },
+  { value: "arc_left", label: "Arc Left", icon: "⤴" },
+  { value: "arc_right", label: "Arc Right", icon: "⤵" },
+  { value: "shake", label: "Shake", icon: "📳" },
+  { value: "roll", label: "Roll", icon: "🔄" },
+] as const;
+
+export const CAMERA_AMPLITUDE_OPTIONS = [
+  { value: "small", label: "Small" },
+  { value: "medium", label: "Medium" },
+  { value: "large", label: "Large" },
+] as const;
+
+export const CAMERA_SPEED_OPTIONS = [
+  { value: "slow", label: "Slow" },
+  { value: "normal", label: "Normal" },
+  { value: "fast", label: "Fast" },
+] as const;

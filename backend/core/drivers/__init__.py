@@ -100,12 +100,16 @@ def list_image_drivers() -> List[DriverInfo]:
         display_name="Qwen Image Edit (ComfyUI)",
         category=DriverCategory.LOCAL,
         supported_features=["image_to_image", "multi_reference", "storyboard"],
+        max_reference_images=3,
+        max_total_references=3,
     ))
     drivers.append(DriverInfo(
         driver_id="qwen_multiangle",
         display_name="Qwen Multiangle (ComfyUI)",
         category=DriverCategory.LOCAL,
         supported_features=["image_to_image", "multi_angle", "multi_reference", "storyboard"],
+        max_reference_images=3,
+        max_total_references=3,
     ))
     drivers.append(DriverInfo(
         driver_id="flux2_kontext",
@@ -148,6 +152,10 @@ def list_video_drivers() -> List[DriverInfo]:
         category=DriverCategory.LOCAL,
         supported_features=["text_to_video", "image_to_video", "first_last_frame", "image_audio_to_video"],
         max_duration_seconds=10.0,
+        max_reference_images=1,
+        max_reference_videos=1,
+        max_total_references=2,
+        resolution_tiers=["native", "fast"],
     ))
     drivers.append(DriverInfo(
         driver_id="wan_video",
@@ -162,6 +170,11 @@ def list_video_drivers() -> List[DriverInfo]:
         category=DriverCategory.LOCAL,
         supported_features=["text_to_video", "image_to_video", "reference_to_video", "first_last_frame", "audio_lock", "motion_lock"],
         max_duration_seconds=15.0,
+        max_reference_images=9,
+        max_reference_videos=3,
+        max_reference_audio=3,
+        max_total_references=12,
+        resolution_tiers=["native", "fast"],
     ))
     # Cloud - Fal.ai
     if os.getenv("FAL_KEY"):

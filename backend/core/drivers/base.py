@@ -146,6 +146,11 @@ class DriverInfo(BaseModel):
     max_duration_seconds: float = 10.0
     requires_api_key: bool = False
     api_key_env_var: Optional[str] = None
+    max_reference_images: int = 3
+    max_reference_videos: int = 1
+    max_reference_audio: int = 1
+    max_total_references: int = 4
+    resolution_tiers: List[str] = Field(default_factory=lambda: ["native"])
 
 
 # =============================================================================

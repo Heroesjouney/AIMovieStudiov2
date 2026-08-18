@@ -15,6 +15,8 @@ class AssetType(str, Enum):
     LOCATION = "location"
     PROP = "prop"
     VEHICLE = "vehicle"
+    STYLE = "style"
+    EFFECT = "effect"
 
 
 class AssetStatus(str, Enum):
@@ -55,6 +57,16 @@ class VehicleData(BaseModel):
     pass
 
 
+class StyleData(BaseModel):
+    """Extended data for style assets."""
+    pass
+
+
+class EffectData(BaseModel):
+    """Extended data for effect assets."""
+    pass
+
+
 class Asset(BaseModel):
     """Core asset model stored in the Vault."""
     id: str = Field(..., description="UUID identifier")
@@ -72,6 +84,8 @@ class Asset(BaseModel):
     location_data: Optional[LocationData] = None
     prop_data: Optional[PropData] = None
     vehicle_data: Optional[VehicleData] = None
+    style_data: Optional[StyleData] = None
+    effect_data: Optional[EffectData] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

@@ -16,6 +16,8 @@ const typeIcons: Record<string, string> = {
   location: "📍",
   prop: "📦",
   vehicle: "🚗",
+  style: "🎨",
+  effect: "✨",
 };
 
 const sheetTypeLabels: Record<string, string> = {
@@ -23,6 +25,8 @@ const sheetTypeLabels: Record<string, string> = {
   prop: "Prop Sheet",
   vehicle: "Vehicle Sheet",
   location: "Location Sheet",
+  style: "Style Reference",
+  effect: "Effect Reference",
 };
 
 interface SheetTemplate {
@@ -58,6 +62,20 @@ const sheetTemplates: Record<string, SheetTemplate[]> = {
       id: "location_sheet",
       label: "Location Sheet",
       prompt: "location design sheet, wide establishing shot, different camera angles, aerial view, ground level view, three-quarter view, clean design sheet",
+    },
+  ],
+  style: [
+    {
+      id: "style_sheet",
+      label: "Style Reference",
+      prompt: "style reference sheet, color palette, texture samples, lighting examples, grade comparison, visual mood board, clean design sheet",
+    },
+  ],
+  effect: [
+    {
+      id: "effect_sheet",
+      label: "Effect Reference",
+      prompt: "visual effect reference sheet, multiple frames showing the effect from different angles and stages, clean design sheet",
     },
   ],
 };

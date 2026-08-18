@@ -38,12 +38,21 @@ class ShotStatus(str, Enum):
     ERROR = "error"
 
 
+class RetentionLevel(str, Enum):
+    """How closely the AI should follow a reference asset."""
+    FULLY_PRESERVED = "fully_preserved"
+    PARTIALLY_PRESERVED = "partially_preserved"
+    ATTRIBUTE_TRANSFER = "attribute_transfer"
+    WEAK_REFERENCE = "weak_reference"
+
+
 class ShotAssetRef(BaseModel):
     """Reference to an asset attached to a shot."""
     asset_id: str
     asset_type: str
     asset_name: str
     image_path: Optional[str] = None
+    retention: RetentionLevel = RetentionLevel.FULLY_PRESERVED
 
 
 class GenerationRecipe(BaseModel):
@@ -79,6 +88,7 @@ class Shot(BaseModel):
     video_clip_path: Optional[str] = None
     video_takes: List[Dict[str, Any]] = Field(default_factory=list, description="All generated takes; each: {id, path, seed, prompt, negative_prompt, model_id, camera_movement, created_at, selected}")
     audio_clip_path: Optional[str] = None
+    last_frame_path: Optional[str] = None
     
     # Camera direction
     camera_params: Optional[CameraParams] = None
@@ -118,6 +128,7 @@ class ShotFrameGenerateRequest(BaseModel):
     horizontal_angle: Optional[int] = None
     vertical_angle: Optional[int] = None
     zoom: Optional[float] = None
+    prompt_override: Optional[str] = None
 
 
 class ShotVariationRequest(BaseModel):
@@ -159,6 +170,9 @@ class ShotVideoGenerateRequest(BaseModel):
     reference_audio_path: Optional[str] = Field(None, description="Project audio library file for voice lock / IA2V lip-sync")
     camera_movement: Optional[Dict[str, Any]] = Field(None, description="Camera movement preset + intensity")
     aspect_ratio: str = Field(default="16:9")
+    soundscape: Optional[str] = Field(None, description="Ambient/non-diegetic sound description for models with joint audio (e.g. H3)")
+    music: Optional[str] = Field(None, description="Non-diegetic music description for models with joint audio")
+    prompt_override: Optional[str] = Field(None, description="Manual override of the auto-compiled prompt")
     extra_params: Dict[str, Any] = Field(default_factory=dict, description="Model-specific extra params (e.g. enhance_prompt for LTX IA2V)")
 
 
@@ -178,6 +192,7 @@ class ShotResponse(BaseModel):
     video_clip_path: Optional[str] = None
     video_takes: List[Dict[str, Any]] = Field(default_factory=list)
     audio_clip_path: Optional[str] = None
+    last_frame_path: Optional[str] = None
     camera_params: Optional[CameraParams] = None
     camera_movement: Optional[CameraMovement] = None
     generation_recipe: Optional[GenerationRecipe] = None

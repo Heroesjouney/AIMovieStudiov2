@@ -4,20 +4,18 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
   fetchShots, createShot, deleteShot, reorderShots,
-  generateShotFrame, checkShotFrameStatus, updateShot, updateScene,
+  generateShotFrame, checkShotFrameStatus, updateShot,
   fetchScenes,
-  type ShotResponse, type SceneResponse,
+  type ShotResponse,
 } from "@/lib/api";
 import { ScenePanel } from "./ScenePanel";
-import { ShotDetail } from "./ShotDetail";
 import {
   Plus, Trash2, Clapperboard, GripVertical, Camera, Layers, Sparkles,
-  Loader2, X, RefreshCw, ChevronDown, ChevronRight, ImageIcon, Link2, Copy
+  Loader2, X, RefreshCw, ChevronDown, ChevronRight, Link2
 } from "lucide-react";
 import { CameraAngleWidget, type PreviousShotAngle } from "./CameraAngleWidget";
 import { ShotTypeLibrary } from "./ShotTypeLibrary";
 import {
-  CINEMATIC_PRESETS, getPresetById,
   wouldCrossLine, suggestReverse,
 } from "@/lib/cinematicPresets";
 
@@ -77,6 +75,8 @@ export function ShotComposer({ projectId }: { projectId: string }) {
   const [newShotAssets, setNewShotAssets] = useState<any[]>([]);
   const [showAssetPicker, setShowAssetPicker] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [linkedImagePaths, setLinkedImagePaths] = useState<string[]>([]);
+  const [showImageLinker, setShowImageLinker] = useState(false);
   const [advNegativePrompt, setAdvNegativePrompt] = useState("");
   const [advSeed, setAdvSeed] = useState("");
   const [advDenoise, setAdvDenoise] = useState("");
@@ -110,7 +110,6 @@ export function ShotComposer({ projectId }: { projectId: string }) {
 
   // Sort shots by sequence_order for display
   const sortedShots = [...shots].sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0));
-  const selectedShot = sortedShots.find((s) => s.id === selectedShotId);
   const selectedScene = scenes.find((s) => s.id === selectedSceneId);
   const sceneRecipeCount = (selectedScene?.reference_assets || []).length;
   const sceneHasEstablishing = !!(selectedScene?.establishing_frame_path);
@@ -201,7 +200,7 @@ export function ShotComposer({ projectId }: { projectId: string }) {
         advNegativePrompt || undefined,
         aspectData.width, aspectData.height,
         advSeed ? parseInt(advSeed) : undefined,
-        undefined, // Let backend handle ref_paths from scene/shot assets
+        linkedImagePaths.length > 0 ? linkedImagePaths : undefined,
         advDenoise ? parseFloat(advDenoise) : undefined,
         advCfg ? parseFloat(advCfg) : undefined,
         advSteps ? parseInt(advSteps) : undefined,
@@ -234,9 +233,12 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             setCreating(false); setCreateStatus("");
             setNewPrompt(""); setShowCreate(false);
             setNewShotAssets([]);
+            setLinkedImagePaths([]);
+            setShowImageLinker(false);
             setAspectRatio("16:9");
             setCamHorizontal(0); setCamVertical(0); setCamZoom(5); setSelectedPresetId(null);
             setSelectedShotId(shot.id);
+            useStudioStore.getState().setActiveInspector("shot");
             await refresh();
           } else if (st.status === "failed") {
             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
@@ -386,8 +388,8 @@ export function ShotComposer({ projectId }: { projectId: string }) {
 
       {/* Main storyboard area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Storyboard grid */}
-        <div className={`overflow-auto p-5 ${selectedShot ? "w-2/3 border-r border-studio-border" : "flex-1"}`}>
+        {/* Storyboard grid — full width, ShotDetail is in the InspectorPanel */}
+        <div className="flex-1 overflow-auto p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-sm font-semibold">
@@ -775,13 +777,72 @@ export function ShotComposer({ projectId }: { projectId: string }) {
                 )}
               </div>
 
+              {/* Linked reference images */}
+              {!isFirstShotInScene && (
+                <div className="mt-3 pt-3 border-t border-studio-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
+                      Link Reference {linkedImagePaths.length > 0 && `(${linkedImagePaths.length})`}
+                    </label>
+                    <button
+                      onClick={() => setShowImageLinker(!showImageLinker)}
+                      className="flex items-center gap-1 text-[10px] text-studio-accent hover:text-studio-accentHover transition-colors"
+                    >
+                      <Link2 className="w-3 h-3" />
+                      {showImageLinker ? "Done" : "Add"}
+                    </button>
+                  </div>
+                  {linkedImagePaths.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {linkedImagePaths.map((p, i) => (
+                        <div key={i} className="relative group">
+                          <img src={p} alt="ref" className="w-12 h-12 rounded-lg object-cover border border-studio-border" />
+                          <button
+                            onClick={() => setLinkedImagePaths(linkedImagePaths.filter((_, idx) => idx !== i))}
+                            className="absolute -top-1 -right-1 p-0.5 rounded-full bg-studio-danger text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {showImageLinker && (
+                    <div className="p-2 bg-studio-bg border border-studio-border rounded-lg max-h-40 overflow-y-auto">
+                      <div className="grid grid-cols-10 gap-0.5">
+                        {sortedShots
+                          .filter((s) => s.frame_image_path)
+                          .map((s) => (
+                            <button
+                              key={s.id}
+                              onClick={() => {
+                                if (s.frame_image_path && !linkedImagePaths.includes(s.frame_image_path)) {
+                                  setLinkedImagePaths([...linkedImagePaths, s.frame_image_path]);
+                                }
+                              }}
+                              className={`rounded overflow-hidden border transition-all ${
+                                s.frame_image_path && linkedImagePaths.includes(s.frame_image_path)
+                                  ? "border-studio-accent ring-1 ring-studio-accent/40"
+                                  : "border-studio-border hover:border-studio-accent/40"
+                              }`}
+                              title={s.name}
+                            >
+                              <img src={s.frame_image_path!} alt={s.name} className="w-full aspect-video object-cover" />
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <p className="mt-2 text-[10px] text-studio-muted/50">Ctrl+Enter to generate · Shot name auto-derived from prompt</p>
             </div>
           )}
 
           {/* Grid of shot cards */}
           {sortedShots.length > 0 ? (
-            <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
+            <div className="grid grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-2">
               {sortedShots.map((shot, idx) => (
                 <div
                   key={shot.id}
@@ -791,7 +852,11 @@ export function ShotComposer({ projectId }: { projectId: string }) {
                   onDragOver={(e) => handleDragOver(e, shot.id)}
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, shot.id)}
-                  onClick={() => setSelectedShotId(selectedShotId === shot.id ? null : shot.id)}
+                  onClick={() => {
+                    const newId = selectedShotId === shot.id ? null : shot.id;
+                    setSelectedShotId(newId);
+                    if (newId) useStudioStore.getState().setActiveInspector("shot");
+                  }}
                   className={`group relative rounded-xl border cursor-pointer transition-all overflow-hidden ${
                     selectedShotId === shot.id
                       ? "border-studio-accent ring-2 ring-studio-accent/20"
@@ -839,17 +904,17 @@ export function ShotComposer({ projectId }: { projectId: string }) {
                   </div>
 
                   {/* Card footer */}
-                  <div className="p-2 bg-studio-panel/80">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <p className="text-[11px] font-medium truncate flex-1">{shot.name}</p>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${
+                  <div className="p-1.5 bg-studio-panel/80">
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="text-[10px] font-medium truncate flex-1">{shot.name}</p>
+                      <span className={`text-[8px] px-1 py-0.5 rounded-full shrink-0 ${
                         shot.status === "frame_generated" ? "bg-studio-success/20 text-studio-success" : "bg-studio-border text-studio-muted"
                       }`}>
                         {shot.status}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[9px] text-studio-muted">{shot.shot_type}</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[8px] text-studio-muted">{shot.shot_type}</span>
                       {Object.keys(shot.angle_images || {}).length > 0 && (
                         <span className="flex items-center gap-0.5 text-[10px] text-studio-accent">
                           <Camera className="w-2.5 h-2.5" />
@@ -875,18 +940,6 @@ export function ShotComposer({ projectId }: { projectId: string }) {
                 </div>
               ))}
 
-              {/* Add new shot card */}
-              <div
-                onClick={() => setShowCreate(true)}
-                className="rounded-xl border-2 border-dashed border-studio-border hover:border-studio-accent/50 cursor-pointer transition-all flex items-center justify-center min-h-[120px]"
-              >
-                <div className="flex flex-col items-center gap-2 text-studio-muted">
-                  <div className="w-10 h-10 rounded-full bg-studio-panel flex items-center justify-center">
-                    <Plus className="w-5 h-5" />
-                  </div>
-                  <span className="text-xs">Add Shot</span>
-                </div>
-              </div>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -905,19 +958,6 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             </div>
           )}
         </div>
-
-        {/* Detail panel (slides in when a shot is selected) */}
-        {selectedShot && (
-          <div className="w-1/3 min-w-[400px] overflow-hidden animate-fade-in">
-            <ShotDetail
-              shot={selectedShot}
-              projectId={projectId}
-              allShots={sortedShots}
-              onRefresh={refresh}
-              onClose={() => setSelectedShotId(null)}
-            />
-          </div>
-        )}
       </div>
     </div>
   );

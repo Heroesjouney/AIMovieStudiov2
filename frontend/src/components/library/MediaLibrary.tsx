@@ -12,7 +12,7 @@ import {
 import {
   User, MapPin, Package, Car, Upload, Trash2, ImageIcon, Loader2,
   Film, Music, Mic, Video, Plus, ChevronDown, ChevronRight, Sparkles,
-  Search, Send, Check, Clapperboard, Camera,
+  Search, Send, Check, Clapperboard, Camera, Palette, Wand2,
 } from "lucide-react";
 import { AssetDetailPanel } from "./AssetDetailPanel";
 
@@ -21,6 +21,8 @@ const typeIcons: Record<string, any> = {
   location: MapPin,
   prop: Package,
   vehicle: Car,
+  style: Palette,
+  effect: Wand2,
 };
 
 const typeFilters = [
@@ -29,6 +31,8 @@ const typeFilters = [
   { id: "location", label: "Locations" },
   { id: "prop", label: "Props" },
   { id: "vehicle", label: "Vehicles" },
+  { id: "style", label: "Styles" },
+  { id: "effect", label: "Effects" },
 ];
 
 interface AssetLibraryProps {

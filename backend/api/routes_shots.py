@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from core.schemas.shot import (
     Shot, ShotCreateRequest, ShotType, ShotStatus,
     ShotAssetRef, GenerationRecipe, ShotFrameGenerateRequest,
-    ShotVariationRequest, ShotVideoGenerateRequest,
+    ShotVariationRequest, ShotVideoGenerateRequest, RetentionLevel,
 )
 from core.schemas.camera import (
     CameraParams, CameraMovement, CameraAnglePreset,
@@ -28,6 +28,7 @@ from core.schemas.camera import (
 )
 from core.drivers import get_image_driver, get_video_driver
 from core.drivers.base import VideoGenerationRequest, VideoGenerationMode, AspectRatio, GenerationStatus
+from core.logic.prompt_builder import build_prompt, parse_dialogue_tags
 
 router = APIRouter()
 VAULT_DIR = Path(__file__).parent.parent / "assets"
@@ -61,6 +62,29 @@ def _find_shot(project_id: str, shot_id: str) -> Optional[dict]:
         if s["id"] == shot_id:
             return s
     return None
+
+
+def _find_shot_global(shot_id: str) -> tuple[Optional[dict], Optional[str]]:
+    """Search all project directories for a shot by ID.
+    Returns (shot_dict, project_id) or (None, None) if not found.
+    """
+    if not VAULT_DIR.exists():
+        return None, None
+    for project_dir in VAULT_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        shots_idx = project_dir / "shots.json"
+        if not shots_idx.exists():
+            continue
+        try:
+            with open(shots_idx, "r") as f:
+                shots = json.load(f)
+            for s in shots:
+                if s.get("id") == shot_id:
+                    return s, project_dir.name
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return None, None
 
 
 def _shot_dir(project_id: str, shot_id: str) -> Path:
@@ -181,6 +205,7 @@ async def create_shot(req: ShotCreateRequest):
         "video_clip_path": None,
         "video_takes": [],
         "audio_clip_path": None,
+        "last_frame_path": None,
         "camera_params": None,
         "camera_movement": None,
         "generation_recipe": None,
@@ -205,11 +230,11 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
         raise HTTPException(status_code=400, detail=f"Unknown model: {req.model_id}")
 
     # Look up the shot to get asset metadata (types and names)
-    shot = _find_shot("default", req.shot_id)
+    shot, shot_project_id = _find_shot_global(req.shot_id)
     shot_assets = (shot or {}).get("assets", [])
 
     # Load full asset records early (needed for scene context and asset descriptions)
-    all_assets = _load_assets(shot["project_id"]) if shot else []
+    all_assets = _load_assets(shot_project_id) if shot else []
     asset_map = {a["id"]: a for a in all_assets}
 
     # Look up scene for lighting/mood/time_of_day context and establishing frame
@@ -217,7 +242,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     establishing_frame = None
     scene_obj = None
     if shot and shot.get("scene_id"):
-        scenes = _load_scenes(shot["project_id"])
+        scenes = _load_scenes(shot_project_id)
         scene_obj = next((s for s in scenes if s["id"] == shot["scene_id"]), None)
         if scene_obj:
             parts = []
@@ -303,28 +328,67 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     # Separate assets by role for multi-reference workflow
     print(f"[routes_shots] shot_assets={len(shot_assets)}, scene_id={shot.get('scene_id') if shot else 'none'}")
 
+    # Detect if the user's prompt focuses on a specific character by name.
+    # If so, only include that character's reference image and enrichment text.
+    user_prompt_lower = req.prompt.lower().strip()
+    focused_character_name = None
+
     location_image = None
     character_images = []
     other_images = []
     prompt_enrichments = []
+    # First pass: collect character names to check for focus
+    character_entries = []
+    for a in shot_assets:
+        role = a.get("role", a.get("asset_type", ""))
+        if role != "character":
+            continue
+        name = a.get("asset_name", "")
+        asset_id = a.get("asset_id", "")
+        full_asset = asset_map.get(asset_id, {})
+        desc = full_asset.get("description", "")
+        display_name = name
+        if name and "generated" in name.lower():
+            display_name = desc if desc else name
+        if display_name:
+            name_lower = display_name.lower()
+            name_words = name_lower.split()
+            if name_lower in user_prompt_lower or (name_words and name_words[0] in user_prompt_lower):
+                focused_character_name = display_name
+                break
+
+    if focused_character_name and establishing_frame:
+        print(f"[routes_shots] character focus detected: '{focused_character_name}' — filtering other characters")
+
     for a in shot_assets:
         role = a.get("role", a.get("asset_type", ""))
         name = a.get("asset_name", "")
         img = a.get("image_path")
         asset_id = a.get("asset_id", "")
+        retention = a.get("retention", "fully_preserved")
         full_asset = asset_map.get(asset_id, {})
         desc = full_asset.get("description", "")
         if role == "location" and img:
             location_image = img
         elif role == "character":
-            # Use description as the character label if name is auto-generated
             display_name = name
             if name and "generated" in name.lower():
                 display_name = desc if desc else name
+            # Skip non-focused characters when a focus is detected (subsequent shots only)
+            if focused_character_name and establishing_frame and display_name != focused_character_name:
+                print(f"[routes_shots] skipping character '{display_name}' (not focused)")
+                continue
             if display_name:
-                prompt_enrichments.append(f"featuring {display_name}")
-            # Use primary_image (single portrait) for VL context — multi-view
-            # sheets confuse the VL encoder (5 panels look like 5 characters).
+                if retention == "fully_preserved":
+                    prompt_enrichments.append(f"featuring {display_name}")
+                elif retention == "partially_preserved":
+                    prompt_enrichments.append(f"featuring {display_name}, with some characteristics changed")
+                elif retention == "attribute_transfer":
+                    prompt_enrichments.append(f"transferring {display_name}'s characteristics to a different subject")
+                elif retention == "weak_reference":
+                    prompt_enrichments.append(f"loosely referencing {display_name}'s style")
+                else:
+                    prompt_enrichments.append(f"featuring {display_name}")
             if img:
                 character_images.append(img)
         elif role == "prop":
@@ -369,23 +433,23 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
         # The Multi-Angles LoRA (strength 0.6) guides framing while the VL encoder
         # sees all 3 reference images (location + characters).
         if req.horizontal_angle is not None:
-            effective_prompt = angles_to_sks_prompt(
+            sks_tag = angles_to_sks_prompt(
                 req.horizontal_angle, req.vertical_angle or 0, req.zoom if req.zoom is not None else 1.0
             )
         else:
-            effective_prompt = "wide establishing shot"
-        # Add scene context, character names, and user description
-        context_parts = []
-        if scene_context:
-            context_parts.append(scene_context)
-        if prompt_enrichments:
-            context_parts.append(", ".join(prompt_enrichments))
-        if action_prefix:
-            context_parts.append(action_prefix)
-        if context_parts:
-            effective_prompt += f" {', '.join(context_parts)}"
-        if req.prompt.strip():
-            effective_prompt += f" {req.prompt.strip()}"
+            sks_tag = "wide establishing shot"
+        effective_prompt = build_prompt(
+            model_id=req.model_id,
+            scene_context=scene_context,
+            shot_assets=shot_assets,
+            asset_map=asset_map,
+            action_prefix=action_prefix,
+            user_prompt=req.prompt,
+            sks_tag=sks_tag,
+            is_pov=False,
+            is_establishing=True,
+            prompt_override=req.prompt_override,
+        )
     else:
         # Subsequent shot: use camera angle controls if provided, otherwise
         # send the user's prompt directly. The multi-angles LoRA expects
@@ -401,50 +465,47 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             sks_h = req.horizontal_angle
             if is_ots:
                 sks_h = (sks_h + 180) % 360
-            effective_prompt = angles_to_sks_prompt(
+            sks_tag = angles_to_sks_prompt(
                 sks_h, req.vertical_angle or 0, req.zoom if req.zoom is not None else 5.0
             )
-            # Add scene context and character names for consistency reinforcement
-            # (VL encoder sees the establishing frame, but text helps the model
-            # maintain character identity and scene atmosphere)
-            context_parts = []
-            if scene_context:
-                context_parts.append(scene_context)
-            if prompt_enrichments:
-                context_parts.append(", ".join(prompt_enrichments))
-            if context_parts:
-                effective_prompt += f" {', '.join(context_parts)}"
-            if action_prefix:
-                effective_prompt += f" {action_prefix}"
-            if req.prompt.strip():
-                effective_prompt += f" {req.prompt.strip()}"
+            effective_prompt = build_prompt(
+                model_id=req.model_id,
+                scene_context=scene_context,
+                shot_assets=shot_assets,
+                asset_map=asset_map,
+                action_prefix=action_prefix,
+                user_prompt=req.prompt,
+                sks_tag=sks_tag,
+                is_pov=False,
+                is_establishing=False,
+                prompt_override=req.prompt_override,
+            )
             print(f"[routes_shots] camera angles: h={req.horizontal_angle}, v={req.vertical_angle}, zoom={req.zoom}, preset={preset}")
         elif is_pov:
             # POV: the Multi-Angles LoRA cannot handle first-person perspective.
             # Skip the <sks> tag entirely and use only descriptive text.
-            context_parts = []
-            if scene_context:
-                context_parts.append(scene_context)
-            if prompt_enrichments:
-                context_parts.append(", ".join(prompt_enrichments))
-            if action_prefix:
-                context_parts.append(action_prefix)
-            context_str = ", ".join(context_parts)
-            user_str = req.prompt.strip()
-            if context_str and user_str:
-                effective_prompt = f"{context_str}, {user_str}"
-            else:
-                effective_prompt = context_str or user_str
+            effective_prompt = build_prompt(
+                model_id=req.model_id,
+                scene_context=scene_context,
+                shot_assets=shot_assets,
+                asset_map=asset_map,
+                action_prefix=action_prefix,
+                user_prompt=req.prompt,
+                sks_tag=None,
+                is_pov=True,
+                is_establishing=False,
+                prompt_override=req.prompt_override,
+            )
             print(f"[routes_shots] POV shot: skipping <sks> tag, using descriptive text only")
         else:
-            effective_prompt = req.prompt
+            effective_prompt = req.prompt_override.strip() if req.prompt_override else req.prompt
 
     # Find previous shot in the same scene for action continuity
     prev_frame_image = None
     establishing_seed = None
     shot_index_in_scene = 0
     if shot and shot.get("scene_id"):
-        all_shots = _load_shots(shot["project_id"])
+        all_shots = _load_shots(shot_project_id)
         scene_shots = [s for s in all_shots if s.get("scene_id") == shot.get("scene_id") and s["id"] != req.shot_id]
         scene_shots.sort(key=lambda s: s.get("sequence_order", 0))
         current_order = shot.get("sequence_order", 0)
@@ -577,18 +638,19 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
                 "horizontal_angle": req.horizontal_angle,
                 "vertical_angle": req.vertical_angle,
                 "zoom": req.zoom,
+                "prompt_override": req.prompt_override,
             },
             reference_paths=ref_paths,
             denoise=denoise,
         )
         shot["generation_recipe"] = recipe.model_dump()
         shot["status"] = ShotStatus.PLANNED.value
-        shots = _load_shots(shot["project_id"])
+        shots = _load_shots(shot_project_id)
         for s in shots:
             if s["id"] == req.shot_id:
                 s.update(shot)
                 break
-        _save_shots(shot["project_id"], shots)
+        _save_shots(shot_project_id, shots)
 
     return response.model_dump()
 
@@ -715,6 +777,7 @@ async def generate_shot_variation(req: ShotVariationRequest):
         "video_clip_path": None,
         "video_takes": [],
         "audio_clip_path": None,
+        "last_frame_path": None,
         "camera_params": None,
         "camera_movement": None,
         "generation_recipe": None,
@@ -880,6 +943,32 @@ async def _download_video_to_vault(project_id: str, shot_id: str, video_url: str
     return f"/assets/{project_id}/shots/{shot_id}/{filename}"
 
 
+def _extract_last_frame(video_path: str, output_path: Path) -> bool:
+    """Extract the last frame of a video as a PNG using ffmpeg.
+
+    Returns True on success, False on failure.
+    """
+    import subprocess
+    # Resolve /assets/... URLs to local paths
+    if video_path.startswith("/assets/"):
+        local = VAULT_DIR / video_path[len("/assets/"):]
+        if not local.exists():
+            return False
+        video_path = str(local)
+    elif not Path(video_path).exists():
+        return False
+
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-sseof", "-0.1", "-i", video_path,
+             "-frames:v", "1", "-q:v", "2", str(output_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.returncode == 0 and output_path.exists()
+    except Exception:
+        return False
+
+
 @router.post("/video")
 async def generate_shot_video(req: ShotVideoGenerateRequest):
     """Generate a video clip (take) for a shot using the selected video driver.
@@ -896,6 +985,20 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
     if not shot:
         raise HTTPException(status_code=404, detail="Shot not found")
 
+    # Auto-pass previous shot's last frame as first_frame for continuity
+    # (only if user didn't explicitly provide one)
+    effective_first_frame = req.first_frame_path
+    if not effective_first_frame and shot.get("scene_id"):
+        all_shots = _load_shots(req.project_id)
+        scene_shots = [s for s in all_shots if s.get("scene_id") == shot.get("scene_id") and s["id"] != req.shot_id]
+        scene_shots.sort(key=lambda s: s.get("sequence_order", 0))
+        current_order = shot.get("sequence_order", 0)
+        prev_shots = [s for s in scene_shots if s.get("sequence_order", 0) < current_order and s.get("last_frame_path")]
+        if prev_shots:
+            prev_shots.sort(key=lambda s: s.get("sequence_order", 0), reverse=True)
+            effective_first_frame = prev_shots[0]["last_frame_path"]
+            print(f"[routes_shots] video: auto-using prev shot last frame as first_frame: {effective_first_frame}")
+
     # Parse aspect ratio
     try:
         ar = AspectRatio(req.aspect_ratio)
@@ -908,14 +1011,23 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
     except ValueError:
         mode = VideoGenerationMode.T2V
 
+    # Build effective prompt (with override support)
+    effective_prompt = req.prompt
+    if req.prompt_override and req.prompt_override.strip():
+        effective_prompt = req.prompt_override.strip()
+        print(f"[routes_shots] video: using prompt override, skipping auto-compile")
+    elif req.model_id == "minimax_h3":
+        # For H3, parse dialogue tags
+        effective_prompt = parse_dialogue_tags(req.prompt, shot.get("assets", []))
+
     gen_req = VideoGenerationRequest(
-        prompt=req.prompt,
+        prompt=effective_prompt,
         negative_prompt=req.negative_prompt,
         mode=mode,
         duration_seconds=req.duration_seconds,
         aspect_ratio=ar,
         seed=req.seed,
-        first_frame_path=req.first_frame_path,
+        first_frame_path=effective_first_frame,
         last_frame_path=req.last_frame_path,
         reference_image_paths=req.reference_image_paths,
         reference_video_path=req.reference_video_path,
@@ -998,6 +1110,30 @@ async def check_video_status(job_id: str, model_id: str = "fal_seedance_2_5"):
                     shot["video_clip_path"] = local_path
                     shot["status"] = ShotStatus.VIDEO_GENERATED.value
 
+                # Extract last frame for continuity chain
+                shot_folder = _shot_dir(project_id, shot_id)
+                last_frame_path = shot_folder / "last_frame.png"
+                if _extract_last_frame(local_path, last_frame_path):
+                    shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+                    print(f"[routes_shots] extracted last frame for shot {shot_id}: {shot['last_frame_path']}")
+                else:
+                    print(f"[routes_shots] failed to extract last frame for shot {shot_id}")
+
+                # Handle retake: splice new segment back into original video
+                if job_info.get("is_retake"):
+                    original_path = job_info["original_video_path"]
+                    start_sec = job_info["start_seconds"]
+                    end_sec = job_info["end_seconds"]
+                    spliced_path = shot_folder / f"take_{take_id}_spliced.mp4"
+                    if _splice_video(original_path, local_path, start_sec, end_sec, spliced_path):
+                        spliced_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_spliced.mp4"
+                        new_take["path"] = spliced_url
+                        new_take["retake_of"] = original_path
+                        new_take["retake_range"] = [start_sec, end_sec]
+                        print(f"[routes_shots] retake spliced into {spliced_url}")
+                    else:
+                        print(f"[routes_shots] retake splice failed, keeping unspliced segment")
+
                 shot["updated_at"] = datetime.utcnow().isoformat()
                 _save_shots(project_id, shots)
 
@@ -1030,3 +1166,177 @@ async def select_video_take(project_id: str, shot_id: str, take_id: str):
     _save_shots(project_id, shots)
 
     return {"status": "selected", "take_id": take_id, "video_clip_path": selected_take["path"]}
+
+
+# =============================================================================
+# Retake Mode - Regenerate a portion of a video and splice it back
+# =============================================================================
+
+def _splice_video(original_path: str, new_segment_path: str, start_sec: float, end_sec: str, output_path: Path) -> bool:
+    """Splice a new video segment into an original video, replacing the marked range.
+
+    Uses ffmpeg to: extract [0, start) from original, concat with new segment,
+    concat with [end, duration) from original.
+    """
+    import subprocess
+    # Resolve /assets/... URLs to local paths
+    if original_path.startswith("/assets/"):
+        orig_local = VAULT_DIR / original_path[len("/assets/"):]
+        if not orig_local.exists():
+            return False
+        original_path = str(orig_local)
+    if new_segment_path.startswith("/assets/"):
+        new_local = VAULT_DIR / new_segment_path[len("/assets/"):]
+        if not new_local.exists():
+            return False
+        new_segment_path = str(new_local)
+
+    temp_dir = output_path.parent / f"retake_temp_{output_path.stem}"
+    temp_dir.mkdir(exist_ok=True)
+
+    try:
+        # Part 1: before the retake range
+        part1 = temp_dir / "part1.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", "0", "-to", str(start_sec), "-i", original_path,
+             "-c", "copy", str(part1)],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        # Part 2: the new segment (already a file)
+        part2 = new_segment_path
+
+        # Part 3: after the retake range
+        part3 = temp_dir / "part3.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(end_sec), "-i", original_path,
+             "-c", "copy", str(part3)],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        # Concat all three parts
+        concat_list = temp_dir / "concat.txt"
+        concat_lines = []
+        if part1.exists():
+            concat_lines.append(f"file '{part1}'")
+        concat_lines.append(f"file '{part2}'")
+        if part3.exists():
+            concat_lines.append(f"file '{part3}'")
+        concat_list.write_text("\n".join(concat_lines))
+
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", str(output_path)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        # Cleanup temp
+        import shutil as _shutil
+        _shutil.rmtree(temp_dir, ignore_errors=True)
+
+        return result.returncode == 0 and output_path.exists()
+    except Exception as e:
+        print(f"[routes_shots] retake splice error: {e}")
+        import shutil as _shutil
+        _shutil.rmtree(temp_dir, ignore_errors=True)
+        return False
+
+
+@router.post("/retake")
+async def generate_retake(
+    project_id: str,
+    shot_id: str,
+    start_seconds: float,
+    end_seconds: float,
+    prompt: str,
+    model_id: str = "minimax_h3",
+    seed: Optional[int] = None,
+):
+    """Regenerate a portion of a shot's video and splice it back.
+
+    1. Extract the frame at start_seconds as first_frame anchor.
+    2. Extract the frame at end_seconds as last_frame anchor.
+    3. Generate a new video segment with the given prompt.
+    4. Splice the new segment back into the original video.
+    5. Save as a new take with retake_of metadata.
+    """
+    shot = _find_shot(project_id, shot_id)
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    video_path = shot.get("video_clip_path")
+    if not video_path:
+        raise HTTPException(status_code=400, detail="Shot has no video to retake")
+
+    driver = get_video_driver(model_id)
+    if not driver:
+        raise HTTPException(status_code=400, detail=f"Unknown video model: {model_id}")
+
+    shot_folder = _shot_dir(project_id, shot_id)
+
+    # Extract anchor frames
+    import subprocess
+    anchor_start = shot_folder / "retake_anchor_start.png"
+    anchor_end = shot_folder / "retake_anchor_end.png"
+
+    orig_local = video_path
+    if video_path.startswith("/assets/"):
+        orig_local = str(VAULT_DIR / video_path[len("/assets/"):])
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", str(start_seconds), "-i", orig_local,
+         "-frames:v", "1", "-q:v", "2", str(anchor_start)],
+        capture_output=True, text=True, timeout=15,
+    )
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", str(end_seconds), "-i", orig_local,
+         "-frames:v", "1", "-q:v", "2", str(anchor_end)],
+        capture_output=True, text=True, timeout=15,
+    )
+
+    anchor_start_url = f"/assets/{project_id}/shots/{shot_id}/retake_anchor_start.png"
+    anchor_end_url = f"/assets/{project_id}/shots/{shot_id}/retake_anchor_end.png"
+
+    duration = end_seconds - start_seconds
+
+    try:
+        ar = AspectRatio("16:9")
+    except ValueError:
+        ar = AspectRatio.LANDSCAPE_16_9
+
+    gen_req = VideoGenerationRequest(
+        prompt=prompt,
+        mode=VideoGenerationMode.I2V,
+        duration_seconds=max(1.0, duration),
+        aspect_ratio=ar,
+        seed=seed,
+        first_frame_path=anchor_start_url,
+        last_frame_path=anchor_end_url,
+    )
+
+    response = await driver.generate(gen_req)
+
+    if response.status == GenerationStatus.FAILED:
+        return response.model_dump()
+
+    take_id = f"retake_{str(uuid.uuid4())[:8]}"
+    _video_jobs[response.job_id] = {
+        "shot_id": shot_id,
+        "project_id": project_id,
+        "model_id": model_id,
+        "take_id": take_id,
+        "request": {"prompt": prompt, "seed": seed, "model_id": model_id, "mode": "i2v"},
+        "is_retake": True,
+        "original_video_path": video_path,
+        "start_seconds": start_seconds,
+        "end_seconds": end_seconds,
+    }
+
+    return {
+        **response.model_dump(),
+        "take_id": take_id,
+        "shot_id": shot_id,
+        "is_retake": True,
+    }
