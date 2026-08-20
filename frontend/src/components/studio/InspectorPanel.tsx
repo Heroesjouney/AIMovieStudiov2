@@ -6,11 +6,11 @@ import { CameraDirector } from "@/components/camera/CameraDirector";
 import { DialoguePanel } from "@/components/timeline/DialoguePanel";
 import { GenerationPanel } from "@/components/studio/GenerationPanel";
 import {
-  Clapperboard, Camera, Mic, Sparkles, X, ChevronDown, ChevronUp,
+  Clapperboard, Camera, Mic, Sparkles, X,
 } from "lucide-react";
 
 const INSPECTOR_TABS = [
-  { id: "generate" as const, label: "Assets", icon: Sparkles },
+  { id: "generate" as const, label: "Generate", icon: Sparkles },
   { id: "shot" as const, label: "Shot", icon: Clapperboard },
   { id: "camera" as const, label: "Camera", icon: Camera },
   { id: "audio" as const, label: "Audio", icon: Mic },
@@ -26,7 +26,7 @@ export function InspectorPanel({ projectId }: { projectId: string }) {
   const selectedShot = sortedShots.find((s) => s.id === selectedShotId);
 
   return (
-    <div className="h-full flex flex-col bg-studio-panel/30 border-l border-studio-border">
+    <div className="h-full flex flex-col bg-studio-panel/30 border-r border-studio-border">
       {/* Inspector tab bar */}
       <div className="flex items-center gap-0.5 px-2 pt-2 pb-1 border-b border-studio-border bg-studio-panel/50 shrink-0">
         {INSPECTOR_TABS.map((tab) => {

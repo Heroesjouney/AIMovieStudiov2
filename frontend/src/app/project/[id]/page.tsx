@@ -8,9 +8,8 @@ import { AssetLibrary } from "@/components/library/MediaLibrary";
 import { ShotComposer } from "@/components/shots/ShotComposer";
 import { InspectorPanel } from "@/components/studio/InspectorPanel";
 import { TimelineEditor } from "@/components/timeline/TimelineEditor";
-import { ExportButton } from "@/components/export/ExportButton";
 import { UserMenu } from "@/components/UserMenu";
-import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Video, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
+import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles, Video, ChevronDown, ChevronUp } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { useRouter } from "next/navigation";
@@ -29,8 +28,9 @@ export default function ProjectWorkspacePage() {
 
   const [loaded, setLoaded] = useState(false);
   const [connected, setConnected] = useState(true);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [timelineMaximized, setTimelineMaximized] = useState(false);
+  const [assetPanelCollapsed, setAssetPanelCollapsed] = useState(false);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [storyboardCollapsed, setStoryboardCollapsed] = useState(false);
   const [timelineDockHeight, setTimelineDockHeight] = useState(45); // percentage
   const dragRef = useRef<HTMLDivElement | null>(null);
 
@@ -42,20 +42,21 @@ export default function ProjectWorkspacePage() {
   }, [activeInspector, timelineDockOpen, setSidebarMode]);
 
   // Reset maximize when timeline dock closes
+  // Reset storyboard collapse when timeline dock closes
   useEffect(() => {
-    if (!timelineDockOpen && timelineMaximized) setTimelineMaximized(false);
-  }, [timelineDockOpen, timelineMaximized]);
+    if (!timelineDockOpen && storyboardCollapsed) setStoryboardCollapsed(false);
+  }, [timelineDockOpen, storyboardCollapsed]);
 
-  // When timeline opens, auto-minimize storyboard. When it closes, auto-restore.
+  // Toggle timeline dock — auto-collapse storyboard when opening, restore when closing
   const handleTimelineToggle = () => {
     const willOpen = !timelineDockOpen;
     setTimelineDockOpen(willOpen);
-    setTimelineMaximized(willOpen);
+    setStoryboardCollapsed(willOpen);
   };
 
   // Drag-to-resize for timeline dock
   useEffect(() => {
-    if (!timelineDockOpen || timelineMaximized) return;
+    if (!timelineDockOpen || storyboardCollapsed) return;
     const el = dragRef.current;
     if (!el) return;
 
@@ -95,7 +96,7 @@ export default function ProjectWorkspacePage() {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [timelineDockOpen, timelineMaximized, timelineDockHeight]);
+  }, [timelineDockOpen, storyboardCollapsed, timelineDockHeight]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -162,23 +163,6 @@ export default function ProjectWorkspacePage() {
             {timelineDockOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
           </button>
 
-          {/* Maximize/restore timeline */}
-          {timelineDockOpen && (
-            <button
-              onClick={() => setTimelineMaximized(!timelineMaximized)}
-              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-lg transition-all ${
-                timelineMaximized
-                  ? "bg-studio-accent text-white"
-                  : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
-              }`}
-              title={timelineMaximized ? "Restore timeline" : "Maximize timeline"}
-            >
-              {timelineMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            </button>
-          )}
-
-          <ExportButton projectId={projectId} />
-
           <div className="w-px h-5 bg-studio-border" />
 
           <UserMenu />
@@ -187,37 +171,73 @@ export default function ProjectWorkspacePage() {
 
       {/* Main content — 3-pane layout */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left pane: Asset Library */}
-        <aside className={`bg-studio-panel/50 border-r border-studio-border overflow-hidden shrink-0 transition-all duration-200 ${sidebarCollapsed ? "w-10" : "w-64"}`}>
-          {sidebarCollapsed ? (
-            <div className="flex flex-col items-center pt-3 gap-3">
-              <button
-                onClick={() => setSidebarCollapsed(false)}
-                className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
-                title="Expand asset library"
-              >
-                <PanelLeftOpen className="w-4 h-4" />
-              </button>
-              <Image className="w-4 h-4 text-studio-muted/50" />
-            </div>
-          ) : (
-            <div className="h-full flex flex-col">
-              <div className="flex items-center justify-between px-3 pt-3 pb-1">
-                <span className="text-[10px] text-studio-muted/50 uppercase tracking-wider">Assets</span>
+        {/* Far-left pane: Asset Library (collapsible, near scenes) */}
+        {!loaded || !connected ? null : (
+          <aside className={`bg-studio-panel/50 border-r border-studio-border overflow-hidden shrink-0 transition-all duration-200 ${assetPanelCollapsed ? "w-10" : "w-56"}`}>
+            {assetPanelCollapsed ? (
+              <div className="flex flex-col items-center pt-3 gap-3">
                 <button
-                  onClick={() => setSidebarCollapsed(true)}
-                  className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
-                  title="Collapse asset library"
+                  onClick={() => setAssetPanelCollapsed(false)}
+                  className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
+                  title="Expand asset library"
                 >
-                  <PanelLeftClose className="w-3.5 h-3.5" />
+                  <PanelLeftOpen className="w-4 h-4" />
                 </button>
+                <Image className="w-4 h-4 text-studio-muted/50" />
               </div>
-              <div className="flex-1 overflow-y-auto">
-                <AssetLibrary projectId={projectId} mode={sidebarMode} />
+            ) : (
+              <div className="h-full flex flex-col">
+                <div className="flex items-center justify-between px-3 pt-2 pb-1">
+                  <span className="text-[10px] text-studio-muted/50 uppercase tracking-wider">Assets</span>
+                  <button
+                    onClick={() => setAssetPanelCollapsed(true)}
+                    className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
+                    title="Collapse asset library"
+                  >
+                    <PanelLeftClose className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <AssetLibrary projectId={projectId} mode={sidebarMode} />
+                </div>
               </div>
-            </div>
-          )}
-        </aside>
+            )}
+          </aside>
+        )}
+
+        {/* Left pane: Inspector (collapsible) */}
+        {!loaded || !connected ? null : (
+          <aside className={`shrink-0 overflow-hidden transition-all duration-200 ${inspectorCollapsed ? "w-10" : "w-[420px]"}`}>
+            {inspectorCollapsed ? (
+              <div className="flex flex-col items-center pt-3 gap-3 bg-studio-panel/30 border-r border-studio-border h-full">
+                <button
+                  onClick={() => setInspectorCollapsed(false)}
+                  className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
+                  title="Expand inspector"
+                >
+                  <PanelLeftOpen className="w-4 h-4" />
+                </button>
+                <Sparkles className="w-4 h-4 text-studio-muted/50" />
+              </div>
+            ) : (
+              <div className="h-full flex flex-col">
+                <div className="flex items-center justify-between px-2 pt-2 pb-1 bg-studio-panel/50 border-b border-studio-border shrink-0">
+                  <span className="text-[10px] text-studio-muted/50 uppercase tracking-wider">Inspector</span>
+                  <button
+                    onClick={() => setInspectorCollapsed(true)}
+                    className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
+                    title="Collapse inspector"
+                  >
+                    <PanelLeftClose className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden min-h-0">
+                  <InspectorPanel projectId={projectId} />
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
 
         {/* Center pane: Storyboard + Timeline dock */}
         <main className="flex-1 flex flex-col overflow-hidden min-h-0 bg-studio-bg">
@@ -236,31 +256,17 @@ export default function ProjectWorkspacePage() {
             </div>
           ) : (
             <>
-              {/* Storyboard area (can be minimized to give timeline full height) */}
-              {!timelineMaximized && (
+              {/* Storyboard area (collapses to thumbnail strip) */}
+              {!storyboardCollapsed && (
                 <div className="flex-1 overflow-hidden min-h-0 flex flex-col" style={timelineDockOpen ? { height: `${100 - timelineDockHeight}%` } : undefined}>
-                  {/* Storyboard header bar with minimize button */}
-                  {timelineDockOpen && (
-                    <div className="flex items-center justify-between px-3 py-1 bg-studio-panel/50 border-b border-studio-border shrink-0">
-                      <span className="text-[10px] text-studio-muted/60 uppercase tracking-wider">Storyboard</span>
-                      <button
-                        onClick={() => setTimelineMaximized(true)}
-                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-studio-muted hover:text-studio-accent rounded transition-colors"
-                        title="Minimize storyboard — give timeline full height"
-                      >
-                        <ChevronUp className="w-3 h-3" />
-                        Minimize
-                      </button>
-                    </div>
-                  )}
                   <div className="flex-1 overflow-hidden min-h-0">
                     <ShotComposer projectId={projectId} />
                   </div>
                 </div>
               )}
 
-              {/* Storyboard minimized bar with thumbnails */}
-              {timelineMaximized && timelineDockOpen && (
+              {/* Storyboard collapsed — thumbnail strip */}
+              {storyboardCollapsed && (
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-studio-panel/50 border-b border-studio-border shrink-0 overflow-x-auto">
                   <span className="text-[10px] text-studio-muted/60 uppercase tracking-wider shrink-0">Shots</span>
                   <div className="flex items-center gap-1 overflow-x-auto">
@@ -296,7 +302,7 @@ export default function ProjectWorkspacePage() {
                     )}
                   </div>
                   <button
-                    onClick={() => setTimelineMaximized(false)}
+                    onClick={() => setStoryboardCollapsed(false)}
                     className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-studio-muted hover:text-studio-accent rounded transition-colors shrink-0 ml-auto"
                     title="Restore storyboard"
                   >
@@ -306,14 +312,14 @@ export default function ProjectWorkspacePage() {
                 </div>
               )}
 
-              {/* Timeline dock (collapsible bottom, resizable, maximizable) */}
+              {/* Timeline dock (collapsible bottom, resizable) */}
               {timelineDockOpen && (
                 <div
-                  className={`border-t border-studio-border animate-fade-in overflow-hidden flex flex-col ${timelineMaximized ? "flex-1" : ""}`}
-                  style={timelineMaximized ? undefined : { height: `${timelineDockHeight}%` }}
+                  className={`border-t border-studio-border animate-fade-in overflow-hidden flex flex-col ${storyboardCollapsed ? "flex-1" : ""}`}
+                  style={storyboardCollapsed ? undefined : { height: `${timelineDockHeight}%` }}
                 >
                   {/* Drag handle for resizing */}
-                  {!timelineMaximized && (
+                  {!storyboardCollapsed && (
                     <div
                       ref={dragRef}
                       className="h-1.5 bg-studio-border hover:bg-studio-accent/40 cursor-row-resize shrink-0 transition-colors"
@@ -327,13 +333,6 @@ export default function ProjectWorkspacePage() {
             </>
           )}
         </main>
-
-        {/* Right pane: Inspector */}
-        {!loaded || !connected ? null : (
-          <aside className="w-[420px] shrink-0 overflow-hidden">
-            <InspectorPanel projectId={projectId} />
-          </aside>
-        )}
       </div>
     </div>
   );

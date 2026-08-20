@@ -173,6 +173,7 @@ class ShotVideoGenerateRequest(BaseModel):
     soundscape: Optional[str] = Field(None, description="Ambient/non-diegetic sound description for models with joint audio (e.g. H3)")
     music: Optional[str] = Field(None, description="Non-diegetic music description for models with joint audio")
     prompt_override: Optional[str] = Field(None, description="Manual override of the auto-compiled prompt")
+    skip_continuity: bool = Field(default=False, description="If True, do not auto-inject previous shot's last frame as first frame")
     extra_params: Dict[str, Any] = Field(default_factory=dict, description="Model-specific extra params (e.g. enhance_prompt for LTX IA2V)")
 
 

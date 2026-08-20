@@ -1,5 +1,4 @@
 {
-  "_comment": "LTX Video 2.3 First-Last-Frame-to-Video (FLF2V) workflow. Uses two LoadImage nodes (first frame + last frame) with LTXVAddGuide for interpolation. Requires LTXV nodes (ltx-2.3-22b-distilled-fp8.safetensors, gemma_3_12B_it_fp4 text encoder, ltxv audio VAE). Placeholders: FIRST_FRAME_PLACEHOLDER, LAST_FRAME_PLACEHOLDER, PROMPT_PLACEHOLDER, NEGATIVE_PROMPT_PLACEHOLDER, SEED_PLACEHOLDER, DURATION_PLACEHOLDER, WIDTH_PLACEHOLDER, HEIGHT_PLACEHOLDER.",
   "31": {
     "inputs": {
       "image": "FIRST_FRAME_PLACEHOLDER"

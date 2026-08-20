@@ -481,6 +481,7 @@ export interface ShotVideoRequest {
   soundscape?: string;
   music?: string;
   prompt_override?: string;
+  skip_continuity?: boolean;
   extra_params?: Record<string, any>;
 }
 
@@ -512,6 +513,7 @@ export async function generateShotVideo(req: ShotVideoRequest): Promise<ShotVide
       soundscape: req.soundscape,
       music: req.music,
       prompt_override: req.prompt_override,
+      skip_continuity: req.skip_continuity ?? false,
       extra_params: req.extra_params || {},
     }),
   });
@@ -520,6 +522,10 @@ export async function generateShotVideo(req: ShotVideoRequest): Promise<ShotVide
 
 export async function checkShotVideoStatus(jobId: string, modelId: string): Promise<ShotVideoResponse> {
   const resp = await fetch(`${API_BASE}/shots/video/status/${jobId}?model_id=${modelId}`);
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Status ${resp.status}: ${text}`);
+  }
   return resp.json();
 }
 

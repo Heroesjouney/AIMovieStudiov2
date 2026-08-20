@@ -1,5 +1,4 @@
 {
-  "_comment": "LTX Video 2.3 Image+Audio-to-Video (IA2V) workflow. Takes a first frame image + audio clip (dialogue/music) and generates lip-synced/audio-conditioned video with 2x spatial upscale. Two-pass: base generation then upscale. Has optional LLM prompt enhancement via TextGenerateLTX2Prompt. Requires: ltx-2.3-22b-distilled-fp8.safetensors, ltx_2.3_22b_distilled_1.1_lora_dynamic, gemma-3-12b-it-abliterated_lora, ltx-2.3-spatial-upscaler-x2-1.1.safetensors, ltx-2.3-22b-dev-fp8.safetensors (audio VAE), gemma_3_12B_it_fp4_mixed.safetensors (text encoder). Placeholders: FIRST_FRAME_PLACEHOLDER, REF_AUDIO_PLACEHOLDER, PROMPT_PLACEHOLDER, NEGATIVE_PROMPT_PLACEHOLDER.",
   "269": {
     "inputs": {
       "image": "FIRST_FRAME_PLACEHOLDER"

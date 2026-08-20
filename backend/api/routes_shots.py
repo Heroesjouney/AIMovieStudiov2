@@ -986,9 +986,9 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
         raise HTTPException(status_code=404, detail="Shot not found")
 
     # Auto-pass previous shot's last frame as first_frame for continuity
-    # (only if user didn't explicitly provide one)
+    # (only if user didn't explicitly provide one and didn't opt out)
     effective_first_frame = req.first_frame_path
-    if not effective_first_frame and shot.get("scene_id"):
+    if not effective_first_frame and not req.skip_continuity and shot.get("scene_id"):
         all_shots = _load_shots(req.project_id)
         scene_shots = [s for s in all_shots if s.get("scene_id") == shot.get("scene_id") and s["id"] != req.shot_id]
         scene_shots.sort(key=lambda s: s.get("sequence_order", 0))
@@ -1073,6 +1073,7 @@ async def check_video_status(job_id: str, model_id: str = "fal_seedance_2_5"):
 
     # If completed, persist the take to the shot
     if response.status == GenerationStatus.COMPLETED and response.video_url:
+      try:
         job_info = _video_jobs.get(job_id)
         if job_info:
             shot_id = job_info["shot_id"]
@@ -1090,52 +1091,63 @@ async def check_video_status(job_id: str, model_id: str = "fal_seedance_2_5"):
             shot = next((s for s in shots if s["id"] == shot_id), None)
             if shot:
                 takes = shot.get("video_takes", [])
-                new_take = {
-                    "id": take_id,
-                    "path": local_path,
-                    "seed": req_data.get("seed"),
-                    "prompt": req_data.get("prompt"),
-                    "negative_prompt": req_data.get("negative_prompt"),
-                    "model_id": req_data.get("model_id"),
-                    "camera_movement": req_data.get("camera_movement"),
-                    "mode": req_data.get("mode"),
-                    "created_at": datetime.utcnow().isoformat(),
-                    "selected": len(takes) == 0,  # Auto-select first take
-                }
-                takes.append(new_take)
-                shot["video_takes"] = takes
-
-                # Auto-select first take → set video_clip_path
-                if len(takes) == 1:
-                    shot["video_clip_path"] = local_path
-                    shot["status"] = ShotStatus.VIDEO_GENERATED.value
-
-                # Extract last frame for continuity chain
-                shot_folder = _shot_dir(project_id, shot_id)
-                last_frame_path = shot_folder / "last_frame.png"
-                if _extract_last_frame(local_path, last_frame_path):
-                    shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
-                    print(f"[routes_shots] extracted last frame for shot {shot_id}: {shot['last_frame_path']}")
+                # Skip if take already persisted (re-poll after completion)
+                if any(t.get("id") == take_id for t in takes):
+                    print(f"[routes_shots] take {take_id} already persisted, skipping")
                 else:
-                    print(f"[routes_shots] failed to extract last frame for shot {shot_id}")
+                    new_take = {
+                        "id": take_id,
+                        "path": local_path,
+                        "seed": req_data.get("seed"),
+                        "prompt": req_data.get("prompt"),
+                        "negative_prompt": req_data.get("negative_prompt"),
+                        "model_id": req_data.get("model_id"),
+                        "camera_movement": req_data.get("camera_movement"),
+                        "mode": req_data.get("mode"),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "selected": len(takes) == 0,  # Auto-select first take
+                    }
+                    takes.append(new_take)
+                    shot["video_takes"] = takes
 
-                # Handle retake: splice new segment back into original video
-                if job_info.get("is_retake"):
-                    original_path = job_info["original_video_path"]
-                    start_sec = job_info["start_seconds"]
-                    end_sec = job_info["end_seconds"]
-                    spliced_path = shot_folder / f"take_{take_id}_spliced.mp4"
-                    if _splice_video(original_path, local_path, start_sec, end_sec, spliced_path):
-                        spliced_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_spliced.mp4"
-                        new_take["path"] = spliced_url
-                        new_take["retake_of"] = original_path
-                        new_take["retake_range"] = [start_sec, end_sec]
-                        print(f"[routes_shots] retake spliced into {spliced_url}")
+                    # Auto-select first take → set video_clip_path
+                    if len(takes) == 1:
+                        shot["video_clip_path"] = local_path
+                        shot["status"] = ShotStatus.VIDEO_GENERATED.value
+
+                    # Extract last frame for continuity chain
+                    shot_folder = _shot_dir(project_id, shot_id)
+                    last_frame_path = shot_folder / "last_frame.png"
+                    if _extract_last_frame(local_path, last_frame_path):
+                        shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+                        print(f"[routes_shots] extracted last frame for shot {shot_id}: {shot['last_frame_path']}")
                     else:
-                        print(f"[routes_shots] retake splice failed, keeping unspliced segment")
+                        print(f"[routes_shots] failed to extract last frame for shot {shot_id}")
 
-                shot["updated_at"] = datetime.utcnow().isoformat()
-                _save_shots(project_id, shots)
+                    # Handle retake: splice new segment back into original video
+                    if job_info.get("is_retake"):
+                        original_path = job_info["original_video_path"]
+                        start_sec = job_info["start_seconds"]
+                        end_sec = job_info["end_seconds"]
+                        spliced_path = shot_folder / f"take_{take_id}_spliced.mp4"
+                        if _splice_video(original_path, local_path, start_sec, end_sec, spliced_path):
+                            spliced_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_spliced.mp4"
+                            new_take["path"] = spliced_url
+                            new_take["retake_of"] = original_path
+                            new_take["retake_range"] = [start_sec, end_sec]
+                            print(f"[routes_shots] retake spliced into {spliced_url}")
+                        else:
+                            print(f"[routes_shots] retake splice failed, keeping unspliced segment")
+
+                    shot["updated_at"] = datetime.utcnow().isoformat()
+                    _save_shots(project_id, shots)
+
+            # Remove job from memory after processing
+            _video_jobs.pop(job_id, None)
+      except Exception as e:
+        import traceback
+        print(f"[routes_shots] error persisting video take: {e}")
+        traceback.print_exc()
 
     return response.model_dump()
 

@@ -1,5 +1,4 @@
 {
-  "_comment": "LTX Video 2.3 workflow template for ComfyUI. Placeholders are filled by ComfyVideoDriver._build_workflow(). Requires LTXV nodes installed in ComfyUI.",
   "1": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {

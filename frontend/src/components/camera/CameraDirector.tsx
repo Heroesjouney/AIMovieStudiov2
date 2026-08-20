@@ -11,6 +11,8 @@ import {
   listImageAssets,
   getAssetThumbnailUrl,
   updateShot,
+  createShot,
+  fetchShots,
   type ShotVideoRequest,
   type AudioFileItem,
   type VideoAsset,
@@ -20,7 +22,7 @@ import {
 } from "@/lib/api";
 import {
   Camera, Loader2, Film, Video, Mic, Image as ImageIcon,
-  Plus, Send, Check, X, AlertCircle, Sparkles,
+  Plus, Send, Check, X, AlertCircle, Sparkles, Play,
   Type, Layers, Wand2,
 } from "lucide-react";
 
@@ -103,11 +105,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     addTimelineClip, setTimelineProjectId, timeline,
   } = useStudioStore();
 
-  // Mode — explicit user selection
-  const [mode, setMode] = useState<GenMode>("i2v");
+  // Mode — explicit user selection (default to t2v when no shot selected)
+  const [mode, setMode] = useState<GenMode>(selectedShotId ? "i2v" : "t2v");
 
   // Generation state
-  const [selectedModelId, setSelectedModelId] = useState("ltx_video_2_3");
+  const [selectedModelId, setSelectedModelId] = useState("minimax_h3");
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [cameraMovement, setCameraMovement] = useState("static");
@@ -122,6 +124,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const [refVideoPath, setRefVideoPath] = useState<string | null>(null);
   const [refAudioPath, setRefAudioPath] = useState<string | null>(null);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
+  const [skipContinuity, setSkipContinuity] = useState(false);
 
   // Picker state
   const [activePicker, setActivePicker] = useState<string | null>(null);
@@ -275,10 +278,6 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const cameraHint = CAMERA_MOVEMENTS.find((m) => m.id === cameraMovement)?.hint || "";
 
   const handleGenerate = async () => {
-    if (!selectedShot) {
-      setError("Select a shot from the library first");
-      return;
-    }
     if (!prompt.trim()) {
       setError("Prompt is required");
       return;
@@ -305,9 +304,30 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setError(null);
     setStatus("Submitting video generation...");
 
+    // Auto-create a scratch shot if none selected (T2V without storyboard)
+    let effectiveShotId = selectedShot?.id;
+    if (!effectiveShotId) {
+      try {
+        const scratchShot = await createShot(
+          projectId,
+          `T2V ${new Date().toLocaleTimeString()}`,
+          prompt.trim().slice(0, 100),
+        );
+        effectiveShotId = scratchShot.id;
+        // Refresh shots in the store so the new shot appears in the storyboard
+        const fresh = await fetchShots(projectId);
+        useStudioStore.getState().setShots(fresh);
+        useStudioStore.getState().setSelectedShotId(scratchShot.id);
+      } catch (e) {
+        setError("Failed to create a shot for this video. Try selecting an existing shot.");
+        setGenerating(false);
+        return;
+      }
+    }
+
     const req: ShotVideoRequest = {
       project_id: projectId,
-      shot_id: selectedShot.id,
+      shot_id: effectiveShotId!,
       prompt: prompt.trim(),
       negative_prompt: negativePrompt.trim() || undefined,
       model_id: selectedModelId,
@@ -322,6 +342,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       camera_movement: { preset: cameraMovement, intensity: 1.0 },
       aspect_ratio: aspectRatio,
       extra_params: mode === "ia2v" ? { enhance_prompt: enhancePrompt } : undefined,
+      skip_continuity: skipContinuity,
     };
 
     try {
@@ -334,9 +355,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
       setStatus("Generating video...");
 
+      let pollErrors = 0;
       pollRef.current = window.setInterval(async () => {
         try {
           const st = await checkShotVideoStatus(resp.job_id, selectedModelId);
+          pollErrors = 0;
           if (st.status === "completed" && st.video_url) {
             if (pollRef.current) {
               window.clearInterval(pollRef.current);
@@ -363,7 +386,16 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setStatus(`Status: ${st.status}...`);
           }
         } catch (err) {
+          pollErrors++;
           console.error("Poll error:", err);
+          if (pollErrors >= 5) {
+            if (pollRef.current) {
+              window.clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            setError("Lost connection to backend while polling. The video may still be generating — refresh later.");
+            setGenerating(false);
+          }
         }
       }, 3000);
     } catch (err) {
@@ -422,20 +454,127 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Render
   // ===========================================================================
 
-  // Empty state — no shot selected
+  // Empty state — no shot selected. Still allow T2V mode.
   if (!selectedShot) {
     return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-center max-w-md">
-          <div className="w-20 h-20 rounded-full bg-studio-accent/10 border border-studio-accent/20 flex items-center justify-center mx-auto mb-5">
-            <Camera className="w-10 h-10 text-studio-accent/60" />
+      <div className="h-full overflow-y-auto">
+        <div className="max-w-3xl mx-auto p-6">
+          {/* ===== T2V Banner ===== */}
+          <div className="flex items-start gap-4 mb-6">
+            <div className="w-20 h-20 rounded-xl bg-studio-accent/10 border border-studio-accent/20 flex items-center justify-center shrink-0">
+              <Camera className="w-10 h-10 text-studio-accent/60" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-lg font-semibold text-studio-text">Text to Video</h1>
+              <p className="text-sm text-studio-muted">No shot selected — generate from prompt only. A new shot will be created automatically.</p>
+            </div>
           </div>
-          <h2 className="text-lg font-semibold text-studio-text mb-2">No Shot Selected</h2>
-          <p className="text-sm text-studio-muted leading-relaxed">
-            Pick a shot from the library on the left to start generating video.
-            <br />
-            Click a storyboard frame or an existing video clip to load it here.
-          </p>
+
+          {/* ===== Mode Tabs (T2V only when no shot) ===== */}
+          <div className="flex gap-1 mb-4 p-1 bg-studio-panel rounded-xl border border-studio-border">
+            {MODE_TABS.filter((t) => t.id === "t2v").map((tab) => {
+              const Icon = tab.icon;
+              const isActive = mode === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => handleModeChange(tab.id)}
+                  className={`flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg transition-all flex-1 justify-center ${
+                    isActive
+                      ? "bg-studio-accent text-white"
+                      : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-studio-danger/10 border border-studio-danger/30 rounded-lg flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-studio-danger shrink-0 mt-0.5" />
+              <p className="text-xs text-studio-danger">{error}</p>
+            </div>
+          )}
+
+          {/* ===== Prompt ===== */}
+          <div className="space-y-3 mb-4">
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={3}
+              className="w-full bg-studio-bg border border-studio-border rounded-xl p-3 text-sm focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
+              placeholder="Describe the video you want to generate..."
+            />
+            <input
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              placeholder="Negative prompt (optional)..."
+              className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-xs focus:border-studio-accent focus:outline-none"
+            />
+          </div>
+
+          {/* ===== Model + Settings ===== */}
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="text-xs text-studio-muted mb-1 block">Model</label>
+              <select
+                value={selectedModelId}
+                onChange={(e) => setSelectedModelId(e.target.value)}
+                className="w-full bg-studio-bg border border-studio-border rounded-lg px-3 py-2 text-xs focus:border-studio-accent focus:outline-none"
+              >
+                {videoDrivers.map((d: any) => (
+                  <option key={d.driver_id} value={d.driver_id}>{d.display_name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-studio-muted mb-1 block">Duration: {duration}s</label>
+              <input
+                type="range"
+                min={1}
+                max={caps.maxDuration || 10}
+                step={1}
+                value={duration}
+                onChange={(e) => setDuration(parseInt(e.target.value))}
+                className="w-full accent-studio-accent"
+              />
+            </div>
+          </div>
+
+          {/* ===== Camera Movement ===== */}
+          {caps.supportsCameraControl && (
+            <div className="mb-4">
+              <label className="text-xs text-studio-muted mb-1.5 block">Camera Movement</label>
+              <div className="flex flex-wrap gap-1.5">
+                {CAMERA_MOVEMENTS.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setCameraMovement(m.id)}
+                    className={`px-2.5 py-1.5 text-xs rounded-lg border transition-all ${
+                      cameraMovement === m.id
+                        ? "border-studio-accent bg-studio-accent/10 text-studio-accent"
+                        : "border-studio-border text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ===== Generate Button ===== */}
+          <button
+            onClick={handleGenerate}
+            disabled={generating || !prompt.trim()}
+            className="flex items-center gap-2 px-6 py-3 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-all w-full justify-center"
+          >
+            {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {generating ? (status || "Generating...") : "Generate Video"}
+          </button>
         </div>
       </div>
     );
@@ -756,6 +895,21 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           </div>
         </div>
 
+        {/* ===== Continuity Toggle ===== */}
+        {mode === "t2v" && (
+          <label className="flex items-center gap-2 mb-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={!skipContinuity}
+              onChange={(e) => setSkipContinuity(!e.target.checked)}
+              className="accent-studio-accent w-4 h-4"
+            />
+            <span className="text-xs text-studio-muted">
+              Auto-continue from previous shot's last frame
+            </span>
+          </label>
+        )}
+
         {/* ===== Generate Button ===== */}
         <button
           onClick={handleGenerate}
@@ -791,6 +945,12 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                   take={take}
                   onSelect={() => handleSelectTake(take.id)}
                   onSendToTimeline={() => handleSendToTimeline(take)}
+                  onContinue={selectedShot.last_frame_path ? () => {
+                    handleModeChange("i2v");
+                    setFirstFramePath(selectedShot.last_frame_path!);
+                    setPrompt("");
+                    setError(null);
+                  } : undefined}
                 />
               ))}
             </div>
@@ -1187,50 +1347,109 @@ function TakeCard({
   take,
   onSelect,
   onSendToTimeline,
+  onContinue,
 }: {
   take: VideoTake;
   onSelect: () => void;
   onSendToTimeline: () => void;
+  onContinue?: () => void;
 }) {
+  const [showPreview, setShowPreview] = useState(false);
+
   return (
-    <div className={`relative rounded-xl overflow-hidden border-2 transition-all ${
-      take.selected ? "border-studio-accent ring-2 ring-studio-accent/30" : "border-studio-border"
-    }`}>
-      <div className="aspect-video bg-studio-bg relative group">
-        <video
-          src={take.path}
-          className="w-full h-full object-cover"
-          muted
-          loop
-          onMouseEnter={(e) => (e.target as HTMLVideoElement).play()}
-          onMouseLeave={(e) => (e.target as HTMLVideoElement).pause()}
-        />
-        {take.selected && (
-          <div className="absolute top-1.5 right-1.5 bg-studio-accent rounded-full p-1">
-            <Check className="w-3 h-3 text-white" />
-          </div>
-        )}
-        {/* Hover overlay */}
-        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-          {!take.selected && (
-            <button
-              onClick={onSelect}
-              className="px-3 py-1.5 rounded-lg bg-studio-accent text-white text-xs font-medium flex items-center gap-1 hover:bg-studio-accentHover"
-            >
-              <Check className="w-3 h-3" /> Select
-            </button>
+    <>
+      <div className={`relative rounded-xl overflow-hidden border-2 transition-all ${
+        take.selected ? "border-studio-accent ring-2 ring-studio-accent/30" : "border-studio-border"
+      }`}>
+        <div className="aspect-video bg-studio-bg relative group cursor-pointer" onClick={() => setShowPreview(true)}>
+          <video
+            src={take.path}
+            className="w-full h-full object-cover"
+            muted
+            loop
+            onMouseEnter={(e) => (e.target as HTMLVideoElement).play()}
+            onMouseLeave={(e) => (e.target as HTMLVideoElement).pause()}
+          />
+          {/* Selected badge */}
+          {take.selected && (
+            <div className="absolute top-2 right-2 bg-studio-accent rounded-full px-2 py-0.5 flex items-center gap-1 shadow-lg">
+              <Check className="w-3 h-3 text-white" />
+              <span className="text-[10px] font-bold text-white uppercase tracking-wide">Active</span>
+            </div>
           )}
-          <button
-            onClick={onSendToTimeline}
-            className="px-3 py-1.5 rounded-lg bg-studio-panel text-studio-text text-xs font-medium flex items-center gap-1 hover:bg-studio-border"
-          >
-            <Send className="w-3 h-3" /> Timeline
-          </button>
+          {/* Play icon overlay on hover */}
+          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+            <div className="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-xl">
+              <Play className="w-6 h-6 text-studio-bg ml-0.5" />
+            </div>
+          </div>
+        </div>
+        {/* Footer with label and actions */}
+        <div className="p-2.5 bg-studio-panel space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-studio-text">Take {take.id.slice(0, 8)}</span>
+            <span className="text-[10px] font-medium text-studio-muted bg-studio-bg px-1.5 py-0.5 rounded">
+              {take.model_id}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {!take.selected && (
+              <button
+                onClick={onSelect}
+                className="flex-1 px-2 py-1.5 rounded-lg bg-studio-accent text-white text-xs font-medium flex items-center justify-center gap-1 hover:bg-studio-accentHover transition-colors"
+              >
+                <Check className="w-3.5 h-3.5" /> Select
+              </button>
+            )}
+            <button
+              onClick={onSendToTimeline}
+              className="flex-1 px-2 py-1.5 rounded-lg bg-studio-bg text-studio-text text-xs font-medium flex items-center justify-center gap-1 hover:bg-studio-border transition-colors"
+              title="Send to timeline"
+            >
+              <Send className="w-3.5 h-3.5" /> Timeline
+            </button>
+            {onContinue && (
+              <button
+                onClick={onContinue}
+                className="px-2 py-1.5 rounded-lg bg-studio-bg text-studio-text text-xs font-medium flex items-center justify-center gap-1 hover:bg-studio-border transition-colors"
+                title="Continue from last frame"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
-      <div className="p-2 bg-studio-panel">
-        <p className="text-xs text-studio-muted truncate">Take {take.id} · {take.model_id}</p>
-      </div>
-    </div>
+
+      {/* Preview Modal */}
+      {showPreview && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-8"
+          onClick={() => setShowPreview(false)}
+        >
+          <div
+            className="relative max-w-3xl w-full bg-studio-panel rounded-2xl overflow-hidden border border-studio-border"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-3 border-b border-studio-border">
+              <span className="text-sm font-medium text-studio-text">Take {take.id} · {take.model_id}</span>
+              <button
+                onClick={() => setShowPreview(false)}
+                className="text-studio-muted hover:text-studio-text"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <video
+              src={take.path}
+              className="w-full max-h-[70vh]"
+              controls
+              autoPlay
+              loop
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }

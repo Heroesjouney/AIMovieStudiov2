@@ -159,8 +159,9 @@ class ComfyVideoDriver(VideoDriver):
             return local.name
         return path
 
-    def _build_workflow(self, request: VideoGenerationRequest) -> dict:
+    def _build_workflow(self, request: VideoGenerationRequest, upload_map: dict = None) -> dict:
         """Build a ComfyUI workflow from the template, injecting all request params."""
+        upload_map = upload_map or {}
         # MiniMax H3 uses different workflows + model weights for R2V vs T2V/I2V
         wf_name = self._model_id
         if self._model_id == "minimax_h3" and request.mode == VideoGenerationMode.R2V:
@@ -238,6 +239,11 @@ class ComfyVideoDriver(VideoDriver):
                 prompt_val = inputs.get("prompt", "")
                 if "PROMPT_PLACEHOLDER" in str(prompt_val) or "__PROMPT__" in str(prompt_val):
                     inputs["prompt"] = effective_prompt
+                # Compute frame count: 24fps, rounded to nearest 17-frame block
+                # Formula: max(5, round(duration * 24)) + (5 - (max(5, round(duration * 24)) % 17)) % 17
+                raw_frames = max(5, round(request.duration_seconds * 24))
+                length = raw_frames + (5 - (raw_frames % 17)) % 17
+                inputs["length"] = length
                 # Handle conditional last_frame connection
                 if not request.last_frame_path:
                     # Disconnect last_frame — set to null for T2V/I2V without end frame
@@ -260,16 +266,15 @@ class ComfyVideoDriver(VideoDriver):
                             # Template has a LoadImage node connected — fill it
                             load_node_id = str(conn[0])
                             if load_node_id in wf and wf[load_node_id].get("class_type") == "LoadImage":
-                                wf[load_node_id]["inputs"]["image"] = self._resolve_local_path(
-                                    request.reference_image_paths[idx]
-                                )
+                                rp = request.reference_image_paths[idx]
+                                wf[load_node_id]["inputs"]["image"] = upload_map.get(rp, self._resolve_local_path(rp))
                         elif conn is None:
                             # No LoadImage node in template for this slot — inject one dynamically
                             new_node_id = f"ref_img_{idx}"
                             nodes_to_add[new_node_id] = {
                                 "class_type": "LoadImage",
                                 "inputs": {
-                                    "image": self._resolve_local_path(request.reference_image_paths[idx])
+                                    "image": upload_map.get(request.reference_image_paths[idx], self._resolve_local_path(request.reference_image_paths[idx]))
                                 }
                             }
                             inputs[rk] = [new_node_id, 0]
@@ -425,18 +430,19 @@ class ComfyVideoDriver(VideoDriver):
                 img_val = inputs.get("image", "")
                 if "FIRST_FRAME_PLACEHOLDER" in str(img_val) or "SOURCE_IMAGE_PLACEHOLDER" in str(img_val):
                     if request.first_frame_path:
-                        inputs["image"] = self._resolve_local_path(request.first_frame_path)
+                        inputs["image"] = upload_map.get(request.first_frame_path, self._resolve_local_path(request.first_frame_path))
                     else:
                         # T2V mode — no first frame, disconnect and mark for removal
                         nodes_to_remove.add(node_id)
                 elif "LAST_FRAME_PLACEHOLDER" in str(img_val):
                     if request.last_frame_path:
-                        inputs["image"] = self._resolve_local_path(request.last_frame_path)
+                        inputs["image"] = upload_map.get(request.last_frame_path, self._resolve_local_path(request.last_frame_path))
                     else:
                         nodes_to_remove.add(node_id)
                 elif "REF_IMAGE_PLACEHOLDER" in str(img_val) or "SUBJECT_IMAGE_PLACEHOLDER" in str(img_val):
                     if ref_image_idx < len(request.reference_image_paths):
-                        inputs["image"] = self._resolve_local_path(request.reference_image_paths[ref_image_idx])
+                        rp = request.reference_image_paths[ref_image_idx]
+                        inputs["image"] = upload_map.get(rp, self._resolve_local_path(rp))
                         ref_image_idx += 1
                     else:
                         nodes_to_remove.add(node_id)
@@ -448,12 +454,14 @@ class ComfyVideoDriver(VideoDriver):
                     except (ValueError, IndexError):
                         idx = ref_image_idx
                     if idx < len(request.reference_image_paths):
-                        inputs["image"] = self._resolve_local_path(request.reference_image_paths[idx])
+                        rp = request.reference_image_paths[idx]
+                        inputs["image"] = upload_map.get(rp, self._resolve_local_path(rp))
                     else:
                         nodes_to_remove.add(node_id)
                 elif "SCENE_IMAGE_PLACEHOLDER" in str(img_val):
                     if ref_image_idx < len(request.reference_image_paths):
-                        inputs["image"] = self._resolve_local_path(request.reference_image_paths[ref_image_idx])
+                        rp = request.reference_image_paths[ref_image_idx]
+                        inputs["image"] = upload_map.get(rp, self._resolve_local_path(rp))
                         ref_image_idx += 1
                     else:
                         nodes_to_remove.add(node_id)
@@ -486,9 +494,65 @@ class ComfyVideoDriver(VideoDriver):
 
         return wf
 
+    async def _upload_to_comfy(self, session: aiohttp.ClientSession, local_path: str) -> str:
+        """Upload a file to ComfyUI's input directory and return the filename."""
+        import os
+        filename = os.path.basename(local_path)
+        data = aiohttp.FormData()
+        data.add_field("image", open(local_path, "rb"), filename=filename)
+        async with session.post(f"{self.comfy_url}/upload/image", data=data) as resp:
+            if resp.status == 200:
+                result = await resp.json()
+                return result.get("name", filename)
+            return filename
+
+    def _resolve_and_upload_paths(self, request: VideoGenerationRequest) -> dict:
+        """Pre-resolve all image paths to local filesystem paths for later upload.
+        Returns a dict mapping original paths to local absolute paths."""
+        paths_to_upload = {}
+        if request.first_frame_path:
+            local = self._resolve_to_local_abs(request.first_frame_path)
+            if local:
+                paths_to_upload[request.first_frame_path] = local
+        if request.last_frame_path:
+            local = self._resolve_to_local_abs(request.last_frame_path)
+            if local:
+                paths_to_upload[request.last_frame_path] = local
+        for ref in request.reference_image_paths:
+            local = self._resolve_to_local_abs(ref)
+            if local:
+                paths_to_upload[ref] = local
+        return paths_to_upload
+
+    def _resolve_to_local_abs(self, path: str) -> Optional[str]:
+        """Resolve a served asset path to an absolute filesystem path."""
+        if not path or not path.startswith("/assets/"):
+            return None
+        vault = Path(__file__).parent.parent.parent / "assets"
+        rel = path.replace("/assets/", "", 1)
+        local = vault / rel
+        if local.exists():
+            return str(local)
+        return None
+
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResponse:
         job_id = str(uuid.uuid4())
-        workflow = self._build_workflow(request)
+
+        # Upload images to ComfyUI before building the workflow
+        upload_map = {}  # original_path -> comfy_filename
+        paths_to_upload = self._resolve_and_upload_paths(request)
+        if paths_to_upload:
+            async with aiohttp.ClientSession() as session:
+                for orig_path, local_abs in paths_to_upload.items():
+                    try:
+                        comfy_name = await self._upload_to_comfy(session, local_abs)
+                        upload_map[orig_path] = comfy_name
+                        print(f"[ComfyVideoDriver] uploaded {orig_path} -> {comfy_name}")
+                    except Exception as e:
+                        print(f"[ComfyVideoDriver] upload failed for {orig_path}: {e}")
+
+        # Build workflow with uploaded filenames
+        workflow = self._build_workflow(request, upload_map)
 
         if not workflow:
             return VideoGenerationResponse(
@@ -573,18 +637,27 @@ class ComfyVideoDriver(VideoDriver):
                             outputs = history[prompt_id].get("outputs", {})
                             video_urls = []
                             for node_id, node_output in outputs.items():
+                                print(f"[comfy_video] node {node_id} output keys: {list(node_output.keys())}")
                                 if "gifs" in node_output:
                                     for vid in node_output["gifs"]:
                                         filename = vid["filename"]
                                         subfolder = vid.get("subfolder", "")
                                         vid_url = f"{self.comfy_url}/view?filename={filename}&subfolder={subfolder}&type=output"
                                         video_urls.append(vid_url)
-                                elif "videos" in node_output:
+                                if "videos" in node_output:
                                     for vid in node_output["videos"]:
                                         filename = vid["filename"]
                                         subfolder = vid.get("subfolder", "")
                                         vid_url = f"{self.comfy_url}/view?filename={filename}&subfolder={subfolder}&type=output"
                                         video_urls.append(vid_url)
+                                if "images" in node_output:
+                                    for img in node_output["images"]:
+                                        filename = img["filename"]
+                                        subfolder = img.get("subfolder", "")
+                                        img_type = img.get("type", "output")
+                                        if filename.endswith((".mp4", ".webm", ".mkv", ".gif")):
+                                            vid_url = f"{self.comfy_url}/view?filename={filename}&subfolder={subfolder}&type={img_type}"
+                                            video_urls.append(vid_url)
                             if video_urls:
                                 job["status"] = GenerationStatus.COMPLETED
                                 job["output_videos"] = video_urls
@@ -593,6 +666,8 @@ class ComfyVideoDriver(VideoDriver):
                                     status=GenerationStatus.COMPLETED,
                                     video_url=video_urls[0],
                                 )
+                            else:
+                                print(f"[comfy_video] no video URLs found in outputs: {outputs}")
         except Exception as e:
             job["status"] = GenerationStatus.FAILED
             job["error_message"] = str(e)

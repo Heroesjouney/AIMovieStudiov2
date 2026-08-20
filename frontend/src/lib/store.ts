@@ -34,7 +34,7 @@ interface StudioState {
   selectedAssetId: string | null;
   selectedShotId: string | null;
   selectedSceneId: string | null;
-  activeInspector: "generate" | "shot" | "camera" | "audio";
+  activeInspector: "generate" | "shot" | "camera" | "audio" | "library";
   timelineDockOpen: boolean;
   sidebarMode: "default" | "timeline" | "camera";
   loading: boolean;
@@ -118,7 +118,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   videoDrivers: [],
   audioDrivers: [],
   selectedImageDriver: "qwen_image_edit",
-  selectedVideoDriver: "ltx_video_2_3",
+  selectedVideoDriver: "minimax_h3",
   selectedAudioDriver: "fish_speech",
   selectedAssetId: null,
   selectedShotId: null,
