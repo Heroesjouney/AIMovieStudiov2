@@ -109,6 +109,7 @@ class ShotCreateRequest(BaseModel):
     description: str = ""
     notes: Optional[str] = None
     assets: List[ShotAssetRef] = Field(default_factory=list)
+    hidden: bool = Field(default=False, description="Hidden from storyboard (scratch/freestyle shots)")
 
 
 class ShotFrameGenerateRequest(BaseModel):

@@ -184,7 +184,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   }, [projectId]);
 
   useEffect(() => {
-    if (mode === "timeline" || mode === "camera") {
+    if (mode === "timeline" || mode === "camera" || mode === "default") {
       void loadVideoAssets();
       void loadAudioFiles();
       void loadShots();
@@ -193,7 +193,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   }, [mode, loadVideoAssets, loadAudioFiles, loadShots, loadImageAssets]);
 
   useEffect(() => {
-    if (mode === "timeline" || mode === "camera") {
+    if (mode === "timeline" || mode === "camera" || mode === "default") {
       void loadAudioFiles();
     }
   }, [audioLibraryRefreshToken, loadAudioFiles, mode]);
@@ -552,32 +552,126 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   const filteredSfxFiles = filterAudio(sfxFiles);
   const filteredOtherAudioFiles = filterAudio(otherAudioFiles);
 
-  if (mode === "timeline" || mode === "camera") {
-    const isCameraMode = mode === "camera";
-    const handleShotClick = (shot: any) => {
-      if (isCameraMode) {
-        setSelectedShotId(shot.id);
-      } else {
-        handleAddShotToTimeline(shot);
-      }
-    };
-    return (
-      <div className="p-3 overflow-y-auto h-full">
-        {/* Header + Search */}
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xs font-semibold text-studio-muted uppercase tracking-wider">
-            {isCameraMode ? "Shot Library" : "Media Library"}
-          </h2>
-        </div>
-        <div className="relative mb-4">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted/50" />
-          <input
-            value={timelineSearch}
-            onChange={(e) => setTimelineSearch(e.target.value)}
-            placeholder="Search clips and audio..."
-            className="w-full bg-studio-panel border border-studio-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
-          />
-        </div>
+  const isCameraMode = mode === "camera";
+  const isTimelineMode = mode === "timeline";
+  const handleShotClick = (shot: any) => {
+    if (isCameraMode) {
+      setSelectedShotId(shot.id);
+    } else if (isTimelineMode) {
+      handleAddShotToTimeline(shot);
+    }
+  };
+
+  return (
+    <div className="p-3 overflow-y-auto h-full">
+      {/* Header + Search */}
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-xs font-semibold text-studio-muted uppercase tracking-wider">Library</h2>
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
+          title="Upload asset"
+        >
+          {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" onChange={handleUpload} className="hidden" />
+      </div>
+      <div className="relative mb-4">
+        <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted/50" />
+        <input
+          value={timelineSearch}
+          onChange={(e) => setTimelineSearch(e.target.value)}
+          placeholder="Search assets, clips, audio..."
+          className="w-full bg-studio-panel border border-studio-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
+        />
+      </div>
+
+      {/* ===== ASSETS (characters, locations, props, etc.) ===== */}
+      <div className="mb-4">
+        <button
+          onClick={() => toggleSection("assets")}
+          className="flex items-center gap-1.5 text-xs font-medium text-studio-text mb-2 w-full"
+        >
+          {expandedSections.assets ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          <ImageIcon className="w-3.5 h-3.5 text-studio-accent" />
+          Assets ({filtered.length})
+        </button>
+        {expandedSections.assets && (
+          <>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {typeFilters.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setFilter(f.id)}
+                  className={`px-2 py-0.5 text-[10px] font-medium rounded-full transition-all ${
+                    filter === f.id
+                      ? "bg-studio-accent text-white"
+                      : "bg-studio-border/50 text-studio-muted hover:text-studio-text hover:bg-studio-border"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {filtered.map((asset) => {
+                const Icon = typeIcons[asset.type] || ImageIcon;
+                const thumbUrl = getAssetThumbnailUrl(asset);
+                const isSelected = selectedAssetId === asset.id;
+                return (
+                  <div
+                    key={asset.id}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("application/json", JSON.stringify({
+                        id: asset.id,
+                        type: asset.type,
+                        name: asset.name,
+                        primary_image: asset.primary_image,
+                      }));
+                      e.dataTransfer.effectAllowed = "copy";
+                    }}
+                    onClick={() => setSelectedAssetId(isSelected ? null : asset.id)}
+                    className={`group relative aspect-square rounded-xl overflow-hidden border-2 cursor-pointer transition-all ${
+                      isSelected
+                        ? "border-studio-accent ring-2 ring-studio-accent/30 scale-[1.02]"
+                        : "border-transparent hover:border-studio-accent/40 hover:scale-[1.02]"
+                    }`}
+                  >
+                    {thumbUrl ? (
+                      <img src={thumbUrl} alt={asset.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-studio-bg">
+                        <Icon className="w-8 h-8 text-studio-muted" />
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+                    <div className="absolute bottom-0 left-0 right-0 p-1.5">
+                      <p className="text-[11px] text-white font-medium truncate">{asset.name}</p>
+                    </div>
+                    <div className="absolute top-1 left-1 p-0.5 rounded-md bg-black/60 backdrop-blur-sm">
+                      <Icon className="w-3 h-3 text-studio-accent" />
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDelete(asset.id); }}
+                      className="absolute top-1 right-1 p-1 rounded-full bg-black/60 backdrop-blur-sm hover:bg-studio-danger text-white opacity-0 group-hover:opacity-100 transition-all"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {filtered.length === 0 && (
+              <p className="text-[11px] text-studio-muted/50 px-2 py-2">No assets yet</p>
+            )}
+          </>
+        )}
+      </div>
+
+      {selectedAsset && (
+        <AssetDetailPanel projectId={projectId} asset={selectedAsset} />
+      )}
 
         {/* ===== VIDEO CLIPS (by scene, includes uploaded) ===== */}
         <div className="mb-4">
@@ -949,110 +1043,4 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
         </div>
       </div>
     );
-  }
-
-  return (
-    <div className="p-3">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-xs font-semibold text-studio-muted uppercase tracking-wider">Asset Library</h2>
-        <button
-          onClick={() => fileRef.current?.click()}
-          className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
-          title="Upload asset"
-        >
-          {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-        </button>
-        <input ref={fileRef} type="file" accept="image/*" onChange={handleUpload} className="hidden" />
-      </div>
-
-      {/* Type filters */}
-      <div className="flex flex-wrap gap-1 mb-3">
-        {typeFilters.map((f) => (
-          <button
-            key={f.id}
-            onClick={() => setFilter(f.id)}
-            className={`px-2.5 py-1 text-xs font-medium rounded-full transition-all ${
-              filter === f.id
-                ? "bg-studio-accent text-white shadow-sm shadow-studio-accent/20"
-                : "bg-studio-border/50 text-studio-muted hover:text-studio-text hover:bg-studio-border"
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Asset grid */}
-      <div className="grid grid-cols-2 gap-2">
-        {filtered.map((asset) => {
-          const Icon = typeIcons[asset.type] || ImageIcon;
-          const thumbUrl = getAssetThumbnailUrl(asset);
-          const isSelected = selectedAssetId === asset.id;
-          return (
-            <div
-              key={asset.id}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData("application/json", JSON.stringify({
-                  id: asset.id,
-                  type: asset.type,
-                  name: asset.name,
-                  primary_image: asset.primary_image,
-                }));
-                e.dataTransfer.effectAllowed = "copy";
-              }}
-              onClick={() => setSelectedAssetId(isSelected ? null : asset.id)}
-              className={`group relative aspect-square rounded-xl overflow-hidden border-2 cursor-pointer transition-all ${
-                isSelected
-                  ? "border-studio-accent ring-2 ring-studio-accent/30 scale-[1.02]"
-                  : "border-transparent hover:border-studio-accent/40 hover:scale-[1.02]"
-              }`}
-            >
-              {thumbUrl ? (
-                <img src={thumbUrl} alt={asset.name} className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center bg-studio-bg">
-                  <Icon className="w-8 h-8 text-studio-muted" />
-                </div>
-              )}
-              {/* Gradient overlay */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-              {/* Name */}
-              <div className="absolute bottom-0 left-0 right-0 p-2">
-                <p className="text-xs text-white font-medium truncate">{asset.name}</p>
-              </div>
-              {/* Type badge */}
-              <div className="absolute top-1.5 left-1.5 p-0.5 rounded-md bg-black/60 backdrop-blur-sm">
-                <Icon className="w-3 h-3 text-studio-accent" />
-              </div>
-              {/* Delete */}
-              <button
-                onClick={(e) => { e.stopPropagation(); handleDelete(asset.id); }}
-                className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 backdrop-blur-sm hover:bg-studio-danger text-white opacity-0 group-hover:opacity-100 transition-all"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Empty state */}
-      {filtered.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-          <div className="w-12 h-12 rounded-full bg-studio-border/50 flex items-center justify-center mb-3">
-            <ImageIcon className="w-6 h-6 text-studio-muted/50" />
-          </div>
-          <p className="text-xs text-studio-muted">No assets yet</p>
-          <p className="text-xs text-studio-muted/50 mt-1">Upload or generate to get started</p>
-        </div>
-      )}
-
-      {/* Asset detail modal (design sheet) */}
-      {selectedAsset && (
-        <AssetDetailPanel projectId={projectId} asset={selectedAsset} />
-      )}
-    </div>
-  );
 }

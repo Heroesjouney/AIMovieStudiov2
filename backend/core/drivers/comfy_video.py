@@ -337,11 +337,17 @@ class ComfyVideoDriver(VideoDriver):
                     else:
                         inputs[ak] = None
 
-            # --- MiniMax H3 R2V: prompt is in PrimitiveStringMultiline node ---
+            # --- PrimitiveStringMultiline: prompt (check both 'string' and 'value' keys) ---
             if ct == "PrimitiveStringMultiline":
-                text_val = inputs.get("string", "")
+                text_val = inputs.get("string", inputs.get("value", ""))
                 if "PROMPT_PLACEHOLDER" in str(text_val) or "__PROMPT__" in str(text_val):
-                    inputs["string"] = effective_prompt
+                    if "string" in inputs:
+                        inputs["string"] = effective_prompt
+                    else:
+                        inputs["value"] = effective_prompt
+                # Ensure required 'value' key is never missing
+                if "value" not in inputs and "string" not in inputs:
+                    inputs["value"] = ""
 
             # --- Seed ---
             if ct == "KSampler" or ct in ("KSamplerAdvanced", "LTXVSampler", "MinimaxH3Sampler"):
@@ -384,17 +390,21 @@ class ComfyVideoDriver(VideoDriver):
                 # which converts to frame count (17-frame block grid at 24fps)
                 inputs["value"] = request.duration_seconds
 
-            # --- MiniMax H3: resolution via ResolutionSelector ---
+            # --- Resolution / aspect ratio selector ---
             if ct == "ResolutionSelector":
                 ar_to_resolution = {
                     "16:9": "16:9 (Widescreen)",
-                    "9:16": "9:16 (Portrait)",
+                    "9:16": "9:16 (Portrait Widescreen)",
                     "1:1": "1:1 (Square)",
-                    "4:3": "4:3",
-                    "21:9": "21:9",
+                    "4:3": "4:3 (Standard)",
+                    "21:9": "21:9 (Ultrawide)",
                 }
                 ar_val = request.aspect_ratio.value if request.aspect_ratio else "16:9"
-                inputs["resolution"] = ar_to_resolution.get(ar_val, "16:9 (Widescreen)")
+                # Always override — template may have hardcoded defaults
+                # Both aspect_ratio and resolution use the same formatted label
+                formatted = ar_to_resolution.get(ar_val, "16:9 (Widescreen)")
+                inputs["aspect_ratio"] = formatted
+                inputs["resolution"] = formatted
 
             # --- LTX 2.3 FLF2V: seed via RandomNoise ---
             if ct == "RandomNoise":
@@ -477,6 +487,17 @@ class ComfyVideoDriver(VideoDriver):
                 if "REF_VIDEO_PLACEHOLDER" in str(vid_val) or "MOTION_VIDEO_PLACEHOLDER" in str(vid_val):
                     if request.reference_video_path:
                         inputs["video"] = self._resolve_local_path(request.reference_video_path)
+
+            # --- CreateVideo: ensure fps is always set ---
+            if ct == "CreateVideo":
+                if not inputs.get("fps") or inputs["fps"] is None:
+                    # Try to get fps from connected frame rate node, default to 24
+                    fps_val = inputs.get("fps")
+                    if isinstance(fps_val, list):
+                        # fps is a node connection — leave it, it should resolve at runtime
+                        pass
+                    else:
+                        inputs["fps"] = 24
 
             # --- Reference audio (voice lock) ---
             if ct in ("LoadAudio", "LoadAudioUpload", "MinimaxH3LoadAudio"):

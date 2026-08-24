@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, memo, useCallback } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
   generateShotVideo,
@@ -49,11 +49,11 @@ const CAMERA_MOVEMENTS = [
 ];
 
 const ASPECT_RATIOS = [
-  { id: "16:9", label: "16:9 Landscape" },
-  { id: "9:16", label: "9:16 Portrait" },
-  { id: "1:1", label: "1:1 Square" },
-  { id: "21:9", label: "21:9 Cinemascope" },
-  { id: "4:3", label: "4:3 Academy" },
+  { id: "16:9", label: "16:9", sub: "Landscape", w: 28, h: 16 },
+  { id: "9:16", label: "9:16", sub: "Portrait", w: 16, h: 28 },
+  { id: "1:1", label: "1:1", sub: "Square", w: 20, h: 20 },
+  { id: "21:9", label: "21:9", sub: "Cinema", w: 32, h: 14 },
+  { id: "4:3", label: "4:3", sub: "Academy", w: 24, h: 18 },
 ];
 
 type GenMode = "t2v" | "i2v" | "r2v" | "ia2v";
@@ -116,6 +116,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const [duration, setDuration] = useState(5);
   const [seed, setSeed] = useState<string>("");
   const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [freestyleResult, setFreestyleResult] = useState<{ videoUrl: string; prompt: string; lastFramePath?: string; shotId?: string } | null>(null);
 
   // Reference slots
   const [firstFramePath, setFirstFramePath] = useState<string | null>(null);
@@ -143,17 +144,29 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  const selectedShot = shots.find((s) => s.id === selectedShotId);
+  const selectedShot = useMemo(
+    () => shots.find((s) => s.id === selectedShotId),
+    [shots, selectedShotId]
+  );
   const caps = getModelCaps(selectedModelId);
 
-  // Same-scene shots for reference picking
-  const sameSceneShots = useMemo(() => {
-    if (!selectedShot?.scene_id) return [];
-    return shots.filter((s) => s.scene_id === selectedShot.scene_id);
+  // Storyboard frames for reference picking — same scene when shot selected, all frames otherwise
+  // Exclude hidden (scratch/freestyle) shots from pickers
+  const sameSceneFrames = useMemo(() => {
+    const visible = shots.filter((s: any) => !s.hidden);
+    if (selectedShot?.scene_id) {
+      return visible.filter((s) => s.scene_id === selectedShot.scene_id && s.frame_image_path);
+    }
+    return visible.filter((s) => s.frame_image_path);
   }, [shots, selectedShot]);
 
-  const sameSceneFrames = sameSceneShots.filter((s) => s.frame_image_path);
-  const sameSceneVideos = sameSceneShots.filter((s) => s.video_clip_path);
+  const sameSceneVideos = useMemo(() => {
+    const visible = shots.filter((s: any) => !s.hidden);
+    if (selectedShot?.scene_id) {
+      return visible.filter((s) => s.scene_id === selectedShot.scene_id && s.video_clip_path);
+    }
+    return visible.filter((s) => s.video_clip_path);
+  }, [shots, selectedShot]);
 
   // Get scene name for header
   const sceneName = useMemo(() => {
@@ -162,24 +175,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     return scene?.name || selectedShot.scene_id;
   }, [scenes, selectedShot]);
 
-  // When shot changes, auto-fill refs for I2V/R2V modes
+  // When shot changes, auto-fill refs for I2V/R2V modes (only if user hasn't manually picked something)
   useEffect(() => {
     if (selectedShot?.frame_image_path && (mode === "i2v" || mode === "r2v")) {
-      setFirstFramePath(selectedShot.frame_image_path);
-      // For R2V, also seed the reference images list with the shot frame
+      setFirstFramePath((prev) => prev ?? selectedShot.frame_image_path!);
       if (mode === "r2v") {
         setRefImagePaths((prev) => prev.length > 0 ? prev : [selectedShot.frame_image_path!]);
       }
-    } else if (!selectedShot) {
-      // Clear all refs when no shot selected
-      setFirstFramePath(null);
-      setLastFramePath(null);
-      setRefImagePaths([]);
-      setRefVideoPath(null);
-      setRefAudioPath(null);
-      setPrompt("");
-      setNegativePrompt("");
-      setError(null);
     }
   }, [selectedShot, mode]);
 
@@ -237,35 +239,42 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     }
   }, [videoDrivers]);
 
+  // Track which pickers have already been loaded to avoid re-fetching
+  const loadedPickersRef = useRef<Set<string>>(new Set());
+
   // Load audio files when audio picker opens
   useEffect(() => {
-    if (activePicker === "audio" && audioFiles.length === 0 && !audioLoading) {
-      setAudioLoading(true);
-      listAudioFiles(projectId)
-        .then((res) => setAudioFiles(res.files || []))
-        .catch((err) => console.error("Failed to load audio:", err))
-        .finally(() => setAudioLoading(false));
-    }
-  }, [activePicker, projectId, audioFiles.length, audioLoading]);
+    if (activePicker !== "audio" || loadedPickersRef.current.has("audio")) return;
+    loadedPickersRef.current.add("audio");
+    setAudioLoading(true);
+    listAudioFiles(projectId)
+      .then((res) => setAudioFiles(res.files || []))
+      .catch((err) => console.error("Failed to load audio:", err))
+      .finally(() => setAudioLoading(false));
+  }, [activePicker, projectId]);
 
   // Load uploaded videos when ref video picker opens
   useEffect(() => {
-    if (activePicker === "refVideo" && uploadedVideos.length === 0 && !uploadedVideosLoading) {
-      setUploadedVideosLoading(true);
-      listVideoAssets(projectId)
-        .then((res) => setUploadedVideos(res.videos || []))
-        .catch((err) => console.error("Failed to load video assets:", err))
-        .finally(() => setUploadedVideosLoading(false));
-    }
-    // Load uploaded images when any image picker opens
-    if ((activePicker === "firstFrame" || activePicker === "lastFrame" || activePicker?.startsWith("refImage_")) && uploadedImages.length === 0 && !uploadedImagesLoading) {
-      setUploadedImagesLoading(true);
-      listImageAssets(projectId)
-        .then((res) => setUploadedImages(res.images || []))
-        .catch((err) => console.error("Failed to load image assets:", err))
-        .finally(() => setUploadedImagesLoading(false));
-    }
-  }, [activePicker, projectId, uploadedVideos.length, uploadedVideosLoading, uploadedImages.length, uploadedImagesLoading]);
+    if (activePicker !== "refVideo" || loadedPickersRef.current.has("refVideo")) return;
+    loadedPickersRef.current.add("refVideo");
+    setUploadedVideosLoading(true);
+    listVideoAssets(projectId)
+      .then((res) => setUploadedVideos(res.videos || []))
+      .catch((err) => console.error("Failed to load video assets:", err))
+      .finally(() => setUploadedVideosLoading(false));
+  }, [activePicker, projectId]);
+
+  // Load uploaded images when any image picker opens
+  useEffect(() => {
+    const isImagePicker = activePicker === "firstFrame" || activePicker === "lastFrame" || activePicker?.startsWith("refImage_");
+    if (!isImagePicker || loadedPickersRef.current.has("images")) return;
+    loadedPickersRef.current.add("images");
+    setUploadedImagesLoading(true);
+    listImageAssets(projectId)
+      .then((res) => setUploadedImages(res.images || []))
+      .catch((err) => console.error("Failed to load image assets:", err))
+      .finally(() => setUploadedImagesLoading(false));
+  }, [activePicker, projectId]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -276,6 +285,28 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   // Camera movement hint for prompt augmentation
   const cameraHint = CAMERA_MOVEMENTS.find((m) => m.id === cameraMovement)?.hint || "";
+
+  // Stable callbacks for RefPickerModal to prevent re-renders
+  const handlePickerPick = useCallback((path: string) => {
+    setActivePicker((current) => {
+      if (current === "firstFrame") setFirstFramePath(path);
+      else if (current === "lastFrame") setLastFramePath(path);
+      else if (current === "refVideo") setRefVideoPath(path);
+      else if (current === "audio") setRefAudioPath(path);
+      else if (current?.startsWith("refImage_")) {
+        const idx = parseInt(current.split("_")[1]);
+        setRefImagePaths((prev) => {
+          const next = [...prev];
+          if (idx < next.length) next[idx] = path;
+          else next.push(path);
+          return next;
+        });
+      }
+      return null;
+    });
+  }, []);
+
+  const handlePickerClose = useCallback(() => setActivePicker(null), []);
 
   const handleGenerate = async () => {
     if (!prompt.trim()) {
@@ -304,20 +335,20 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setError(null);
     setStatus("Submitting video generation...");
 
-    // Auto-create a scratch shot if none selected (T2V without storyboard)
+    // Auto-create a hidden scratch shot if none selected (freestyle generation)
     let effectiveShotId = selectedShot?.id;
-    if (!effectiveShotId) {
+    const isFreestyle = !effectiveShotId;
+    if (isFreestyle) {
       try {
         const scratchShot = await createShot(
           projectId,
-          `T2V ${new Date().toLocaleTimeString()}`,
+          `Freestyle ${new Date().toLocaleTimeString()}`,
           prompt.trim().slice(0, 100),
+          undefined,
+          undefined,
+          true, // hidden — don't show in storyboard
         );
         effectiveShotId = scratchShot.id;
-        // Refresh shots in the store so the new shot appears in the storyboard
-        const fresh = await fetchShots(projectId);
-        useStudioStore.getState().setShots(fresh);
-        useStudioStore.getState().setSelectedShotId(scratchShot.id);
       } catch (e) {
         setError("Failed to create a shot for this video. Try selecting an existing shot.");
         setGenerating(false);
@@ -368,12 +399,33 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setStatus("Take generated!");
             setGenerating(false);
 
-            try {
-              const { fetchShots } = await import("@/lib/api");
-              const fresh = await fetchShots(projectId);
-              useStudioStore.getState().setShots(fresh);
-            } catch (e) {
-              console.error("Failed to refetch shots:", e);
+            if (isFreestyle) {
+              // Freestyle: show result locally, don't touch storyboard
+              // Fetch the hidden shot to get the extracted last_frame_path for Continue
+              let lastFrame: string | undefined;
+              try {
+                const { fetchShots } = await import("@/lib/api");
+                const allShots = await fetchShots(projectId);
+                const scratchShot = allShots.find((s: any) => s.id === effectiveShotId);
+                lastFrame = scratchShot?.last_frame_path || undefined;
+              } catch (e) {
+                console.error("Failed to fetch scratch shot for last frame:", e);
+              }
+              setFreestyleResult({
+                videoUrl: st.video_url,
+                prompt: prompt.trim(),
+                lastFramePath: lastFrame,
+                shotId: effectiveShotId,
+              });
+            } else {
+              // Shot-bound: refresh shots to show the new take
+              try {
+                const { fetchShots } = await import("@/lib/api");
+                const fresh = await fetchShots(projectId);
+                useStudioStore.getState().setShots(fresh);
+              } catch (e) {
+                console.error("Failed to refetch shots:", e);
+              }
             }
           } else if (st.status === "failed") {
             if (pollRef.current) {
@@ -454,161 +506,41 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Render
   // ===========================================================================
 
-  // Empty state — no shot selected. Still allow T2V mode.
-  if (!selectedShot) {
-    return (
-      <div className="h-full overflow-y-auto">
-        <div className="max-w-3xl mx-auto p-6">
-          {/* ===== T2V Banner ===== */}
-          <div className="flex items-start gap-4 mb-6">
-            <div className="w-20 h-20 rounded-xl bg-studio-accent/10 border border-studio-accent/20 flex items-center justify-center shrink-0">
-              <Camera className="w-10 h-10 text-studio-accent/60" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h1 className="text-lg font-semibold text-studio-text">Text to Video</h1>
-              <p className="text-sm text-studio-muted">No shot selected — generate from prompt only. A new shot will be created automatically.</p>
-            </div>
-          </div>
-
-          {/* ===== Mode Tabs (T2V only when no shot) ===== */}
-          <div className="flex gap-1 mb-4 p-1 bg-studio-panel rounded-xl border border-studio-border">
-            {MODE_TABS.filter((t) => t.id === "t2v").map((tab) => {
-              const Icon = tab.icon;
-              const isActive = mode === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => handleModeChange(tab.id)}
-                  className={`flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg transition-all flex-1 justify-center ${
-                    isActive
-                      ? "bg-studio-accent text-white"
-                      : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {error && (
-            <div className="mb-4 p-3 bg-studio-danger/10 border border-studio-danger/30 rounded-lg flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-studio-danger shrink-0 mt-0.5" />
-              <p className="text-xs text-studio-danger">{error}</p>
-            </div>
-          )}
-
-          {/* ===== Prompt ===== */}
-          <div className="space-y-3 mb-4">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={3}
-              className="w-full bg-studio-bg border border-studio-border rounded-xl p-3 text-sm focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
-              placeholder="Describe the video you want to generate..."
-            />
-            <input
-              value={negativePrompt}
-              onChange={(e) => setNegativePrompt(e.target.value)}
-              placeholder="Negative prompt (optional)..."
-              className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-xs focus:border-studio-accent focus:outline-none"
-            />
-          </div>
-
-          {/* ===== Model + Settings ===== */}
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div>
-              <label className="text-xs text-studio-muted mb-1 block">Model</label>
-              <select
-                value={selectedModelId}
-                onChange={(e) => setSelectedModelId(e.target.value)}
-                className="w-full bg-studio-bg border border-studio-border rounded-lg px-3 py-2 text-xs focus:border-studio-accent focus:outline-none"
-              >
-                {videoDrivers.map((d: any) => (
-                  <option key={d.driver_id} value={d.driver_id}>{d.display_name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-studio-muted mb-1 block">Duration: {duration}s</label>
-              <input
-                type="range"
-                min={1}
-                max={caps.maxDuration || 10}
-                step={1}
-                value={duration}
-                onChange={(e) => setDuration(parseInt(e.target.value))}
-                className="w-full accent-studio-accent"
-              />
-            </div>
-          </div>
-
-          {/* ===== Camera Movement ===== */}
-          {caps.supportsCameraControl && (
-            <div className="mb-4">
-              <label className="text-xs text-studio-muted mb-1.5 block">Camera Movement</label>
-              <div className="flex flex-wrap gap-1.5">
-                {CAMERA_MOVEMENTS.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setCameraMovement(m.id)}
-                    className={`px-2.5 py-1.5 text-xs rounded-lg border transition-all ${
-                      cameraMovement === m.id
-                        ? "border-studio-accent bg-studio-accent/10 text-studio-accent"
-                        : "border-studio-border text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ===== Generate Button ===== */}
-          <button
-            onClick={handleGenerate}
-            disabled={generating || !prompt.trim()}
-            className="flex items-center gap-2 px-6 py-3 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-all w-full justify-center"
-          >
-            {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            {generating ? (status || "Generating...") : "Generate Video"}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto p-6">
-        {/* ===== Shot Header ===== */}
+        {/* ===== Header — shot info or freestyle banner ===== */}
         <div className="flex items-start gap-4 mb-6">
           <div className="w-20 h-20 rounded-xl overflow-hidden bg-studio-panel border border-studio-border shrink-0">
-            {selectedShot.frame_image_path ? (
+            {selectedShot?.frame_image_path ? (
               <img src={selectedShot.frame_image_path} alt="" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
-                <Film className="w-8 h-8 text-studio-muted/30" />
+                <Camera className="w-8 h-8 text-studio-accent/40" />
               </div>
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-lg font-semibold text-studio-text truncate">{selectedShot.name}</h1>
-            {sceneName && (
-              <p className="text-sm text-studio-muted">{sceneName}</p>
+            <h1 className="text-lg font-semibold text-studio-text truncate">
+              {selectedShot ? selectedShot.name : "Freestyle Generation"}
+            </h1>
+            {selectedShot ? (
+              <>
+                {sceneName && <p className="text-sm text-studio-muted">{sceneName}</p>}
+                <div className="flex items-center gap-2 mt-1">
+                  {selectedShot.video_takes && selectedShot.video_takes.length > 0 ? (
+                    <span className="text-xs text-studio-success flex items-center gap-1">
+                      <Check className="w-3 h-3" />
+                      {selectedShot.video_takes.length} take{selectedShot.video_takes.length > 1 ? "s" : ""}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-studio-muted/50">No takes yet</span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-studio-muted">No shot selected — a new shot will be created on generate.</p>
             )}
-            <div className="flex items-center gap-2 mt-1">
-              {selectedShot.video_takes && selectedShot.video_takes.length > 0 ? (
-                <span className="text-xs text-studio-success flex items-center gap-1">
-                  <Check className="w-3 h-3" />
-                  {selectedShot.video_takes.length} take{selectedShot.video_takes.length > 1 ? "s" : ""}
-                </span>
-              ) : (
-                <span className="text-xs text-studio-muted/50">No takes yet</span>
-              )}
-            </div>
           </div>
         </div>
 
@@ -717,7 +649,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                     value={firstFramePath}
                     onPick={() => setActivePicker("firstFrame")}
                     onClear={() => setFirstFramePath(null)}
-                    placeholder="Pick storyboard frame..."
+                    placeholder="Pick frame, asset, or image..."
                   />
                 )}
                 {caps.supportsLastFrame && (
@@ -866,19 +798,35 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           </div>
 
           {/* Aspect ratio */}
-          <div>
+          <div className="col-span-2">
             <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
               Aspect Ratio
             </label>
-            <select
-              value={aspectRatio}
-              onChange={(e) => setAspectRatio(e.target.value)}
-              className="w-full bg-studio-panel border border-studio-border rounded-xl px-3 py-2.5 text-sm text-studio-text focus:outline-none focus:border-studio-accent"
-            >
-              {ASPECT_RATIOS.map((ar) => (
-                <option key={ar.id} value={ar.id}>{ar.label}</option>
-              ))}
-            </select>
+            <div className="flex gap-1.5">
+              {ASPECT_RATIOS.map((ar) => {
+                const isActive = aspectRatio === ar.id;
+                return (
+                  <button
+                    key={ar.id}
+                    type="button"
+                    onClick={() => setAspectRatio(ar.id)}
+                    title={`${ar.label} ${ar.sub}`}
+                    className={`flex flex-col items-center gap-1.5 px-2.5 py-2 rounded-lg border transition-all ${
+                      isActive
+                        ? "border-studio-accent bg-studio-accent/10 text-studio-accent"
+                        : "border-studio-border bg-studio-panel text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+                    }`}
+                  >
+                    <div
+                      className={`rounded-[2px] border-2 ${isActive ? "border-studio-accent" : "border-current"}`}
+                      style={{ width: ar.w, height: ar.h }}
+                    />
+                    <span className="text-[10px] font-medium leading-none">{ar.label}</span>
+                    <span className="text-[9px] leading-none opacity-60">{ar.sub}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Seed */}
@@ -931,8 +879,74 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           </div>
         )}
 
+        {/* ===== Freestyle Result ===== */}
+        {freestyleResult && (
+          <div className="mt-6 animate-fade-in">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Film className="w-4 h-4 text-studio-accent" />
+                Result
+              </h3>
+              <button
+                onClick={() => setFreestyleResult(null)}
+                className="text-xs text-studio-muted hover:text-studio-text transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+            <div className="rounded-xl overflow-hidden border border-studio-border bg-studio-panel">
+              <video
+                src={freestyleResult.videoUrl}
+                controls
+                autoPlay
+                loop
+                className="w-full"
+              />
+              <div className="p-3 flex items-center justify-between">
+                <p className="text-xs text-studio-muted truncate flex-1 mr-3">{freestyleResult.prompt}</p>
+                <div className="flex items-center gap-2 shrink-0">
+                  {freestyleResult.lastFramePath && (
+                    <button
+                      onClick={() => {
+                        handleModeChange("i2v");
+                        setFirstFramePath(freestyleResult.lastFramePath!);
+                        setPrompt("");
+                        setFreestyleResult(null);
+                        setStatus("Continuing from last frame...");
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-accent/20 hover:bg-studio-accent/30 text-studio-accent rounded-lg text-xs font-medium transition-colors"
+                    >
+                      <Play className="w-3 h-3" />
+                      Continue
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setTimelineProjectId(projectId);
+                      addTimelineClip("video", {
+                        sourceType: "upload",
+                        sourceId: `freestyle_${Date.now()}`,
+                        name: `Freestyle Video`,
+                        sourceUrl: freestyleResult.videoUrl,
+                        trimInSeconds: 0,
+                        trimOutSeconds: null,
+                      });
+                      setFreestyleResult(null);
+                      setStatus("Sent to timeline!");
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-accent hover:bg-studio-accentHover text-white rounded-lg text-xs font-medium transition-colors"
+                  >
+                    <Send className="w-3 h-3" />
+                    Send to Timeline
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ===== Takes Gallery ===== */}
-        {selectedShot.video_takes && selectedShot.video_takes.length > 0 && (
+        {selectedShot?.video_takes && selectedShot.video_takes.length > 0 && (
           <div className="mt-8 animate-fade-in">
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
               <Film className="w-4 h-4 text-studio-accent" />
@@ -971,23 +985,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           uploadedImagesLoading={uploadedImagesLoading}
           audioFiles={audioFiles}
           audioLoading={audioLoading}
-          onPick={(path) => {
-            if (activePicker === "firstFrame") setFirstFramePath(path);
-            else if (activePicker === "lastFrame") setLastFramePath(path);
-            else if (activePicker === "refVideo") setRefVideoPath(path);
-            else if (activePicker === "audio") setRefAudioPath(path);
-            else if (activePicker?.startsWith("refImage_")) {
-              const idx = parseInt(activePicker.split("_")[1]);
-              setRefImagePaths((prev) => {
-                const next = [...prev];
-                if (idx < next.length) next[idx] = path;
-                else next.push(path);
-                return next;
-              });
-            }
-            setActivePicker(null);
-          }}
-          onClose={() => setActivePicker(null)}
+          onPick={handlePickerPick}
+          onClose={handlePickerClose}
         />
       )}
     </div>
@@ -1070,7 +1069,7 @@ function RefSlot({
 // Reference Picker Modal
 // =============================================================================
 
-function RefPickerModal({
+const RefPickerModal = memo(function RefPickerModal({
   pickerType,
   sameSceneFrames,
   sameSceneVideos,
@@ -1131,13 +1130,13 @@ function RefPickerModal({
         <div className="flex-1 overflow-y-auto p-4">
           {(pickerType === "firstFrame" || pickerType === "lastFrame" || isRefImagePicker) && (
             <div className="space-y-4">
-              {/* Section 1: Storyboard Frames (same scene) */}
+              {/* Section 1: Storyboard Frames */}
               <div>
                 <p className="text-[11px] font-semibold text-studio-muted uppercase tracking-wider mb-2">
                   Storyboard Frames ({sameSceneFrames.length})
                 </p>
                 {sameSceneFrames.length === 0 ? (
-                  <p className="text-xs text-studio-muted/50 py-2">No frames in this scene</p>
+                  <p className="text-xs text-studio-muted/50 py-2">No frames available</p>
                 ) : (
                   <div className="grid grid-cols-3 gap-3">
                     {sameSceneFrames.map((shot) => (
@@ -1276,7 +1275,7 @@ function RefPickerModal({
               {sameSceneVideos.length > 0 && (
                 <div>
                   <p className="text-[11px] font-semibold text-studio-muted uppercase tracking-wider mb-2">
-                    Same-Scene Clips
+                    Shot Clips
                   </p>
                   <div className="space-y-1.5">
                     {sameSceneVideos.map((shot) => (
@@ -1337,7 +1336,7 @@ function RefPickerModal({
       </div>
     </div>
   );
-}
+});
 
 // =============================================================================
 // Take Card Component

@@ -281,9 +281,11 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
       // Poll for status
       if (renderPollRef.current) window.clearInterval(renderPollRef.current);
+      let renderPollErrors = 0;
       renderPollRef.current = window.setInterval(async () => {
         try {
           const status = await getTimelineRenderStatus(projectId, job.job_id);
+          renderPollErrors = 0;
           setRenderStatus(status.status as any);
           if (status.status === "completed") {
             setRenderResultUrl(status.video_url);
@@ -298,8 +300,16 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
               renderPollRef.current = null;
             }
           }
-        } catch {
-          // ignore poll errors
+        } catch (pollErr) {
+          renderPollErrors++;
+          if (renderPollErrors >= 5) {
+            setRenderStatus("failed");
+            setRenderError("Lost connection to backend while polling render status.");
+            if (renderPollRef.current) {
+              window.clearInterval(renderPollRef.current);
+              renderPollRef.current = null;
+            }
+          }
         }
       }, 2000);
     } catch (err) {

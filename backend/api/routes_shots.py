@@ -198,6 +198,7 @@ async def create_shot(req: ShotCreateRequest):
         "status": ShotStatus.DRAFT.value,
         "description": req.description,
         "notes": req.notes,
+        "hidden": req.hidden,
         "sequence_order": len(_load_shots(req.project_id)),
         "assets": auto_assets,
         "frame_image_path": None,

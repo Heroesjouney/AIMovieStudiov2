@@ -108,8 +108,10 @@ export function ShotComposer({ projectId }: { projectId: string }) {
 
   useEffect(() => { refresh(); }, [projectId, selectedSceneId]);
 
-  // Sort shots by sequence_order for display
-  const sortedShots = [...shots].sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0));
+  // Sort shots by sequence_order for display, filtering out hidden (scratch/freestyle) shots
+  const sortedShots = [...shots]
+    .filter((s: any) => !s.hidden)
+    .sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0));
   const selectedScene = scenes.find((s) => s.id === selectedSceneId);
   const sceneRecipeCount = (selectedScene?.reference_assets || []).length;
   const sceneHasEstablishing = !!(selectedScene?.establishing_frame_path);
@@ -218,9 +220,11 @@ export function ShotComposer({ projectId }: { projectId: string }) {
       // Clear any existing polling interval before starting a new one
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
+      let createPollErrors = 0;
       pollIntervalRef.current = setInterval(async () => {
         try {
           const st = await checkShotFrameStatus(resp.job_id, selectedImageDriver);
+          createPollErrors = 0;
           if (st.status === "completed") {
             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
@@ -229,7 +233,6 @@ export function ShotComposer({ projectId }: { projectId: string }) {
               frame_image_path: framePath,
               status: "frame_generated",
             });
-            // Establishing frame is now auto-saved by the backend in update_shot
             setCreating(false); setCreateStatus("");
             setNewPrompt(""); setShowCreate(false);
             setNewShotAssets([]);
@@ -249,8 +252,14 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             setCreateStatus(st.status === "in_queue" ? "In queue..." : "Processing...");
           }
         } catch (pollErr) {
-          // Network error during polling — don't crash, just keep trying
-          console.warn("[ShotComposer] poll error (will retry):", pollErr);
+          createPollErrors++;
+          console.warn("[ShotComposer] poll error:", pollErr);
+          if (createPollErrors >= 5) {
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+            setCreateError("Lost connection to backend while polling. The frame may still be generating — refresh later.");
+            setCreating(false); setCreateStatus("");
+          }
         }
       }, 3000);
     } catch (err) {
@@ -294,9 +303,11 @@ export function ShotComposer({ projectId }: { projectId: string }) {
       if (resp.status === "failed") { setRegeneratingId(null); return; }
 
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      let regenPollErrors = 0;
       pollIntervalRef.current = setInterval(async () => {
         try {
           const st = await checkShotFrameStatus(resp.job_id, selectedImageDriver);
+          regenPollErrors = 0;
           if (st.status === "completed") {
             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
@@ -314,7 +325,13 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             setRegeneratingId(null);
           }
         } catch (pollErr) {
-          console.warn("[ShotComposer] regenerate poll error (will retry):", pollErr);
+          regenPollErrors++;
+          console.warn("[ShotComposer] regenerate poll error:", pollErr);
+          if (regenPollErrors >= 5) {
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+            setRegeneratingId(null);
+          }
         }
       }, 3000);
     } catch (err) {

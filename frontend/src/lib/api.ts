@@ -329,11 +329,11 @@ export async function fetchShots(projectId: string, sceneId?: string): Promise<S
   return resp.json();
 }
 
-export async function createShot(projectId: string, name: string, description: string, sceneId?: string, shotType?: string): Promise<ShotResponse> {
+export async function createShot(projectId: string, name: string, description: string, sceneId?: string, shotType?: string, hidden?: boolean): Promise<ShotResponse> {
   const resp = await fetch(`${API_BASE}/shots/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId, name, description, scene_id: sceneId, shot_type: shotType || "medium" }),
+    body: JSON.stringify({ project_id: projectId, name, description, scene_id: sceneId, shot_type: shotType || "medium", hidden: hidden || false }),
   });
   return resp.json();
 }

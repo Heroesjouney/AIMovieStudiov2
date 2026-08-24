@@ -14,6 +14,7 @@
     "class_type": "ResolutionSelector",
     "inputs": {
       "resolution": "16:9 (Widescreen)",
+      "aspect_ratio": "16:9 (Widescreen)",
       "megapixels": 0.4,
       "multiple": 32
     }
@@ -104,6 +105,7 @@
       "images": ["122", 0],
       "audio": ["121", 0],
       "frame_rate": 24,
+      "fps": 24,
       "audio_rate": 8
     }
   },
@@ -148,7 +150,8 @@
   "138": {
     "class_type": "PrimitiveStringMultiline",
     "inputs": {
-      "string": "PROMPT_PLACEHOLDER"
+      "string": "PROMPT_PLACEHOLDER",
+      "value": "PROMPT_PLACEHOLDER"
     }
   },
   "139": {

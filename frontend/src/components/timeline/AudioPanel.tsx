@@ -32,20 +32,31 @@ export function AudioPanel({ projectId }: { projectId: string }) {
         return;
       }
 
+      let ttsPollErrors = 0;
       const interval = setInterval(async () => {
-        const st = await fetch(`/api/audio/status/${resp.job_id}?model_id=${selectedAudioDriver}`).then(r => r.json());
-        if (st.status === "completed") {
-          clearInterval(interval);
-          setStatus("Audio ready!");
-          setGenerating(false);
-          const refreshed = await fetchAudioFiles(projectId);
-          setAudioFiles(refreshed);
-        } else if (st.status === "failed") {
-          clearInterval(interval);
-          setError(st.error_message || "TTS failed");
-          setGenerating(false);
-        } else {
-          setStatus(st.status === "in_queue" ? "In queue..." : "Processing...");
+        try {
+          const st = await fetch(`/api/audio/status/${resp.job_id}?model_id=${selectedAudioDriver}`).then(r => r.json());
+          ttsPollErrors = 0;
+          if (st.status === "completed") {
+            clearInterval(interval);
+            setStatus("Audio ready!");
+            setGenerating(false);
+            const refreshed = await fetchAudioFiles(projectId);
+            setAudioFiles(refreshed);
+          } else if (st.status === "failed") {
+            clearInterval(interval);
+            setError(st.error_message || "TTS failed");
+            setGenerating(false);
+          } else {
+            setStatus(st.status === "in_queue" ? "In queue..." : "Processing...");
+          }
+        } catch (pollErr) {
+          ttsPollErrors++;
+          if (ttsPollErrors >= 5) {
+            clearInterval(interval);
+            setError("Lost connection to backend while polling.");
+            setGenerating(false);
+          }
         }
       }, 2000);
     } catch (err) {

@@ -161,28 +161,40 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
       }
 
       return await new Promise<string>((resolve) => {
+        let analysisPollErrors = 0;
         const pollInterval = setInterval(async () => {
-          const statusResp = await checkAnalysisStatus(response.job_id);
-          if (statusResp.status === "completed") {
-            clearInterval(pollInterval);
-            const desc = statusResp.metadata?.description || "";
-            setCharDescription(desc);
-            // Persist description to the asset so it's available for storyboard generation
-            if (desc) {
-              try {
-                await updateAsset(projectId, asset.id, { description: desc });
-                await refreshAssets();
-              } catch (e) {
-                console.warn("[AssetDetailPanel] failed to persist description:", e);
+          try {
+            const statusResp = await checkAnalysisStatus(response.job_id);
+            analysisPollErrors = 0;
+            if (statusResp.status === "completed") {
+              clearInterval(pollInterval);
+              const desc = statusResp.metadata?.description || "";
+              setCharDescription(desc);
+              if (desc) {
+                try {
+                  await updateAsset(projectId, asset.id, { description: desc });
+                  await refreshAssets();
+                } catch (e) {
+                  console.warn("[AssetDetailPanel] failed to persist description:", e);
+                }
               }
+              setAnalyzing(false);
+              resolve(desc);
+            } else if (statusResp.status === "failed") {
+              clearInterval(pollInterval);
+              setError(statusResp.error_message || "Failed to analyze character");
+              setAnalyzing(false);
+              resolve("");
             }
-            setAnalyzing(false);
-            resolve(desc);
-          } else if (statusResp.status === "failed") {
-            clearInterval(pollInterval);
-            setError(statusResp.error_message || "Failed to analyze character");
-            setAnalyzing(false);
-            resolve("");
+          } catch (pollErr) {
+            analysisPollErrors++;
+            console.warn("[AssetDetailPanel] analysis poll error:", pollErr);
+            if (analysisPollErrors >= 5) {
+              clearInterval(pollInterval);
+              setError("Lost connection to backend while polling.");
+              setAnalyzing(false);
+              resolve("");
+            }
           }
         }, 2000);
       });
@@ -236,53 +248,64 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
         return;
       }
 
+      let sheetPollErrors = 0;
       const pollInterval = setInterval(async () => {
-        const statusResp = await checkGenerationStatus(response.job_id, isTurnaroundPro ? "qwen_image_edit" : selectedDriver);
-        if (statusResp.status === "completed") {
-          clearInterval(pollInterval);
-          const images = statusResp.image_urls || [];
-          setResultImages(images);
-          setStatus("");
-          setGenerating(false);
-          setProgressViews({ completed: 0, total: 0 });
-          // Auto-save the generated sheet to the asset library
-          if (images.length > 0) {
-            setSavingIndex(0);
-            try {
-              await saveGeneratedToAsset(
-                projectId,
-                images[0],
-                `${asset.name} - ${sheetLabel}`,
-                asset.type,
-                activePrompt || undefined,
-                charDescription || asset.description || undefined,
-              );
-              // Also store the sheet image on the original asset for storyboard reference
+        try {
+          const statusResp = await checkGenerationStatus(response.job_id, isTurnaroundPro ? "qwen_image_edit" : selectedDriver);
+          sheetPollErrors = 0;
+          if (statusResp.status === "completed") {
+            clearInterval(pollInterval);
+            const images = statusResp.image_urls || [];
+            setResultImages(images);
+            setStatus("");
+            setGenerating(false);
+            setProgressViews({ completed: 0, total: 0 });
+            if (images.length > 0) {
+              setSavingIndex(0);
               try {
-                await updateAsset(projectId, asset.id, { character_sheet_path: images[0] });
-              } catch (e) {
-                console.warn('[AssetDetailPanel] failed to store sheet path:', e);
+                await saveGeneratedToAsset(
+                  projectId,
+                  images[0],
+                  `${asset.name} - ${sheetLabel}`,
+                  asset.type,
+                  activePrompt || undefined,
+                  charDescription || asset.description || undefined,
+                );
+                try {
+                  await updateAsset(projectId, asset.id, { character_sheet_path: images[0] });
+                } catch (e) {
+                  console.warn('[AssetDetailPanel] failed to store sheet path:', e);
+                }
+                setSavedIndices(new Set([0]));
+                await refreshAssets();
+              } catch (err) {
+                console.error("Auto-save failed:", err);
+              } finally {
+                setSavingIndex(null);
               }
-              setSavedIndices(new Set([0]));
-              await refreshAssets();
-            } catch (err) {
-              console.error("Auto-save failed:", err);
-            } finally {
-              setSavingIndex(null);
+            }
+          } else if (statusResp.status === "failed") {
+            clearInterval(pollInterval);
+            setError(statusResp.error_message || "Sheet generation failed");
+            setGenerating(false);
+            setProgressViews({ completed: 0, total: 0 });
+          } else {
+            const meta = statusResp.metadata;
+            if (meta?.completed_views !== undefined && meta?.total_views !== undefined) {
+              setStatus(`Generating ${meta.completed_views}/${meta.total_views} views...`);
+              setProgressViews({ completed: meta.completed_views, total: meta.total_views });
+            } else {
+              setStatus(statusResp.status === "in_queue" ? "In queue..." : "Generating...");
             }
           }
-        } else if (statusResp.status === "failed") {
-          clearInterval(pollInterval);
-          setError(statusResp.error_message || "Sheet generation failed");
-          setGenerating(false);
-          setProgressViews({ completed: 0, total: 0 });
-        } else {
-          const meta = statusResp.metadata;
-          if (meta?.completed_views !== undefined && meta?.total_views !== undefined) {
-            setStatus(`Generating ${meta.completed_views}/${meta.total_views} views...`);
-            setProgressViews({ completed: meta.completed_views, total: meta.total_views });
-          } else {
-            setStatus(statusResp.status === "in_queue" ? "In queue..." : "Generating...");
+        } catch (pollErr) {
+          sheetPollErrors++;
+          console.warn("[AssetDetailPanel] sheet poll error:", pollErr);
+          if (sheetPollErrors >= 5) {
+            clearInterval(pollInterval);
+            setError("Lost connection to backend while polling. The sheet may still be generating — refresh later.");
+            setGenerating(false);
+            setProgressViews({ completed: 0, total: 0 });
           }
         }
       }, 2000);

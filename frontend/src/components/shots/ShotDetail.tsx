@@ -106,9 +106,11 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       const resp = await retakeVideo(projectId, shot.id, retakeStart, retakeEnd, retakePrompt, "minimax_h3");
       if (resp.status === "failed") { setError(resp.error_message || "Retake failed"); setGeneratingRetake(false); return; }
       const jobId = resp.job_id;
+      let retakePollErrors = 0;
       retakePollRef.current = setInterval(async () => {
         try {
           const st = await checkShotVideoStatus(jobId, "minimax_h3");
+          retakePollErrors = 0;
           if (st.status === "completed") {
             if (retakePollRef.current) clearInterval(retakePollRef.current);
             retakePollRef.current = null;
@@ -119,7 +121,16 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
             retakePollRef.current = null;
             setError(st.error_message || "Retake failed"); setGeneratingRetake(false);
           } else { setRetakeStatus(st.status === "in_queue" ? "In queue..." : "Processing..."); }
-        } catch (e) { console.warn("[ShotDetail] retake poll error:", e); }
+        } catch (e) {
+          retakePollErrors++;
+          console.warn("[ShotDetail] retake poll error:", e);
+          if (retakePollErrors >= 5) {
+            if (retakePollRef.current) clearInterval(retakePollRef.current);
+            retakePollRef.current = null;
+            setError("Lost connection to backend while polling. The video may still be generating — refresh later.");
+            setGeneratingRetake(false);
+          }
+        }
       }, 3000);
     } catch (err) { setError(err instanceof Error ? err.message : "Retake failed"); setGeneratingRetake(false); }
   };
@@ -139,9 +150,11 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       // Clear any existing polling before starting
       if (framePollRef.current) clearInterval(framePollRef.current);
 
+      let framePollErrors = 0;
       framePollRef.current = setInterval(async () => {
         try {
           const st = await checkShotFrameStatus(resp.job_id, selectedImageDriver);
+          framePollErrors = 0;
           if (st.status === "completed") {
             if (framePollRef.current) clearInterval(framePollRef.current);
             framePollRef.current = null;
@@ -157,7 +170,14 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
             setError(st.error_message || "Failed"); setGenerating(false);
           } else { setStatus(st.status === "in_queue" ? "In queue..." : "Processing..."); }
         } catch (pollErr) {
-          console.warn("[ShotDetail] poll error (will retry):", pollErr);
+          framePollErrors++;
+          console.warn("[ShotDetail] poll error:", pollErr);
+          if (framePollErrors >= 5) {
+            if (framePollRef.current) clearInterval(framePollRef.current);
+            framePollRef.current = null;
+            setError("Lost connection to backend while polling. The frame may still be generating — refresh later.");
+            setGenerating(false);
+          }
         }
       }, 3000);
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); setGenerating(false); }
@@ -175,32 +195,56 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
         const subJobs = resp.sub_jobs;
         const results: Record<string, string> = {};
         let done = 0;
+        let anglePollErrors = 0;
         anglePollRef.current = setInterval(async () => {
-          for (const sub of subJobs) {
-            if (results[sub.angle]) continue;
-            const st = await checkAnglesStatus(sub.sub_job_id, "qwen_multiangle");
-            if (st.status === "completed" && st.image_urls?.[0]) { results[sub.angle] = st.image_urls[0]; done++; }
-            else if (st.status === "failed") done++;
-          }
-          setAngleStatus(`Generated ${done}/${subJobs.length}...`);
-          if (done >= subJobs.length) {
-            if (anglePollRef.current) clearInterval(anglePollRef.current);
-            await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...results } });
-            setGeneratingAngles(false); setAngleStatus(""); setSelectedAngles([]); await onRefresh();
+          try {
+            for (const sub of subJobs) {
+              if (results[sub.angle]) continue;
+              const st = await checkAnglesStatus(sub.sub_job_id, "qwen_multiangle");
+              if (st.status === "completed" && st.image_urls?.[0]) { results[sub.angle] = st.image_urls[0]; done++; }
+              else if (st.status === "failed") done++;
+            }
+            anglePollErrors = 0;
+            setAngleStatus(`Generated ${done}/${subJobs.length}...`);
+            if (done >= subJobs.length) {
+              if (anglePollRef.current) clearInterval(anglePollRef.current);
+              await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...results } });
+              setGeneratingAngles(false); setAngleStatus(""); setSelectedAngles([]); await onRefresh();
+            }
+          } catch (angleErr) {
+            anglePollErrors++;
+            console.warn("[ShotDetail] angle poll error:", angleErr);
+            if (anglePollErrors >= 5) {
+              if (anglePollRef.current) clearInterval(anglePollRef.current);
+              setError("Lost connection to backend while polling angles.");
+              setGeneratingAngles(false); setAngleStatus("");
+            }
           }
         }, 3000);
       } else {
+        let anglePollErrors = 0;
         const interval = setInterval(async () => {
-          const st = await checkAnglesStatus(resp.job_id, "3d_camera");
-          if (st.status === "completed") {
-            clearInterval(interval);
-            const ar = st.metadata?.angle_results || [];
-            const na: Record<string, string> = {};
-            for (const a of ar) if (a.image_url) na[a.angle] = a.image_url;
-            await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...na } });
-            setGeneratingAngles(false); setAngleStatus(""); setSelectedAngles([]); await onRefresh();
-          } else if (st.status === "failed") { clearInterval(interval); setError(st.error_message || "Failed"); setGeneratingAngles(false); }
-          else setAngleStatus("Processing...");
+          try {
+            const st = await checkAnglesStatus(resp.job_id, "3d_camera");
+            anglePollErrors = 0;
+            if (st.status === "completed") {
+              clearInterval(interval);
+              const ar = st.metadata?.angle_results || [];
+              const na: Record<string, string> = {};
+              for (const a of ar) if (a.image_url) na[a.angle] = a.image_url;
+              await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...na } });
+              setGeneratingAngles(false); setAngleStatus(""); setSelectedAngles([]); await onRefresh();
+            } else if (st.status === "failed") { clearInterval(interval); setError(st.error_message || "Failed"); setGeneratingAngles(false); }
+            else setAngleStatus("Processing...");
+          } catch (angleErr) {
+            anglePollErrors++;
+            console.warn("[ShotDetail] angle poll error:", angleErr);
+            if (anglePollErrors >= 5) {
+              clearInterval(interval);
+              setError("Lost connection to backend while polling angles.");
+              setGeneratingAngles(false); setAngleStatus("");
+            }
+          }
         }, 3000);
       }
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); setGeneratingAngles(false); }
@@ -237,23 +281,35 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       }
 
       const jobId = resp.generation.job_id;
+      let varPollErrors = 0;
       const interval = setInterval(async () => {
-        const st = await checkVariationStatus(jobId, selectedImageDriver);
-        if (st.status === "completed") {
-          clearInterval(interval);
-          const imageUrl = st.image_urls?.[0] || "";
-          if (imageUrl && resp.shot.id) {
-            await updateShot(projectId, resp.shot.id, {
-              frame_image_path: imageUrl,
-              status: "frame_generated",
-            });
+        try {
+          const st = await checkVariationStatus(jobId, selectedImageDriver);
+          varPollErrors = 0;
+          if (st.status === "completed") {
+            clearInterval(interval);
+            const imageUrl = st.image_urls?.[0] || "";
+            if (imageUrl && resp.shot.id) {
+              await updateShot(projectId, resp.shot.id, {
+                frame_image_path: imageUrl,
+                status: "frame_generated",
+              });
+            }
+            setVariationStatus("Done!"); setGeneratingVariation(false);
+            setVariationPrompt(""); setVariationName("");
+            await onRefresh();
+          } else if (st.status === "failed") {
+            clearInterval(interval); setError(st.error_message || "Variation failed"); setGeneratingVariation(false);
+          } else { setVariationStatus(st.status === "in_queue" ? "In queue..." : "Processing..."); }
+        } catch (varErr) {
+          varPollErrors++;
+          console.warn("[ShotDetail] variation poll error:", varErr);
+          if (varPollErrors >= 5) {
+            clearInterval(interval);
+            setError("Lost connection to backend while polling. The variation may still be generating — refresh later.");
+            setGeneratingVariation(false);
           }
-          setVariationStatus("Done!"); setGeneratingVariation(false);
-          setVariationPrompt(""); setVariationName("");
-          await onRefresh();
-        } else if (st.status === "failed") {
-          clearInterval(interval); setError(st.error_message || "Variation failed"); setGeneratingVariation(false);
-        } else { setVariationStatus(st.status === "in_queue" ? "In queue..." : "Processing..."); }
+        }
       }, 2000);
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); setGeneratingVariation(false); }
   };

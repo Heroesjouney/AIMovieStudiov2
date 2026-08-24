@@ -73,20 +73,31 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
       }
 
       // Poll for completion
+      let genPollErrors = 0;
       const pollInterval = setInterval(async () => {
-        const statusResp = await checkGenerationStatus(response.job_id, selectedImageDriver);
-        if (statusResp.status === "completed") {
-          clearInterval(pollInterval);
-          setResultImages(statusResp.image_urls || []);
-          setStatus("Completed!");
-          setGenerating(false);
-
-        } else if (statusResp.status === "failed") {
-          clearInterval(pollInterval);
-          setError(statusResp.error_message || "Generation failed");
-          setGenerating(false);
-        } else {
-          setStatus(statusResp.status === "in_queue" ? "In queue..." : "Processing...");
+        try {
+          const statusResp = await checkGenerationStatus(response.job_id, selectedImageDriver);
+          genPollErrors = 0;
+          if (statusResp.status === "completed") {
+            clearInterval(pollInterval);
+            setResultImages(statusResp.image_urls || []);
+            setStatus("Completed!");
+            setGenerating(false);
+          } else if (statusResp.status === "failed") {
+            clearInterval(pollInterval);
+            setError(statusResp.error_message || "Generation failed");
+            setGenerating(false);
+          } else {
+            setStatus(statusResp.status === "in_queue" ? "In queue..." : "Processing...");
+          }
+        } catch (pollErr) {
+          genPollErrors++;
+          console.warn("[GenerationPanel] poll error:", pollErr);
+          if (genPollErrors >= 5) {
+            clearInterval(pollInterval);
+            setError("Lost connection to backend while polling. The image may still be generating — refresh later.");
+            setGenerating(false);
+          }
         }
       }, 2000);
     } catch (err) {
