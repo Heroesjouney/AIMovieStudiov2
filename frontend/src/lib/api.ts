@@ -102,6 +102,7 @@ export interface ShotResponse {
   generation_recipe: any;
   created_at: string;
   updated_at: string;
+  hidden?: boolean;
 }
 
 export interface ProjectResponse {

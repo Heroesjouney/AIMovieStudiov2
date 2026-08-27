@@ -83,6 +83,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
     addTimelineClip, addAudioTrack, timeline, removeTimelineClipsBySourceId,
     setTimelineProjectId, audioLibraryRefreshToken,
     scenes, selectedShotId, setSelectedShotId,
+    shots: storeShots, setShots: setStoreShots,
   } = useStudioStore();
   const [filter, setFilter] = useState("all");
   const [uploading, setUploading] = useState(false);
@@ -104,8 +105,6 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   const [audioUploadStatus, setAudioUploadStatus] = useState<string | null>(null);
   const audioFileRef = useRef<HTMLInputElement>(null);
 
-  const [shots, setShots] = useState<any[]>([]);
-  const [shotsLoading, setShotsLoading] = useState(false);
 
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     assets: true,
@@ -169,15 +168,13 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   }, [projectId]);
 
   const loadShots = useCallback(async () => {
-    setShotsLoading(true);
     try {
       const res = await fetchShots(projectId);
-      setShots(res);
+      setStoreShots(res);
     } catch (err) {
       console.error("Failed to load shots:", err);
     }
-    setShotsLoading(false);
-  }, [projectId]);
+  }, [projectId, setStoreShots]);
 
   useEffect(() => {
     refresh();
@@ -187,8 +184,11 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
     if (mode === "timeline" || mode === "camera" || mode === "default") {
       void loadVideoAssets();
       void loadAudioFiles();
-      void loadShots();
       void loadImageAssets();
+    }
+    // Always ensure shots are loaded from the store (reactive)
+    if (storeShots.length === 0) {
+      void loadShots();
     }
   }, [mode, loadVideoAssets, loadAudioFiles, loadShots, loadImageAssets]);
 
@@ -400,7 +400,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
     try {
       await selectVideoTake(projectId, shotId, takeId);
       const fresh = await fetchShots(projectId);
-      setShots(fresh);
+      setStoreShots(fresh);
     } catch (err) {
       console.error("Failed to select take:", err);
     }
@@ -516,8 +516,8 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   const otherAudioFiles = audioFiles.filter((a) => !isVoiceFile(a.filename) && !isMusicFile(a.filename) && !isFoleyFile(a.filename) && !isSfxFile(a.filename));
 
   // Split shots into video clips (have video_clip_path) and storyboard frames (only frame_image_path)
-  const shotsWithVideo = shots.filter((s) => s.video_clip_path);
-  const shotsWithFramesOnly = shots.filter((s) => s.frame_image_path && !s.video_clip_path);
+  const shotsWithVideo = storeShots.filter((s) => s.video_clip_path);
+  const shotsWithFramesOnly = storeShots.filter((s) => s.frame_image_path && !s.video_clip_path);
 
   // Group by scene
   const groupShotsByScene = (shotList: any[]) => {
@@ -698,7 +698,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
           )}
           {expandedSections.videos && (
             <div className="space-y-2">
-              {shotsLoading && <p className="text-[11px] text-studio-muted">Loading...</p>}
+              {storeShots.length === 0 && <p className="text-[11px] text-studio-muted">Loading...</p>}
 
               {/* Uploaded videos pseudo-scene group (top) */}
               {videoAssets.length > 0 && (
@@ -838,7 +838,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                   </div>
                 );
               })}
-              {shotsWithVideo.length === 0 && videoAssets.length === 0 && !shotsLoading && (
+              {shotsWithVideo.length === 0 && videoAssets.length === 0 && (
                 <p className="text-[11px] text-studio-muted/50 px-2">No video clips yet</p>
               )}
             </div>
@@ -901,7 +901,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                   </div>
                 );
               })}
-              {shotsWithFramesOnly.length === 0 && !shotsLoading && (
+              {shotsWithFramesOnly.length === 0 && (
                 <p className="text-[11px] text-studio-muted/50 px-2">No storyboard frames</p>
               )}
             </div>

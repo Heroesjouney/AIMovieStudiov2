@@ -406,6 +406,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               try {
                 const { fetchShots } = await import("@/lib/api");
                 const allShots = await fetchShots(projectId);
+                // Update store so library reactively shows the new video
+                useStudioStore.getState().setShots(allShots);
                 const scratchShot = allShots.find((s: any) => s.id === effectiveShotId);
                 lastFrame = scratchShot?.last_frame_path || undefined;
               } catch (e) {

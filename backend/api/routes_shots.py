@@ -1145,6 +1145,11 @@ async def check_video_status(job_id: str, model_id: str = "fal_seedance_2_5"):
 
             # Remove job from memory after processing
             _video_jobs.pop(job_id, None)
+
+            # Override video_url with the local vault path so the frontend
+            # can play it from our backend instead of the raw ComfyUI URL
+            if local_path:
+                response.video_url = local_path
       except Exception as e:
         import traceback
         print(f"[routes_shots] error persisting video take: {e}")
