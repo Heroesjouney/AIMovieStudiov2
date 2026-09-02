@@ -396,4 +396,4 @@ You are free to use, modify, and share this software completely for free, provid
 ### For Commercial Entities & Businesses:
 If you want to use this software, modify it, or embed it into a proprietary commercial product without being forced to open-source your own code, **the AGPLv3 license does not permit this**.
 
-We offer **Commercial Licenses** for enterprise use, white-labeling, and closed-source integrations. Please contact [Your Email/Contact Info] to discuss commercial licensing terms.
+We offer **Commercial Licenses** for enterprise use, white-labeling, and closed-source integrations. Please contact nathan.mcconnell@sandboxentmt.com to discuss commercial licensing terms.
