@@ -349,11 +349,11 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
       onClick={handleClose}
     >
       <div
-        className="bg-studio-panel border border-studio-border rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col"
+        className="bg-studio-panel border border-studio-border rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-studio-border shrink-0">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-studio-border shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-base">{typeIcons[asset.type] || "🖼️"}</span>
             <div className="min-w-0">
@@ -370,11 +370,11 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
         </div>
 
         {/* Body */}
-        <div className="p-4 space-y-4 overflow-y-auto">
+        <div className="p-3 space-y-3 overflow-y-auto">
           {/* Preview */}
           {thumbUrl && (
             <div className="relative rounded-xl overflow-hidden border border-studio-border group">
-              <img src={thumbUrl} alt={asset.name} className="w-full max-h-48 object-contain bg-studio-bg cursor-zoom-in" onClick={() => setLightboxUrl(thumbUrl)} />
+              <img src={thumbUrl} alt={asset.name} className="w-full max-h-36 object-contain bg-studio-bg cursor-zoom-in" onClick={() => setLightboxUrl(thumbUrl)} />
               <div className="absolute top-2 right-2 p-1.5 bg-black/60 backdrop-blur-sm text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[10px]">
                 <ZoomIn className="w-3 h-3" />
                 Click to enlarge
@@ -447,10 +447,10 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
             </div>
 
             {/* Mode toggle: Templates vs Custom */}
-            <div className="flex gap-1.5">
+            <div className="flex gap-1">
               <button
                 onClick={() => setPromptMode("template")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors border ${
+                className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors border ${
                   promptMode === "template"
                     ? "bg-studio-accent/20 text-studio-accent border-studio-accent/40"
                     : "bg-studio-bg text-studio-muted border-studio-border hover:text-studio-text"
@@ -460,7 +460,7 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
               </button>
               <button
                 onClick={() => setPromptMode("custom")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors border ${
+                className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors border ${
                   promptMode === "custom"
                     ? "bg-studio-accent/20 text-studio-accent border-studio-accent/40"
                     : "bg-studio-bg text-studio-muted border-studio-border hover:text-studio-text"
@@ -478,7 +478,7 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                     <button
                       key={tpl.id}
                       onClick={() => setSelectedTemplate(tpl.id)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors border ${
+                      className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors border ${
                         selectedTemplate === tpl.id
                           ? "bg-studio-accent/20 text-studio-accent border-studio-accent/40"
                           : "bg-studio-bg text-studio-muted border-studio-border hover:text-studio-text"
@@ -506,8 +506,8 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                   <textarea
                     value={customPrompt}
                     onChange={(e) => setCustomPrompt(e.target.value)}
-                    rows={3}
-                    className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-sm text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
+                    rows={2}
+                    className="w-full bg-studio-bg border border-studio-border rounded-lg p-2 text-xs text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
                     placeholder="Write your own design sheet prompt..."
                   />
                 </div>
@@ -530,7 +530,7 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                       value={charDescription}
                       onChange={(e) => setCharDescription(e.target.value)}
                       rows={2}
-                      className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-sm text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
+                      className="w-full bg-studio-bg border border-studio-border rounded-lg p-2 text-xs text-studio-text focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
                       placeholder="e.g. a woman in her 30s wearing a brown leather jacket, dark jeans, boots, short black hair"
                     />
                   </div>
@@ -546,7 +546,7 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
               <input
                 value={seed}
                 onChange={(e) => setSeed(e.target.value)}
-                className="w-full bg-studio-bg border border-studio-border rounded-xl p-2.5 text-sm focus:border-studio-accent focus:outline-none"
+                className="w-full bg-studio-bg border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none"
                 placeholder="Random"
               />
             </div>
@@ -555,9 +555,9 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
             <button
               onClick={handleGenerateSheet}
               disabled={generating}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded-xl font-medium transition-all hover:scale-[1.01] shadow-lg shadow-studio-accent/20"
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs rounded-lg font-medium transition-all hover:scale-[1.01] shadow-md shadow-studio-accent/20"
             >
-              {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
               {generating ? (status || "Generating...") : `Generate ${sheetLabel}`}
             </button>
 

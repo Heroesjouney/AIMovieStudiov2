@@ -674,6 +674,25 @@ async def get_shot(project_id: str, shot_id: str):
     return s
 
 
+@router.put("/{project_id}/reorder")
+async def reorder_shots(project_id: str, shot_ids: List[str]):
+    """Bulk reorder shots by providing an ordered list of shot IDs."""
+    shots = _load_shots(project_id)
+    shot_map = {s["id"]: s for s in shots}
+    reordered = []
+    for idx, sid in enumerate(shot_ids):
+        if sid in shot_map:
+            shot_map[sid]["sequence_order"] = idx
+            shot_map[sid]["updated_at"] = datetime.utcnow().isoformat()
+            reordered.append(shot_map[sid])
+    # Append any shots not in the reorder list (e.g. new ones)
+    for s in shots:
+        if s["id"] not in shot_ids:
+            reordered.append(s)
+    _save_shots(project_id, reordered)
+    return {"status": "ok", "count": len(reordered)}
+
+
 @router.put("/{project_id}/{shot_id}")
 async def update_shot(project_id: str, shot_id: str, updates: dict):
     shots = _load_shots(project_id)
@@ -707,6 +726,79 @@ async def update_shot(project_id: str, shot_id: str, updates: dict):
     raise HTTPException(status_code=404, detail="Shot not found")
 
 
+@router.delete("/video/take")
+async def delete_video_take(project_id: str, shot_id: str, take_id: str):
+    """Delete a video take from a shot.
+
+    Removes the take from video_takes[], deletes the MP4 file from the vault.
+    If the deleted take was the active (selected) one:
+    - Promotes the most recent remaining take to active (re-extracts last frame)
+    - If no takes remain, clears video_clip_path, last_frame_path, and resets status
+    """
+    shots = _load_shots(project_id)
+    shot = next((s for s in shots if s["id"] == shot_id), None)
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    takes = shot.get("video_takes", [])
+    take_to_delete = next((t for t in takes if t["id"] == take_id), None)
+    if not take_to_delete:
+        raise HTTPException(status_code=404, detail="Take not found")
+
+    was_selected = take_to_delete.get("selected", False)
+    take_path = take_to_delete.get("path", "")
+
+    # Delete the MP4 file from vault
+    if take_path and take_path.startswith("/assets/"):
+        local_file = VAULT_DIR / take_path[len("/assets/"):]
+        if local_file.exists():
+            try:
+                local_file.unlink()
+                print(f"[routes_shots] deleted take file: {local_file}")
+            except Exception as e:
+                print(f"[routes_shots] failed to delete take file: {e}")
+
+    # Also delete spliced retake file if it exists
+    spliced_path = shot.get("video_clip_path", "")
+    if take_to_delete.get("retake_of") and spliced_path.startswith("/assets/"):
+        spliced_file = VAULT_DIR / spliced_path[len("/assets/"):]
+        if spliced_file.exists() and spliced_file != local_file:
+            try:
+                spliced_file.unlink()
+                print(f"[routes_shots] deleted spliced file: {spliced_file}")
+            except Exception as e:
+                print(f"[routes_shots] failed to delete spliced file: {e}")
+
+    # Remove the take from the list
+    takes = [t for t in takes if t["id"] != take_id]
+    shot["video_takes"] = takes
+
+    if was_selected:
+        if takes:
+            # Promote the last remaining take to active
+            takes[-1]["selected"] = True
+            shot["video_clip_path"] = takes[-1]["path"]
+            shot["video_takes"] = takes
+
+            # Re-extract last frame from the new active take
+            shot_folder = _shot_dir(project_id, shot_id)
+            last_frame_path = shot_folder / "last_frame.png"
+            if _extract_last_frame(takes[-1]["path"], last_frame_path):
+                shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+            else:
+                shot["last_frame_path"] = None
+        else:
+            # No takes left — clear video state
+            shot["video_clip_path"] = None
+            shot["last_frame_path"] = None
+            shot["status"] = ShotStatus.PLANNED.value
+
+    shot["updated_at"] = datetime.utcnow().isoformat()
+    _save_shots(project_id, shots)
+
+    return {"status": "deleted", "take_id": take_id, "remaining_takes": len(takes)}
+
+
 @router.delete("/{project_id}/{shot_id}")
 async def delete_shot(project_id: str, shot_id: str):
     shots = _load_shots(project_id)
@@ -715,25 +807,6 @@ async def delete_shot(project_id: str, shot_id: str):
         raise HTTPException(status_code=404, detail="Shot not found")
     _save_shots(project_id, filtered)
     return {"status": "deleted", "id": shot_id}
-
-
-@router.put("/{project_id}/reorder")
-async def reorder_shots(project_id: str, shot_ids: List[str]):
-    """Bulk reorder shots by providing an ordered list of shot IDs."""
-    shots = _load_shots(project_id)
-    shot_map = {s["id"]: s for s in shots}
-    reordered = []
-    for idx, sid in enumerate(shot_ids):
-        if sid in shot_map:
-            shot_map[sid]["sequence_order"] = idx
-            shot_map[sid]["updated_at"] = datetime.utcnow().isoformat()
-            reordered.append(shot_map[sid])
-    # Append any shots not in the reorder list (e.g. new ones)
-    for s in shots:
-        if s["id"] not in shot_ids:
-            reordered.append(s)
-    _save_shots(project_id, reordered)
-    return {"status": "reordered", "count": len(shot_ids)}
 
 
 # =============================================================================
@@ -989,16 +1062,38 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
     # Auto-pass previous shot's last frame as first_frame for continuity
     # (only if user didn't explicitly provide one and didn't opt out)
     effective_first_frame = req.first_frame_path
+    continuity_warning = None
     if not effective_first_frame and not req.skip_continuity and shot.get("scene_id"):
         all_shots = _load_shots(req.project_id)
         scene_shots = [s for s in all_shots if s.get("scene_id") == shot.get("scene_id") and s["id"] != req.shot_id]
         scene_shots.sort(key=lambda s: s.get("sequence_order", 0))
         current_order = shot.get("sequence_order", 0)
-        prev_shots = [s for s in scene_shots if s.get("sequence_order", 0) < current_order and s.get("last_frame_path")]
-        if prev_shots:
-            prev_shots.sort(key=lambda s: s.get("sequence_order", 0), reverse=True)
-            effective_first_frame = prev_shots[0]["last_frame_path"]
+        prev_shots = [s for s in scene_shots if s.get("sequence_order", 0) < current_order]
+        prev_with_frame = [s for s in prev_shots if s.get("last_frame_path")]
+        if prev_with_frame:
+            prev_with_frame.sort(key=lambda s: s.get("sequence_order", 0), reverse=True)
+            effective_first_frame = prev_with_frame[0]["last_frame_path"]
             print(f"[routes_shots] video: auto-using prev shot last frame as first_frame: {effective_first_frame}")
+        elif prev_shots:
+            # Previous shots exist but none have a completed video (no last_frame_path)
+            prev_shots.sort(key=lambda s: s.get("sequence_order", 0), reverse=True)
+            prev_shot = prev_shots[0]
+            if not prev_shot.get("video_clip_path"):
+                continuity_warning = f"Previous shot '{prev_shot.get('name', 'unnamed')}' has no completed video. Generate it first for visual continuity."
+            else:
+                continuity_warning = f"Previous shot '{prev_shot.get('name', 'unnamed')}' has a video but last frame was not extracted."
+            print(f"[routes_shots] video: continuity warning — {continuity_warning}")
+
+    # Auto-pass establishing frame as reference image for scene identity lock
+    effective_ref_images = list(req.reference_image_paths or [])
+    if not req.skip_continuity and shot.get("scene_id"):
+        scenes = _load_scenes(req.project_id)
+        scene_obj = next((s for s in scenes if s["id"] == shot["scene_id"]), None)
+        if scene_obj:
+            est_frame = scene_obj.get("establishing_frame_path")
+            if est_frame and est_frame not in effective_ref_images:
+                effective_ref_images.insert(0, est_frame)
+                print(f"[routes_shots] video: auto-adding establishing frame as ref image: {est_frame}")
 
     # Parse aspect ratio
     try:
@@ -1030,7 +1125,7 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
         seed=req.seed,
         first_frame_path=effective_first_frame,
         last_frame_path=req.last_frame_path,
-        reference_image_paths=req.reference_image_paths,
+        reference_image_paths=effective_ref_images,
         reference_video_path=req.reference_video_path,
         reference_audio_path=req.reference_audio_path,
         camera_movement=req.camera_movement,
@@ -1056,6 +1151,7 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
         **response.model_dump(),
         "take_id": take_id,
         "shot_id": req.shot_id,
+        "continuity_warning": continuity_warning,
     }
 
 
@@ -1180,6 +1276,17 @@ async def select_video_take(project_id: str, shot_id: str, take_id: str):
     shot["video_clip_path"] = selected_take["path"]
     shot["video_takes"] = takes
     shot["status"] = ShotStatus.VIDEO_GENERATED.value
+
+    # Re-extract last frame from the newly selected take so the continuity
+    # chain uses the correct ending frame for subsequent shots.
+    shot_folder = _shot_dir(project_id, shot_id)
+    last_frame_path = shot_folder / "last_frame.png"
+    if _extract_last_frame(selected_take["path"], last_frame_path):
+        shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+        print(f"[routes_shots] re-extracted last frame for shot {shot_id} from take {take_id}")
+    else:
+        print(f"[routes_shots] failed to re-extract last frame for shot {shot_id} from take {take_id}")
+
     shot["updated_at"] = datetime.utcnow().isoformat()
     _save_shots(project_id, shots)
 
@@ -1358,3 +1465,71 @@ async def generate_retake(
         "shot_id": shot_id,
         "is_retake": True,
     }
+
+
+@router.post("/video/cleanup")
+async def cleanup_stale_video_refs(project_id: str):
+    """Remove video take references for files that no longer exist on disk.
+
+    For each shot, checks every take's file path. Removes takes whose MP4 is
+    missing. If the active video_clip_path points to a missing file, clears it
+    and promotes a remaining take (or resets status if none survive).
+    """
+    shots = _load_shots(project_id)
+    cleaned = 0
+
+    for shot in shots:
+        takes = shot.get("video_takes", [])
+        if not takes:
+            continue
+
+        surviving = []
+        for take in takes:
+            path = take.get("path", "")
+            if path and path.startswith("/assets/"):
+                local_file = VAULT_DIR / path[len("/assets/"):]
+                if local_file.exists():
+                    surviving.append(take)
+                else:
+                    cleaned += 1
+                    print(f"[cleanup] removing stale take {take.get('id')} from shot {shot['id']}")
+            else:
+                surviving.append(take)
+
+        if len(surviving) == len(takes):
+            # Check if active video_clip_path still exists
+            vcp = shot.get("video_clip_path", "")
+            if vcp and vcp.startswith("/assets/"):
+                vcp_file = VAULT_DIR / vcp[len("/assets/"):]
+                if not vcp_file.exists():
+                    shot["video_clip_path"] = None
+                    shot["status"] = ShotStatus.PLANNED.value
+                    shot["last_frame_path"] = None
+                    cleaned += 1
+                    print(f"[cleanup] cleared missing video_clip_path for shot {shot['id']}")
+            continue
+
+        # Some takes were removed
+        if surviving:
+            # Ensure one take is selected
+            has_selected = any(t.get("selected") for t in surviving)
+            if not has_selected:
+                surviving[-1]["selected"] = True
+            shot["video_takes"] = surviving
+            shot["video_clip_path"] = surviving[-1]["path"]
+            # Re-extract last frame from new active take
+            shot_folder = _shot_dir(project_id, shot["id"])
+            last_frame_path = shot_folder / "last_frame.png"
+            if _extract_last_frame(surviving[-1]["path"], last_frame_path):
+                shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot['id']}/last_frame.png"
+            else:
+                shot["last_frame_path"] = None
+        else:
+            # All takes gone
+            shot["video_takes"] = []
+            shot["video_clip_path"] = None
+            shot["last_frame_path"] = None
+            shot["status"] = ShotStatus.PLANNED.value
+
+    _save_shots(project_id, shots)
+    return {"status": "ok", "cleaned": cleaned}

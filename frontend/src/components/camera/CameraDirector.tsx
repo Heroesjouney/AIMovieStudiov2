@@ -6,6 +6,7 @@ import {
   generateShotVideo,
   checkShotVideoStatus,
   selectVideoTake,
+  deleteVideoTake,
   listAudioFiles,
   listVideoAssets,
   listImageAssets,
@@ -23,7 +24,8 @@ import {
 import {
   Camera, Loader2, Film, Video, Mic, Image as ImageIcon,
   Plus, Send, Check, X, AlertCircle, Sparkles, Play,
-  Type, Layers, Wand2,
+  Type, Layers, Wand2, Trash2, RotateCcw, Dices,
+  ChevronDown, Settings, Clock,
 } from "lucide-react";
 
 // =============================================================================
@@ -56,6 +58,23 @@ const ASPECT_RATIOS = [
   { id: "4:3", label: "4:3", sub: "Academy", w: 24, h: 18 },
 ];
 
+const RESOLUTION_OPTIONS = [
+  { id: "draft", label: "Draft", megapixels: 0.2, desc: "~480p · Fastest · Lowest VRAM" },
+  { id: "standard", label: "Standard", megapixels: 0.4, desc: "~720p · Balanced" },
+  { id: "high", label: "High", megapixels: 0.6, desc: "~1080p · Slower · High VRAM" },
+];
+
+const PROMPT_PRESETS = [
+  { id: "portrait", label: "Portrait Close-Up", text: "Close-up portrait of a character, soft lighting, shallow depth of field, gentle movement" },
+  { id: "landscape", label: "Landscape Pan", text: "Wide landscape shot, slow camera pan, golden hour lighting, atmospheric haze" },
+  { id: "action", label: "Action Scene", text: "Dynamic action scene, fast motion, dramatic lighting, intense atmosphere" },
+  { id: "dialogue", label: "Dialogue Scene", text: "Two characters in conversation, medium shot, natural lighting, subtle expressions" },
+  { id: "aerial", label: "Aerial Reveal", text: "Aerial drone shot revealing the environment, sweeping motion, cinematic scale" },
+  { id: "noir", label: "Film Noir", text: "Moody film noir scene, high contrast shadows, rain-slicked streets, dramatic lighting" },
+];
+
+const DURATION_PRESETS = [3, 5, 10];
+
 type GenMode = "t2v" | "i2v" | "r2v" | "ia2v";
 
 const MODE_TABS: { id: GenMode; label: string; icon: any; desc: string }[] = [
@@ -78,18 +97,19 @@ interface ModelCaps {
   supportsR2V: boolean;
   supportsIA2V: boolean;
   supportsPromptEnhance: boolean;
+  supportsNegativePrompt: boolean;
   maxDuration: number;
 }
 
 function getModelCaps(driverId: string): ModelCaps {
   const caps: Record<string, ModelCaps> = {
-    fal_seedance: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, maxDuration: 10 },
-    fal_seedance_2: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, maxDuration: 10 },
-    fal_seedance_2_5: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, maxDuration: 10 },
-    fal_minimax_h3: { supportsFirstFrame: true, supportsLastFrame: false, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: false, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, maxDuration: 6 },
-    ltx_video_2_3: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: true, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: true, supportsPromptEnhance: true, maxDuration: 10 },
-    wan_video: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, maxDuration: 10 },
-    minimax_h3: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: true, supportsReferenceVideo: true, supportsReferenceAudio: true, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: true, supportsIA2V: false, supportsPromptEnhance: false, maxDuration: 15 },
+    fal_seedance: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
+    fal_seedance_2: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
+    fal_seedance_2_5: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
+    fal_minimax_h3: { supportsFirstFrame: true, supportsLastFrame: false, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: false, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 6 },
+    ltx_video_2_3: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: true, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: true, supportsPromptEnhance: true, supportsNegativePrompt: false, maxDuration: 10 },
+    wan_video: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
+    minimax_h3: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: true, supportsReferenceVideo: true, supportsReferenceAudio: true, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: true, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: false, maxDuration: 15 },
   };
   return caps[driverId] || caps.ltx_video_2_3;
 }
@@ -100,9 +120,10 @@ function getModelCaps(driverId: string): ModelCaps {
 
 export function CameraDirector({ projectId }: { projectId: string }) {
   const {
-    shots, selectedShotId,
+    shots, selectedShotId, selectedSceneId,
     scenes, videoDrivers, assets,
-    addTimelineClip, setTimelineProjectId, timeline,
+    addTimelineClip, addAudioTrack, setTimelineProjectId, timeline,
+    setSelectedShotId,
   } = useStudioStore();
 
   // Mode — explicit user selection (default to t2v when no shot selected)
@@ -116,6 +137,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const [duration, setDuration] = useState(5);
   const [seed, setSeed] = useState<string>("");
   const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [resolutionQuality, setResolutionQuality] = useState("standard");
   const [freestyleResult, setFreestyleResult] = useState<{ videoUrl: string; prompt: string; lastFramePath?: string; shotId?: string } | null>(null);
 
   // Reference slots
@@ -126,6 +148,17 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const [refAudioPath, setRefAudioPath] = useState<string | null>(null);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
   const [skipContinuity, setSkipContinuity] = useState(false);
+
+  // Advanced settings toggle
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Prompt history
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const [showPromptHistory, setShowPromptHistory] = useState(false);
+
+  // Generation elapsed timer
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const elapsedRef = useRef<number | null>(null);
 
   // Picker state
   const [activePicker, setActivePicker] = useState<string | null>(null);
@@ -154,26 +187,29 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Exclude hidden (scratch/freestyle) shots from pickers
   const sameSceneFrames = useMemo(() => {
     const visible = shots.filter((s: any) => !s.hidden);
-    if (selectedShot?.scene_id) {
-      return visible.filter((s) => s.scene_id === selectedShot.scene_id && s.frame_image_path);
+    const sceneId = selectedShot?.scene_id || selectedSceneId;
+    if (sceneId) {
+      return visible.filter((s) => s.scene_id === sceneId && s.frame_image_path);
     }
     return visible.filter((s) => s.frame_image_path);
-  }, [shots, selectedShot]);
+  }, [shots, selectedShot, selectedSceneId]);
 
   const sameSceneVideos = useMemo(() => {
     const visible = shots.filter((s: any) => !s.hidden);
-    if (selectedShot?.scene_id) {
-      return visible.filter((s) => s.scene_id === selectedShot.scene_id && s.video_clip_path);
+    const sceneId = selectedShot?.scene_id || selectedSceneId;
+    if (sceneId) {
+      return visible.filter((s) => s.scene_id === sceneId && s.video_clip_path);
     }
     return visible.filter((s) => s.video_clip_path);
-  }, [shots, selectedShot]);
+  }, [shots, selectedShot, selectedSceneId]);
 
-  // Get scene name for header
+  // Get scene name for header (from selected shot or selected scene)
   const sceneName = useMemo(() => {
-    if (!selectedShot?.scene_id) return null;
-    const scene = scenes.find((s) => s.id === selectedShot.scene_id);
-    return scene?.name || selectedShot.scene_id;
-  }, [scenes, selectedShot]);
+    const sceneId = selectedShot?.scene_id || selectedSceneId;
+    if (!sceneId) return null;
+    const scene = scenes.find((s) => s.id === sceneId);
+    return scene?.name || sceneId;
+  }, [scenes, selectedShot, selectedSceneId]);
 
   // When shot changes, auto-fill refs for I2V/R2V modes (only if user hasn't manually picked something)
   useEffect(() => {
@@ -308,7 +344,47 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   const handlePickerClose = useCallback(() => setActivePicker(null), []);
 
+  const handleReset = () => {
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (elapsedRef.current) {
+      window.clearInterval(elapsedRef.current);
+      elapsedRef.current = null;
+    }
+    setSelectedShotId(null);
+    setMode("t2v");
+    setPrompt("");
+    setNegativePrompt("");
+    setCameraMovement("static");
+    setDuration(5);
+    setSeed("");
+    setAspectRatio("16:9");
+    setResolutionQuality("standard");
+    setFirstFramePath(null);
+    setLastFramePath(null);
+    setRefImagePaths([]);
+    setRefVideoPath(null);
+    setRefAudioPath(null);
+    setEnhancePrompt(false);
+    setSkipContinuity(false);
+    setFreestyleResult(null);
+    setError(null);
+    setStatus("");
+    setGenerating(false);
+    setShowAdvanced(false);
+    setShowPromptHistory(false);
+    setElapsedSeconds(0);
+  };
+
   const handleGenerate = async () => {
+    const stopElapsedTimer = () => {
+      if (elapsedRef.current) {
+        window.clearInterval(elapsedRef.current);
+        elapsedRef.current = null;
+      }
+    };
     if (!prompt.trim()) {
       setError("Prompt is required");
       return;
@@ -335,22 +411,40 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setError(null);
     setStatus("Submitting video generation...");
 
-    // Auto-create a hidden scratch shot if none selected (freestyle generation)
+    // Save prompt to history
+    if (prompt.trim()) {
+      setPromptHistory((prev) => {
+        const filtered = prev.filter((p) => p !== prompt.trim());
+        return [prompt.trim(), ...filtered].slice(0, 10);
+      });
+    }
+
+    // Start elapsed timer
+    setElapsedSeconds(0);
+    elapsedRef.current = window.setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
+
+    // Auto-create a scratch shot if none selected.
+    // If a scene is selected, link the shot to it (visible, with continuity).
+    // If no scene, create a hidden freestyle shot.
     let effectiveShotId = selectedShot?.id;
     const isFreestyle = !effectiveShotId;
     if (isFreestyle) {
       try {
+        const scene = selectedSceneId ? scenes.find((s) => s.id === selectedSceneId) : null;
         const scratchShot = await createShot(
           projectId,
-          `Freestyle ${new Date().toLocaleTimeString()}`,
+          scene ? `${scene.name} — Clip ${new Date().toLocaleTimeString()}` : `Freestyle ${new Date().toLocaleTimeString()}`,
           prompt.trim().slice(0, 100),
+          selectedSceneId || undefined, // link to scene if selected
           undefined,
-          undefined,
-          true, // hidden — don't show in storyboard
+          !selectedSceneId, // hidden only if truly freestyle (no scene)
         );
         effectiveShotId = scratchShot.id;
       } catch (e) {
         setError("Failed to create a shot for this video. Try selecting an existing shot.");
+        stopElapsedTimer();
         setGenerating(false);
         return;
       }
@@ -372,7 +466,10 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       reference_audio_path: (mode === "ia2v" || mode === "r2v") ? (refAudioPath || undefined) : undefined,
       camera_movement: { preset: cameraMovement, intensity: 1.0 },
       aspect_ratio: aspectRatio,
-      extra_params: mode === "ia2v" ? { enhance_prompt: enhancePrompt } : undefined,
+      extra_params: {
+        ...(mode === "ia2v" ? { enhance_prompt: enhancePrompt } : {}),
+        megapixels: RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
+      },
       skip_continuity: skipContinuity,
     };
 
@@ -380,8 +477,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       const resp = await generateShotVideo(req);
       if (resp.status === "failed") {
         setError(resp.error_message || "Failed to start generation");
+        stopElapsedTimer();
         setGenerating(false);
         return;
+      }
+
+      if (resp.continuity_warning) {
+        setError(resp.continuity_warning);
       }
 
       setStatus("Generating video...");
@@ -397,6 +499,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               pollRef.current = null;
             }
             setStatus("Take generated!");
+            stopElapsedTimer();
             setGenerating(false);
 
             if (isFreestyle) {
@@ -435,6 +538,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               pollRef.current = null;
             }
             setError(st.error_message || "Generation failed");
+            stopElapsedTimer();
             setGenerating(false);
           } else {
             setStatus(`Status: ${st.status}...`);
@@ -448,15 +552,30 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               pollRef.current = null;
             }
             setError("Lost connection to backend while polling. The video may still be generating — refresh later.");
+            stopElapsedTimer();
             setGenerating(false);
           }
         }
       }, 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate");
+      stopElapsedTimer();
       setGenerating(false);
     }
   };
+
+  // Ctrl+Enter to generate
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !generating && prompt.trim()) {
+        e.preventDefault();
+        handleGenerate();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generating, prompt]);
 
   const handleSelectTake = async (takeId: string) => {
     if (!selectedShot) return;
@@ -467,6 +586,25 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       useStudioStore.getState().setShots(fresh);
     } catch (err) {
       console.error("Failed to select take:", err);
+    }
+  };
+
+  const handleDeleteTake = async (takeId: string) => {
+    if (!selectedShot) return;
+    try {
+      await deleteVideoTake(projectId, selectedShot.id, takeId);
+      const fresh = await fetchShots(projectId);
+      useStudioStore.getState().setShots(fresh);
+    } catch (err) {
+      console.error("Failed to delete take:", err);
+      const msg = err instanceof Error ? err.message : "Failed to delete take";
+      if (msg.includes("404")) {
+        setError("Shot or take not found — server may have reloaded. Refreshing shots...");
+        const fresh = await fetchShots(projectId);
+        useStudioStore.getState().setShots(fresh);
+      } else {
+        setError(msg);
+      }
     }
   };
 
@@ -483,16 +621,45 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       return Math.max(max, c.startTime + d);
     }, 0);
 
+    const groupId = `grp_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const dur = typeof durationSec === "number" ? durationSec : null;
+
     addTimelineClip("video", {
       sourceType: "shot",
       sourceId: selectedShot.id,
       name: `${selectedShot.name} (Take ${take.id})`,
       sourceUrl: url,
       trimInSeconds: 0,
-      trimOutSeconds: typeof durationSec === "number" ? durationSec : null,
+      trimOutSeconds: dur,
       startTime,
-      mediaDurationSeconds: typeof durationSec === "number" ? durationSec : null,
+      mediaDurationSeconds: dur,
+      groupId,
     });
+
+    // Also add audio clip so the video's audio is visible on an audio track
+    const audioTracksList = timeline.audioTracks ?? [];
+    const emptyTrack = audioTracksList.find((t) => (t.clips ?? []).length === 0);
+    let targetAudioTrackId = emptyTrack?.id ?? null;
+    if (!targetAudioTrackId) {
+      const nextIdx = audioTracksList.reduce((max, t) => {
+        const m = /^a(\d+)$/.exec(t.id);
+        const n = m ? Number(m[1]) : 0;
+        return Number.isFinite(n) ? Math.max(max, n) : max;
+      }, 0) + 1;
+      targetAudioTrackId = `a${nextIdx}`;
+      addAudioTrack();
+    }
+    addTimelineClip("audio", {
+      sourceType: "shot",
+      sourceId: selectedShot.id,
+      name: `${selectedShot.name} (Take ${take.id}) (Audio)`,
+      sourceUrl: url,
+      trimInSeconds: 0,
+      trimOutSeconds: dur,
+      startTime,
+      mediaDurationSeconds: dur,
+      groupId,
+    }, targetAudioTrackId);
   };
 
   // Available modes for current model
@@ -510,20 +677,20 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto p-6">
+      <div className="max-w-3xl mx-auto p-4">
         {/* ===== Header — shot info or freestyle banner ===== */}
-        <div className="flex items-start gap-4 mb-6">
-          <div className="w-20 h-20 rounded-xl overflow-hidden bg-studio-panel border border-studio-border shrink-0">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-12 h-12 rounded-lg overflow-hidden bg-studio-panel border border-studio-border shrink-0">
             {selectedShot?.frame_image_path ? (
               <img src={selectedShot.frame_image_path} alt="" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
-                <Camera className="w-8 h-8 text-studio-accent/40" />
+                <Camera className="w-5 h-5 text-studio-accent/40" />
               </div>
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-lg font-semibold text-studio-text truncate">
+            <h1 className="text-sm font-semibold text-studio-text truncate">
               {selectedShot ? selectedShot.name : "Freestyle Generation"}
             </h1>
             {selectedShot ? (
@@ -547,7 +714,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         </div>
 
         {/* ===== Mode Tabs ===== */}
-        <div className="flex gap-1 mb-5 p-1 bg-studio-panel rounded-xl border border-studio-border">
+        <div className="flex gap-1 mb-3 p-0.5 bg-studio-panel rounded-lg border border-studio-border">
           {availableModes.map((m) => {
             const Icon = m.icon;
             const isActive = mode === m.id;
@@ -555,13 +722,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               <button
                 key={m.id}
                 onClick={() => handleModeChange(m.id)}
-                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all ${
                   isActive
-                    ? "bg-studio-accent text-white shadow-md shadow-studio-accent/20"
+                    ? "bg-studio-accent text-white shadow-sm shadow-studio-accent/20"
                     : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
                 }`}
               >
-                <Icon className="w-4 h-4" />
+                <Icon className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">{m.label}</span>
                 <span className="sm:hidden">{m.label.split(" ")[0]}</span>
               </button>
@@ -570,19 +737,19 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         </div>
 
         {/* Mode description */}
-        <p className="text-xs text-studio-muted/60 mb-5 text-center">
+        <p className="text-[11px] text-studio-muted/60 mb-3 text-center">
           {MODE_TABS.find((m) => m.id === mode)?.desc}
         </p>
 
         {/* ===== Model Selector ===== */}
-        <div className="mb-5">
-          <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
+        <div className="mb-3">
+          <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
             Video Model
           </label>
           <select
             value={selectedModelId}
             onChange={(e) => setSelectedModelId(e.target.value)}
-            className="w-full bg-studio-panel border border-studio-border rounded-xl px-3 py-2.5 text-sm text-studio-text focus:outline-none focus:border-studio-accent"
+            className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
           >
             {videoDrivers.map((d: any) => (
               <option key={d.driver_id} value={d.driver_id}>
@@ -590,12 +757,33 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               </option>
             ))}
           </select>
+          {/* Model capability badges */}
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            <span className="px-2 py-0.5 text-[10px] rounded-full bg-studio-border/50 text-studio-muted">
+              Max {caps.maxDuration}s
+            </span>
+            {caps.supportsNegativePrompt && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-studio-border/50 text-studio-muted">Neg Prompt</span>
+            )}
+            {caps.supportsCameraControl && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-studio-border/50 text-studio-muted">Camera Ctrl</span>
+            )}
+            {caps.supportsReferenceVideo && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-studio-border/50 text-studio-muted">Ref Video</span>
+            )}
+            {caps.supportsReferenceAudio && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-studio-border/50 text-studio-muted">Ref Audio</span>
+            )}
+            {caps.supportsPromptEnhance && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-studio-border/50 text-studio-muted">Prompt Enhance</span>
+            )}
+          </div>
         </div>
 
         {/* ===== Reference Slots (mode-dependent) ===== */}
         {mode !== "t2v" && (
-          <div className="mb-5 space-y-2">
-            <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
+          <div className="mb-3 space-y-1.5">
+            <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
               {mode === "i2v" ? "Frames" : mode === "ia2v" ? "Image + Audio" : "References"}
             </label>
 
@@ -728,17 +916,61 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         )}
 
         {/* ===== Prompt ===== */}
-        <div className="mb-4">
-          <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
-            Prompt
-          </label>
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
+              Prompt
+            </label>
+            <div className="flex items-center gap-2">
+              {promptHistory.length > 0 && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowPromptHistory(!showPromptHistory)}
+                    className="text-[10px] text-studio-muted hover:text-studio-accent transition-colors flex items-center gap-1"
+                  >
+                    <Clock className="w-3 h-3" />
+                    History
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                  {showPromptHistory && (
+                    <div className="absolute right-0 top-full mt-1 z-20 w-80 max-h-60 overflow-y-auto bg-studio-panel border border-studio-border rounded-xl shadow-xl">
+                      {promptHistory.map((p, i) => (
+                        <button
+                          key={i}
+                          onClick={() => { setPrompt(p); setShowPromptHistory(false); }}
+                          className="w-full text-left px-3 py-2 text-xs text-studio-text hover:bg-studio-border/40 transition-colors border-b border-studio-border/30 last:border-0"
+                        >
+                          <p className="truncate">{p}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <span className={`text-[10px] ${prompt.length > 500 ? "text-studio-danger" : "text-studio-muted/50"}`}>
+                {prompt.length} chars
+              </span>
+            </div>
+          </div>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Describe the video motion, scene, and action..."
-            rows={4}
-            className="w-full bg-studio-panel border border-studio-border rounded-xl px-3 py-2.5 text-sm text-studio-text focus:outline-none focus:border-studio-accent resize-none"
+            rows={3}
+            className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-2 text-xs text-studio-text focus:outline-none focus:border-studio-accent resize-none"
           />
+          {/* Prompt presets */}
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {PROMPT_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                onClick={() => setPrompt(preset.text)}
+                className="px-2 py-1 text-[10px] rounded-lg bg-studio-panel border border-studio-border text-studio-muted hover:text-studio-accent hover:border-studio-accent/50 transition-all"
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
           {/* Camera movement hint preview */}
           {cameraHint && (
             <p className="text-[11px] text-studio-muted/50 mt-1.5 italic">
@@ -747,31 +979,18 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           )}
         </div>
 
-        {/* ===== Negative Prompt ===== */}
-        <div className="mb-5">
-          <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
-            Negative Prompt <span className="opacity-50">(optional)</span>
-          </label>
-          <input
-            value={negativePrompt}
-            onChange={(e) => setNegativePrompt(e.target.value)}
-            placeholder="What to avoid in the generation..."
-            className="w-full bg-studio-panel border border-studio-border rounded-xl px-3 py-2.5 text-sm text-studio-text focus:outline-none focus:border-studio-accent"
-          />
-        </div>
-
-        {/* ===== Controls Grid ===== */}
-        <div className="mb-6 grid grid-cols-2 gap-4">
+        {/* ===== Controls Grid (Basic) ===== */}
+        <div className="mb-3 grid grid-cols-2 gap-3">
           {/* Camera movement */}
           {caps.supportsCameraControl && (
             <div>
-              <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
+              <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
                 Camera Movement
               </label>
               <select
                 value={cameraMovement}
                 onChange={(e) => setCameraMovement(e.target.value)}
-                className="w-full bg-studio-panel border border-studio-border rounded-xl px-3 py-2.5 text-sm text-studio-text focus:outline-none focus:border-studio-accent"
+                className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
               >
                 {CAMERA_MOVEMENTS.map((m) => (
                   <option key={m.id} value={m.id}>{m.label}</option>
@@ -780,10 +999,10 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             </div>
           )}
 
-          {/* Duration */}
+          {/* Duration with presets */}
           <div className={caps.supportsCameraControl ? "" : "col-span-2"}>
-            <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
-              Duration (seconds) <span className="opacity-50">max {caps.maxDuration}s</span>
+            <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
+              Duration <span className="opacity-50">max {caps.maxDuration}s</span>
             </label>
             <div className="flex items-center gap-3">
               <input
@@ -797,11 +1016,42 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               />
               <span className="text-sm text-studio-text font-medium w-8 text-right">{duration}s</span>
             </div>
+            <div className="flex gap-1.5 mt-1.5">
+              {DURATION_PRESETS.filter((p) => p <= caps.maxDuration).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setDuration(p)}
+                  className={`px-2 py-0.5 text-[10px] rounded-md transition-all ${
+                    duration === p
+                      ? "bg-studio-accent/20 text-studio-accent border border-studio-accent/40"
+                      : "bg-studio-panel border border-studio-border text-studio-muted hover:text-studio-text"
+                  }`}
+                >
+                  {p}s
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Resolution quality */}
+          <div>
+            <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
+              Resolution
+            </label>
+            <select
+              value={resolutionQuality}
+              onChange={(e) => setResolutionQuality(e.target.value)}
+              className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
+            >
+              {RESOLUTION_OPTIONS.map((r) => (
+                <option key={r.id} value={r.id}>{r.label} — {r.desc}</option>
+              ))}
+            </select>
           </div>
 
           {/* Aspect ratio */}
           <div className="col-span-2">
-            <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
+            <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
               Aspect Ratio
             </label>
             <div className="flex gap-1.5">
@@ -830,53 +1080,113 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               })}
             </div>
           </div>
-
-          {/* Seed */}
-          <div>
-            <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider mb-2 block">
-              Seed <span className="opacity-50">(optional)</span>
-            </label>
-            <input
-              value={seed}
-              onChange={(e) => setSeed(e.target.value.replace(/[^0-9]/g, ""))}
-              placeholder="Random"
-              className="w-full bg-studio-panel border border-studio-border rounded-xl px-3 py-2.5 text-sm text-studio-text focus:outline-none focus:border-studio-accent"
-            />
-          </div>
         </div>
 
-        {/* ===== Continuity Toggle ===== */}
-        {mode === "t2v" && (
-          <label className="flex items-center gap-2 mb-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={!skipContinuity}
-              onChange={(e) => setSkipContinuity(!e.target.checked)}
-              className="accent-studio-accent w-4 h-4"
-            />
-            <span className="text-xs text-studio-muted">
-              Auto-continue from previous shot's last frame
-            </span>
-          </label>
-        )}
+        {/* ===== Advanced Settings (collapsible) ===== */}
+        <div className="mb-3">
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider hover:text-studio-text transition-colors"
+          >
+            <Settings className="w-3 h-3" />
+            Advanced Settings
+            <ChevronDown className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
+          </button>
+          {showAdvanced && (
+            <div className="mt-2 space-y-3 p-3 bg-studio-panel/50 rounded-lg border border-studio-border/50">
+              {/* Negative Prompt */}
+              {caps.supportsNegativePrompt && (
+                <div>
+                  <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
+                    Negative Prompt <span className="opacity-50">(optional)</span>
+                  </label>
+                  <input
+                    value={negativePrompt}
+                    onChange={(e) => setNegativePrompt(e.target.value)}
+                    placeholder="What to avoid in the generation..."
+                    className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
+                  />
+                </div>
+              )}
 
-        {/* ===== Generate Button ===== */}
-        <button
-          onClick={handleGenerate}
-          disabled={generating || !prompt.trim()}
-          className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-all hover:scale-[1.01] shadow-lg shadow-studio-accent/20"
-        >
-          {generating ? (
-            <Loader2 className="w-5 h-5 animate-spin" />
-          ) : (
-            <Wand2 className="w-5 h-5" />
+              {/* Seed */}
+              <div>
+                <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
+                  Seed <span className="opacity-50">(optional)</span>
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    value={seed}
+                    onChange={(e) => setSeed(e.target.value.replace(/[^0-9]/g, ""))}
+                    placeholder="Random"
+                    className="flex-1 bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
+                  />
+                  <button
+                    onClick={() => setSeed(String(Math.floor(Math.random() * 999999999)))}
+                    className="px-2 rounded-lg bg-studio-panel border border-studio-border hover:border-studio-accent text-studio-muted hover:text-studio-accent transition-colors"
+                    title="Randomize seed"
+                  >
+                    <Dices className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Continuity Toggle */}
+              {mode === "t2v" && (
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!skipContinuity}
+                    onChange={(e) => setSkipContinuity(!e.target.checked)}
+                    className="accent-studio-accent w-4 h-4"
+                  />
+                  <span className="text-xs text-studio-muted">
+                    Auto-continue from previous shot's last frame
+                  </span>
+                </label>
+              )}
+            </div>
           )}
-          {generating ? status : "Generate Take"}
-        </button>
+        </div>
+
+        {/* ===== Generate / Reset Buttons ===== */}
+        <div className="flex gap-2">
+          <button
+            onClick={handleGenerate}
+            disabled={generating || !prompt.trim()}
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs rounded-lg font-medium transition-all hover:scale-[1.01] shadow-md shadow-studio-accent/20"
+          >
+            {generating ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Wand2 className="w-4 h-4" />
+            )}
+            {generating ? (
+              <span className="flex items-center gap-1.5">
+                {status}
+                <span className="text-[10px] opacity-70">({Math.floor(elapsedSeconds / 60)}:{(elapsedSeconds % 60).toString().padStart(2, "0")})</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                Generate Take
+                <kbd className="hidden sm:inline text-[9px] px-1 py-0.5 rounded bg-white/10 border border-white/20">Ctrl+↵</kbd>
+              </span>
+            )}
+          </button>
+          <button
+            onClick={handleReset}
+            disabled={generating}
+            className="flex items-center justify-center gap-1.5 px-3 py-2 bg-studio-panel hover:bg-studio-border disabled:opacity-40 text-studio-muted hover:text-studio-text text-xs rounded-lg font-medium transition-all border border-studio-border"
+            title="Clear all settings"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset
+          </button>
+        </div>
 
         {error && (
-          <div className="mt-4 p-3 bg-studio-danger/10 border border-studio-danger/30 rounded-xl text-sm text-studio-danger flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div className="mt-3 p-2 bg-studio-danger/10 border border-studio-danger/30 rounded-lg text-xs text-studio-danger flex items-start gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             {error}
           </div>
         )}
@@ -923,16 +1233,44 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                     </button>
                   )}
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       setTimelineProjectId(projectId);
+                      const fGroupId = `grp_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                      const fDur = await getMediaDuration(freestyleResult.videoUrl);
+                      const fDurNum = typeof fDur === "number" ? fDur : null;
                       addTimelineClip("video", {
                         sourceType: "upload",
                         sourceId: `freestyle_${Date.now()}`,
                         name: `Freestyle Video`,
                         sourceUrl: freestyleResult.videoUrl,
                         trimInSeconds: 0,
-                        trimOutSeconds: null,
+                        trimOutSeconds: fDurNum,
+                        mediaDurationSeconds: fDurNum,
+                        groupId: fGroupId,
                       });
+                      // Also add audio clip
+                      const aTracks = timeline.audioTracks ?? [];
+                      const emptyA = aTracks.find((t) => (t.clips ?? []).length === 0);
+                      let aTrackId = emptyA?.id ?? null;
+                      if (!aTrackId) {
+                        const nextIdx = aTracks.reduce((max, t) => {
+                          const m = /^a(\d+)$/.exec(t.id);
+                          const n = m ? Number(m[1]) : 0;
+                          return Number.isFinite(n) ? Math.max(max, n) : max;
+                        }, 0) + 1;
+                        aTrackId = `a${nextIdx}`;
+                        addAudioTrack();
+                      }
+                      addTimelineClip("audio", {
+                        sourceType: "upload",
+                        sourceId: `freestyle_${Date.now()}`,
+                        name: `Freestyle Video (Audio)`,
+                        sourceUrl: freestyleResult.videoUrl,
+                        trimInSeconds: 0,
+                        trimOutSeconds: fDurNum,
+                        mediaDurationSeconds: fDurNum,
+                        groupId: fGroupId,
+                      }, aTrackId);
                       setFreestyleResult(null);
                       setStatus("Sent to timeline!");
                     }}
@@ -961,6 +1299,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                   take={take}
                   onSelect={() => handleSelectTake(take.id)}
                   onSendToTimeline={() => handleSendToTimeline(take)}
+                  onDelete={() => handleDeleteTake(take.id)}
                   onContinue={selectedShot.last_frame_path ? () => {
                     handleModeChange("i2v");
                     setFirstFramePath(selectedShot.last_frame_path!);
@@ -1032,35 +1371,35 @@ function RefSlot({
   placeholder: string;
 }) {
   return (
-    <div className="flex items-center gap-3 p-3 bg-studio-panel rounded-xl border border-studio-border">
-      <div className="w-10 h-10 rounded-lg bg-studio-bg flex items-center justify-center shrink-0 overflow-hidden">
+    <div className="flex items-center gap-2 p-2 bg-studio-panel rounded-lg border border-studio-border">
+      <div className="w-8 h-8 rounded-md bg-studio-bg flex items-center justify-center shrink-0 overflow-hidden">
         {type === "image" && value ? (
           <img src={value} alt="" className="w-full h-full object-cover" />
         ) : (
-          <Icon className="w-5 h-5 text-studio-muted" />
+          <Icon className="w-4 h-4 text-studio-muted" />
         )}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium text-studio-text">{label}</p>
+        <p className="text-[11px] font-medium text-studio-text">{label}</p>
         {value ? (
-          <p className="text-xs text-studio-muted truncate mt-0.5">{value.split("/").pop()}</p>
+          <p className="text-[10px] text-studio-muted truncate mt-0.5">{value.split("/").pop()}</p>
         ) : (
-          <p className="text-xs text-studio-muted/50 mt-0.5">{placeholder}</p>
+          <p className="text-[10px] text-studio-muted/50 mt-0.5">{placeholder}</p>
         )}
       </div>
       {value ? (
         <button
           onClick={onClear}
-          className="p-1.5 rounded-lg hover:bg-studio-danger/10 text-studio-muted hover:text-studio-danger transition-all shrink-0"
+          className="p-1 rounded-md hover:bg-studio-danger/10 text-studio-muted hover:text-studio-danger transition-all shrink-0"
         >
-          <X className="w-4 h-4" />
+          <X className="w-3.5 h-3.5" />
         </button>
       ) : (
         <button
           onClick={onPick}
-          className="px-3 py-1.5 rounded-lg bg-studio-accent/10 hover:bg-studio-accent/20 text-studio-accent text-xs font-medium transition-all shrink-0 flex items-center gap-1"
+          className="px-2 py-1 rounded-md bg-studio-accent/10 hover:bg-studio-accent/20 text-studio-accent text-[11px] font-medium transition-all shrink-0 flex items-center gap-1"
         >
-          <Plus className="w-3 h-3" /> Pick
+          <Plus className="w-2.5 h-2.5" /> Pick
         </button>
       )}
     </div>
@@ -1348,14 +1687,17 @@ function TakeCard({
   take,
   onSelect,
   onSendToTimeline,
+  onDelete,
   onContinue,
 }: {
   take: VideoTake;
   onSelect: () => void;
   onSendToTimeline: () => void;
+  onDelete: () => void;
   onContinue?: () => void;
 }) {
   const [showPreview, setShowPreview] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <>
@@ -1416,6 +1758,23 @@ function TakeCard({
                 title="Continue from last frame"
               >
                 <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {confirmDelete ? (
+              <button
+                onClick={() => { onDelete(); setConfirmDelete(false); }}
+                className="px-2 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium flex items-center justify-center gap-1 hover:bg-red-600 transition-colors"
+                title="Confirm delete"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Confirm
+              </button>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="px-2 py-1.5 rounded-lg bg-studio-bg text-studio-muted text-xs font-medium flex items-center justify-center gap-1 hover:bg-red-500/20 hover:text-red-400 transition-colors"
+                title="Delete take"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
           </div>

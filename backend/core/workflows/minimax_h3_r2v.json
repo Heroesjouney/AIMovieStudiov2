@@ -51,10 +51,17 @@
       "sampler_name": "res_multistep"
     }
   },
+  "200": {
+    "class_type": "ModelAttentionBackend",
+    "inputs": {
+      "model": ["127", 0],
+      "attention": "comfy kitchen attention"
+    }
+  },
   "124": {
     "class_type": "BasicScheduler",
     "inputs": {
-      "model": ["127", 0],
+      "model": ["200", 0],
       "scheduler": "simple",
       "steps": 20,
       "denoise": 1
@@ -73,7 +80,7 @@
   "126": {
     "class_type": "BasicGuider",
     "inputs": {
-      "model": ["127", 0],
+      "model": ["200", 0],
       "conditioning": ["136", 0]
     }
   },

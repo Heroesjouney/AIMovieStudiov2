@@ -489,6 +489,7 @@ export interface ShotVideoRequest {
 export interface ShotVideoResponse extends GenerationResponse {
   take_id?: string;
   shot_id?: string;
+  continuity_warning?: string | null;
 }
 
 export async function generateShotVideo(req: ShotVideoRequest): Promise<ShotVideoResponse> {
@@ -533,6 +534,26 @@ export async function checkShotVideoStatus(jobId: string, modelId: string): Prom
 export async function selectVideoTake(projectId: string, shotId: string, takeId: string): Promise<{ status: string; take_id: string; video_clip_path: string }> {
   const params = new URLSearchParams({ project_id: projectId, shot_id: shotId, take_id: takeId });
   const resp = await fetch(`${API_BASE}/shots/video/take/select?${params}`, { method: "POST" });
+  return resp.json();
+}
+
+export async function deleteVideoTake(projectId: string, shotId: string, takeId: string): Promise<{ status: string; take_id: string; remaining_takes: number }> {
+  const params = new URLSearchParams({ project_id: projectId, shot_id: shotId, take_id: takeId });
+  const resp = await fetch(`${API_BASE}/shots/video/take?${params}`, { method: "DELETE" });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Status ${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
+export async function cleanupStaleVideoRefs(projectId: string): Promise<{ status: string; cleaned: number }> {
+  const params = new URLSearchParams({ project_id: projectId });
+  const resp = await fetch(`${API_BASE}/shots/video/cleanup?${params}`, { method: "POST" });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Status ${resp.status}: ${text}`);
+  }
   return resp.json();
 }
 

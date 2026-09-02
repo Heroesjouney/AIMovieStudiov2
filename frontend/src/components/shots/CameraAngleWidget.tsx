@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useMemo, useCallback } from "react";
+import { useRef, useMemo, useCallback, Component, type ReactNode } from "react";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls, Html, Line } from "@react-three/drei";
 import * as THREE from "three";
@@ -21,6 +21,26 @@ interface CameraAngleWidgetProps {
   previousShots?: PreviousShotAngle[];
   actionAxisAngle?: number;
   isPOV?: boolean;
+}
+
+class WebGLErrorBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: ReactNode; fallback: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(err: unknown) {
+    console.warn("[CameraAngleWidget] WebGL failed, showing fallback:", err);
+  }
+  render() {
+    if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
 }
 
 const FLOOR_RADIUS = 2.2;
@@ -514,9 +534,42 @@ export function CameraAngleWidget({
 
   return (
     <div className="w-full h-full rounded-lg overflow-hidden border border-studio-border bg-gradient-to-b from-studio-bg to-studio-panel">
-      <Canvas
+      <WebGLErrorBoundary
+        fallback={
+          <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4">
+            <p className="text-[10px] text-studio-muted text-center">
+              3D preview unavailable (WebGL disabled). Use the sliders below.
+            </p>
+            <div className="flex flex-col gap-2 w-48">
+              <div className="flex items-center gap-2">
+                <label className="text-[9px] text-studio-muted w-8">Horiz</label>
+                <input type="range" min={0} max={360} step={5} value={horizontalAngle}
+                  onChange={(e) => onChange(parseInt(e.target.value), verticalAngle, zoom)}
+                  className="flex-1 accent-studio-accent" />
+                <span className="text-[9px] text-studio-muted w-7 text-right tabular-nums">{horizontalAngle}&deg;</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[9px] text-studio-muted w-8">Vert</label>
+                <input type="range" min={-30} max={60} step={5} value={verticalAngle}
+                  onChange={(e) => onChange(horizontalAngle, parseInt(e.target.value), zoom)}
+                  className="flex-1 accent-studio-accent" />
+                <span className="text-[9px] text-studio-muted w-7 text-right tabular-nums">{verticalAngle}&deg;</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[9px] text-studio-muted w-8">Zoom</label>
+                <input type="range" min={0} max={12} step={0.5} value={zoom}
+                  onChange={(e) => onChange(horizontalAngle, verticalAngle, parseFloat(e.target.value))}
+                  className="flex-1 accent-studio-accent" />
+                <span className="text-[9px] text-studio-muted w-8 text-right tabular-nums">{zoom.toFixed(1)}</span>
+              </div>
+            </div>
+          </div>
+        }
+      >
+        <Canvas
         camera={{ position: [3.5, 3, 3.5], fov: 42 }}
-        dpr={[1, 2]}
+        dpr={[1, 1.5]}
+        gl={{ antialias: false, powerPreference: "default", failIfMajorPerformanceCaveat: false }}
         style={{ background: "transparent" }}
       >
         <ambientLight intensity={0.6} />
@@ -554,6 +607,7 @@ export function CameraAngleWidget({
           target={[0, 0.4, 0]}
         />
       </Canvas>
+      </WebGLErrorBoundary>
     </div>
   );
 }

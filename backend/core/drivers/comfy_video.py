@@ -143,9 +143,58 @@ class ComfyVideoDriver(VideoDriver):
         caps = MODEL_CAPABILITIES.get(self._model_id, {})
         return caps.get("max_duration", 10.0)
 
-    def _resolve_local_path(self, path: str) -> str:
+    def _video_has_audio(self, local_path: str) -> bool:
+        """Check if a video file has an audio stream using ffprobe."""
+        import subprocess, shutil
+        ffprobe = shutil.which("ffprobe") or shutil.which("ffmpeg")
+        if not ffprobe:
+            return True  # assume yes if we can't check
+        try:
+            cmd = [ffprobe, "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", local_path]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            return "audio" in result.stdout.strip().lower()
+        except Exception:
+            return True  # assume yes on error
+
+    def _ensure_audio_track(self, local_path: str) -> str:
+        """If video has no audio stream, create a temp copy with a silent audio track.
+        VHS_LoadVideoPath always extracts audio and crashes if none exists.
+        Returns the path to use (original if it has audio, temp copy if not)."""
+        if self._video_has_audio(local_path):
+            return local_path
+        import subprocess, shutil, tempfile, os
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return local_path  # can't fix it, let VHS handle the error
+        # Create a temp file with silent audio added
+        tmp_dir = tempfile.mkdtemp(prefix="vhs_audio_")
+        basename = os.path.basename(local_path)
+        tmp_path = os.path.join(tmp_dir, f"silent_{basename}")
+        try:
+            cmd = [
+                ffmpeg, "-y", "-i", local_path,
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-c:v", "copy", "-c:a", "aac", "-shortest",
+                tmp_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and os.path.exists(tmp_path):
+                print(f"[ComfyVideoDriver] added silent audio track -> {tmp_path}")
+                return tmp_path
+            else:
+                print(f"[ComfyVideoDriver] ffmpeg failed to add silent audio: {result.stderr[-500:]}")
+                return local_path
+        except Exception as e:
+            print(f"[ComfyVideoDriver] error adding silent audio: {e}")
+            return local_path
+
+    def _resolve_local_path(self, path: str, return_full_path: bool = False) -> str:
         """Resolve a served asset path (e.g. /assets/...) to a filesystem path
-        relative to the Vault, or return as-is if it looks like a ComfyUI input path."""
+        relative to the Vault, or return as-is if it looks like a ComfyUI input path.
+        
+        When return_full_path=True, returns the absolute filesystem path (for nodes
+        like VHS_LoadVideoPath that need full paths). Otherwise returns just the
+        filename (for LoadImage nodes that expect ComfyUI input dir filenames)."""
         if not path:
             return path
         # Already a ComfyUI input filename or absolute path
@@ -156,7 +205,7 @@ class ComfyVideoDriver(VideoDriver):
         rel = path.replace("/assets/", "", 1)
         local = vault / rel
         if local.exists():
-            return local.name
+            return str(local.resolve()) if return_full_path else local.name
         return path
 
     def _build_workflow(self, request: VideoGenerationRequest, upload_map: dict = None) -> dict:
@@ -285,22 +334,25 @@ class ComfyVideoDriver(VideoDriver):
                         if isinstance(conn, list) and len(conn) == 2:
                             nodes_to_remove.add(str(conn[0]))
 
-                # Reference video: ref_videos.ref_video_0 (loaded as IMAGE sequence via VHSLoadVideo)
+                # Reference video: ref_videos.ref_video_0 (loaded as IMAGE sequence via VHS_LoadVideoPath)
                 ref_vid_keys = [k for k in list(inputs.keys()) if k.startswith("ref_videos.ref_video_")]
                 for idx, vk in enumerate(sorted(ref_vid_keys)):
                     if idx == 0 and request.reference_video_path:
-                        # Inject a VHSLoadVideo node to load the reference video as image sequence
-                        # The ref_videos input type is IMAGE (frame batch), so we use VHSLoadVideo
+                        # Inject a VHS_LoadVideoPath node to load the reference video as image sequence
+                        # VHS_LoadVideoPath always extracts audio — ensure the video has an audio track
+                        resolved_video = self._resolve_local_path(request.reference_video_path, return_full_path=True)
+                        safe_video = self._ensure_audio_track(resolved_video)
                         new_node_id = f"ref_vid_{idx}"
                         nodes_to_add[new_node_id] = {
-                            "class_type": "VHSLoadVideo",
+                            "class_type": "VHS_LoadVideoPath",
                             "inputs": {
-                                "video": self._resolve_local_path(request.reference_video_path),
+                                "video": safe_video,
                                 "force_rate": 0,
+                                "custom_width": 0,
+                                "custom_height": 0,
                                 "frame_load_cap": 0,
                                 "skip_first_frames": 0,
                                 "select_every_nth": 1,
-                                "format": "video",
                             }
                         }
                         inputs[vk] = [new_node_id, 0]
@@ -312,10 +364,11 @@ class ComfyVideoDriver(VideoDriver):
                 ref_va_keys = [k for k in list(inputs.keys()) if k.startswith("ref_video_audios.")]
                 for idx, vak in enumerate(sorted(ref_va_keys)):
                     if idx == 0 and request.reference_video_path:
-                        # VHSLoadVideo also outputs audio on slot 1 — reuse the same node
+                        # VHS_LoadVideoPath outputs audio on slot 2 — reuse the same node
+                        # _ensure_audio_track guarantees the video has audio (silent if needed)
                         new_node_id = f"ref_vid_{idx}"
                         if new_node_id in nodes_to_add or new_node_id in wf:
-                            inputs[vak] = [new_node_id, 1]
+                            inputs[vak] = [new_node_id, 2]
                         else:
                             inputs[vak] = None
                     else:
@@ -325,12 +378,15 @@ class ComfyVideoDriver(VideoDriver):
                 ref_aud_keys = [k for k in list(inputs.keys()) if k.startswith("ref_audios.ref_audio_")]
                 for idx, ak in enumerate(sorted(ref_aud_keys)):
                     if idx == 0 and request.reference_audio_path:
-                        # Inject a LoadAudio node for the standalone reference audio
+                        # LoadAudio expects a filename in ComfyUI's input dir, not an absolute path
+                        # Use uploaded filename if available, otherwise fall back to filename only
+                        uploaded = upload_map.get(request.reference_audio_path)
+                        audio_filename = uploaded or self._resolve_local_path(request.reference_audio_path)
                         new_node_id = f"ref_aud_{idx}"
                         nodes_to_add[new_node_id] = {
                             "class_type": "LoadAudio",
                             "inputs": {
-                                "audio": self._resolve_local_path(request.reference_audio_path),
+                                "audio": audio_filename,
                             }
                         }
                         inputs[ak] = [new_node_id, 0]
@@ -405,6 +461,9 @@ class ComfyVideoDriver(VideoDriver):
                 formatted = ar_to_resolution.get(ar_val, "16:9 (Widescreen)")
                 inputs["aspect_ratio"] = formatted
                 inputs["resolution"] = formatted
+                # Allow user to override megapixels via extra_params (resolution quality dropdown)
+                if request.extra_params and "megapixels" in request.extra_params:
+                    inputs["megapixels"] = request.extra_params["megapixels"]
 
             # --- LTX 2.3 FLF2V: seed via RandomNoise ---
             if ct == "RandomNoise":
@@ -482,11 +541,11 @@ class ComfyVideoDriver(VideoDriver):
                 nodes_to_remove.add("114")  # Remove the first_frame LoadImage node
 
             # --- Reference video (motion lock) ---
-            if ct in ("LoadVideo", "LoadVideoUpload", "VHSLoadVideo"):
+            if ct in ("LoadVideo", "LoadVideoUpload", "VHSLoadVideo", "VHS_LoadVideoPath", "VHS_LoadVideo"):
                 vid_val = inputs.get("video", "")
                 if "REF_VIDEO_PLACEHOLDER" in str(vid_val) or "MOTION_VIDEO_PLACEHOLDER" in str(vid_val):
                     if request.reference_video_path:
-                        inputs["video"] = self._resolve_local_path(request.reference_video_path)
+                        inputs["video"] = self._resolve_local_path(request.reference_video_path, return_full_path=(ct == "VHS_LoadVideoPath"))
 
             # --- CreateVideo: ensure fps is always set ---
             if ct == "CreateVideo":
@@ -504,7 +563,8 @@ class ComfyVideoDriver(VideoDriver):
                 aud_val = inputs.get("audio", "")
                 if "REF_AUDIO_PLACEHOLDER" in str(aud_val) or "VOICE_AUDIO_PLACEHOLDER" in str(aud_val):
                     if request.reference_audio_path:
-                        inputs["audio"] = self._resolve_local_path(request.reference_audio_path)
+                        uploaded = upload_map.get(request.reference_audio_path)
+                        inputs["audio"] = uploaded or self._resolve_local_path(request.reference_audio_path)
 
         # Add dynamically injected nodes (e.g. extra LoadImage nodes for 3rd+ ref images)
         wf.update(nodes_to_add)
@@ -543,6 +603,10 @@ class ComfyVideoDriver(VideoDriver):
             local = self._resolve_to_local_abs(ref)
             if local:
                 paths_to_upload[ref] = local
+        if request.reference_audio_path:
+            local = self._resolve_to_local_abs(request.reference_audio_path)
+            if local:
+                paths_to_upload[request.reference_audio_path] = local
         return paths_to_upload
 
     def _resolve_to_local_abs(self, path: str) -> Optional[str]:
