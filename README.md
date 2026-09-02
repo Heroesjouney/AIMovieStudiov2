@@ -6,7 +6,7 @@
 [![React](https://img.shields.io/badge/React-18.3-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![Three.js](https://img.shields.io/badge/Three.js-R3F-000000?logo=three.js&logoColor=white)](https://threejs.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38BDF8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
 
 > A professional, **model-agnostic** AI filmmaking workstation. Plan scenes, generate storyboard frames, manage assets, and orchestrate AI generation through local **ComfyUI** or cloud APIs (**Fal** / **Replicate**).
 >
@@ -349,6 +349,14 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 
 ---
 
-## 📄 License
+## ⚖️ Licensing & Commercial Use
 
-MIT — see [LICENSE](LICENSE).
+This project is open-source and licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**.
+
+### For Individuals and Open-Source Developers:
+You are free to use, modify, and share this software completely for free, provided that any derivative work or hosted service you build with it is also fully open-sourced under the AGPLv3.
+
+### For Commercial Entities & Businesses:
+If you want to use this software, modify it, or embed it into a proprietary commercial product without being forced to open-source your own code, **the AGPLv3 license does not permit this**.
+
+We offer **Commercial Licenses** for enterprise use, white-labeling, and closed-source integrations. Please contact [Your Email/Contact Info] to discuss commercial licensing terms.
