@@ -64,13 +64,69 @@ const RESOLUTION_OPTIONS = [
   { id: "high", label: "High", megapixels: 0.6, desc: "~1080p · Slower · High VRAM" },
 ];
 
-const PROMPT_PRESETS = [
-  { id: "portrait", label: "Portrait Close-Up", text: "Close-up portrait of a character, soft lighting, shallow depth of field, gentle movement" },
-  { id: "landscape", label: "Landscape Pan", text: "Wide landscape shot, slow camera pan, golden hour lighting, atmospheric haze" },
-  { id: "action", label: "Action Scene", text: "Dynamic action scene, fast motion, dramatic lighting, intense atmosphere" },
-  { id: "dialogue", label: "Dialogue Scene", text: "Two characters in conversation, medium shot, natural lighting, subtle expressions" },
-  { id: "aerial", label: "Aerial Reveal", text: "Aerial drone shot revealing the environment, sweeping motion, cinematic scale" },
-  { id: "noir", label: "Film Noir", text: "Moody film noir scene, high contrast shadows, rain-slicked streets, dramatic lighting" },
+const STYLE_OPTIONS = [
+  { value: "", label: "Style: Auto" },
+  { value: "photorealistic, cinematic, realistic photography, natural lighting, film grain", label: "Style: Realistic" },
+  { value: "cinematic film still, dramatic lighting, movie production quality, 35mm film", label: "Style: Cinematic" },
+  { value: "cartoon style, animated, clean lines, vibrant colors, flat shading", label: "Style: Cartoon" },
+  { value: "anime style, cel shading, detailed illustration, studio quality", label: "Style: Anime" },
+  { value: "oil painting, painterly brushstrokes, classical art style, rich textures", label: "Style: Oil Painting" },
+  { value: "digital painting, concept art style, detailed environment art", label: "Style: Concept Art" },
+];
+
+const FRAMING_OPTIONS = [
+  { value: "", label: "Framing: Auto" },
+  { value: "wide shot, full scene visible", label: "Wide" },
+  { value: "medium shot, waist-up framing", label: "Medium" },
+  { value: "close-up on face, head and shoulders", label: "Close-Up" },
+  { value: "extreme close-up, eyes and mouth only", label: "Extreme CU" },
+  { value: "over the shoulder, foreground figure visible", label: "OTS" },
+  { value: "two shot, both characters visible", label: "Two-Shot" },
+  { value: "point of view shot, first person perspective", label: "POV" },
+  { value: "insert shot, extreme close-up detail", label: "Insert" },
+];
+
+const LENS_OPTIONS = [
+  { value: "", label: "Lens: Auto" },
+  { value: "wide angle lens, 24mm, expansive view, slight distortion", label: "Wide 24mm" },
+  { value: "standard lens, 35mm, natural perspective", label: "Standard 35mm" },
+  { value: "normal lens, 50mm, lifelike perspective", label: "Normal 50mm" },
+  { value: "portrait lens, 85mm, shallow depth of field, creamy bokeh", label: "Portrait 85mm" },
+  { value: "telephoto lens, 135mm, compressed perspective, tight framing", label: "Telephoto 135mm" },
+  { value: "macro lens, extreme close-up detail, razor-thin depth of field", label: "Macro" },
+  { value: "anamorphic lens, 2.39:1 squeeze, oval bokeh, horizontal flares", label: "Anamorphic" },
+  { value: "fisheye lens, 180 degree field of view, heavy distortion", label: "Fisheye" },
+];
+
+const LIGHTING_OPTIONS = [
+  { value: "", label: "Lighting: Auto" },
+  { value: "high-key lighting, bright even illumination, minimal shadows, cheerful mood", label: "High-Key" },
+  { value: "low-key lighting, deep shadows, high contrast, dramatic mood, chiaroscuro", label: "Low-Key" },
+  { value: "rembrandt lighting, triangular highlight on cheek, classic portrait lighting", label: "Rembrandt" },
+  { value: "split lighting, one side lit one side dark, inner conflict", label: "Split" },
+  { value: "backlight, rim light, silhouette, glowing edges", label: "Backlight" },
+  { value: "soft diffused lighting, overcast, gentle wraparound light", label: "Soft Diffused" },
+  { value: "hard directional lighting, sharp shadows, intense contrast", label: "Hard Directional" },
+  { value: "golden hour lighting, warm sunset glow, long shadows", label: "Golden Hour" },
+  { value: "blue hour lighting, cool twilight tones, ambient fill", label: "Blue Hour" },
+  { value: "neon lighting, vibrant colored lights, cyberpunk atmosphere", label: "Neon" },
+  { value: "practical lighting, motivated by in-scene sources, lamps and screens", label: "Practical" },
+];
+
+const COMPOSITION_OPTIONS = [
+  { value: "", label: "Composition: Auto" },
+  { value: "rule of thirds, subject placed at top-left intersection point of the thirds grid", label: "Thirds: Top-Left" },
+  { value: "rule of thirds, subject placed at top-right intersection point of the thirds grid", label: "Thirds: Top-Right" },
+  { value: "rule of thirds, subject placed at bottom-left intersection point of the thirds grid", label: "Thirds: Bottom-Left" },
+  { value: "rule of thirds, subject placed at bottom-right intersection point of the thirds grid", label: "Thirds: Bottom-Right" },
+  { value: "rule of thirds, horizon line on lower third, sky dominates upper two thirds", label: "Thirds: Horizon Low" },
+  { value: "rule of thirds, horizon line on upper third, ground dominates lower two thirds", label: "Thirds: Horizon High" },
+  { value: "centered composition, subject placed in center of frame", label: "Centered" },
+  { value: "leading lines composition, converging lines point toward subject", label: "Leading Lines" },
+  { value: "frame within a frame, subject framed through doorway or window", label: "Frame in Frame" },
+  { value: "negative space composition, subject placed at edge with large empty area", label: "Negative Space" },
+  { value: "headroom composition, subject placed lower in frame with space above", label: "Headroom" },
+  { value: "lead room composition, subject placed at frame edge with space in facing direction", label: "Lead Room" },
 ];
 
 const DURATION_PRESETS = [3, 5, 10];
@@ -132,6 +188,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Generation state
   const [selectedModelId, setSelectedModelId] = useState("minimax_h3");
   const [prompt, setPrompt] = useState("");
+  const [artStyle, setArtStyle] = useState("");
+  const [framing, setFraming] = useState("");
+  const [lens, setLens] = useState("");
+  const [lighting, setLighting] = useState("");
+  const [composition, setComposition] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [cameraMovement, setCameraMovement] = useState("static");
   const [duration, setDuration] = useState(5);
@@ -356,6 +417,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setSelectedShotId(null);
     setMode("t2v");
     setPrompt("");
+    setArtStyle("");
+    setFraming("");
+    setLens("");
+    setLighting("");
+    setComposition("");
     setNegativePrompt("");
     setCameraMovement("static");
     setDuration(5);
@@ -453,7 +519,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     const req: ShotVideoRequest = {
       project_id: projectId,
       shot_id: effectiveShotId!,
-      prompt: prompt.trim(),
+      prompt: [artStyle, framing, lens, lighting, composition, prompt.trim()].filter(Boolean).join(". "),
       negative_prompt: negativePrompt.trim() || undefined,
       model_id: selectedModelId,
       mode,
@@ -959,17 +1025,50 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             rows={3}
             className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-2 text-xs text-studio-text focus:outline-none focus:border-studio-accent resize-none"
           />
-          {/* Prompt presets */}
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {PROMPT_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                onClick={() => setPrompt(preset.text)}
-                className="px-2 py-1 text-[10px] rounded-lg bg-studio-panel border border-studio-border text-studio-muted hover:text-studio-accent hover:border-studio-accent/50 transition-all"
-              >
-                {preset.label}
-              </button>
-            ))}
+          {/* Style + Framing + Lens + Lighting + Camera movement dropdowns */}
+          <div className="flex flex-wrap gap-2 mt-2">
+            <select
+              value={artStyle}
+              onChange={(e) => setArtStyle(e.target.value)}
+              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+            >
+              {STYLE_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+            </select>
+            <select
+              value={framing}
+              onChange={(e) => setFraming(e.target.value)}
+              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+            >
+              {FRAMING_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+            </select>
+            <select
+              value={lens}
+              onChange={(e) => setLens(e.target.value)}
+              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+            >
+              {LENS_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+            </select>
+            <select
+              value={lighting}
+              onChange={(e) => setLighting(e.target.value)}
+              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+            >
+              {LIGHTING_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+            </select>
+            <select
+              value={composition}
+              onChange={(e) => setComposition(e.target.value)}
+              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+            >
+              {COMPOSITION_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+            </select>
+            <select
+              value={cameraMovement}
+              onChange={(e) => setCameraMovement(e.target.value)}
+              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+            >
+              {CAMERA_MOVEMENTS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
           </div>
           {/* Camera movement hint preview */}
           {cameraHint && (
@@ -981,26 +1080,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
         {/* ===== Controls Grid (Basic) ===== */}
         <div className="mb-3 grid grid-cols-2 gap-3">
-          {/* Camera movement */}
-          {caps.supportsCameraControl && (
-            <div>
-              <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
-                Camera Movement
-              </label>
-              <select
-                value={cameraMovement}
-                onChange={(e) => setCameraMovement(e.target.value)}
-                className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs text-studio-text focus:outline-none focus:border-studio-accent"
-              >
-                {CAMERA_MOVEMENTS.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
           {/* Duration with presets */}
-          <div className={caps.supportsCameraControl ? "" : "col-span-2"}>
+          <div className="col-span-2">
             <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
               Duration <span className="opacity-50">max {caps.maxDuration}s</span>
             </label>
