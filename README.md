@@ -10,6 +10,8 @@
 
 > A professional, **model-agnostic** AI filmmaking workstation. Plan scenes, generate storyboard frames, manage assets, and orchestrate AI generation through local **ComfyUI** or cloud APIs (**Fal** / **Replicate**).
 
+![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
+
 ---
 
 ## ✨ Features
