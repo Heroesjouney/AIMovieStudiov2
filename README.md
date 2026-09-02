@@ -9,6 +9,8 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 > A professional, **model-agnostic** AI filmmaking workstation. Plan scenes, generate storyboard frames, manage assets, and orchestrate AI generation through local **ComfyUI** or cloud APIs (**Fal** / **Replicate**).
+>
+> ⚠️ **Work in Progress** — This project is under active development. Features may change, and some pipelines are experimental. Expect breaking changes between updates.
 
 ![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
 
@@ -245,13 +247,46 @@ App: **http://localhost:3000**
 
 | Model ID            | Display Name                | Type                          |
 | ------------------- | --------------------------- | ----------------------------- |
-| `z_image`           | Z-Image Turbo (ComfyUI)     | Text-to-image, 9 steps        |
+| `z_image`           | Z-Image (ComfyUI)           | Text-to-image, 9 steps        |
 | `qwen_image`        | Qwen Image (ComfyUI)        | Text-to-image, 20 steps       |
 | `qwen_image_edit`   | Qwen Image Edit (ComfyUI)   | Image-to-image, 4 steps       |
 | `qwen_multiangle`   | Qwen Multiangle (ComfyUI)   | Multi-reference, multi-angle  |
 | `flux2`             | Flux 2 (ComfyUI)            | Text-to-image                 |
 | `flux2_kontext`     | Flux 2 Kontext (ComfyUI)    | Multi-reference storyboard    |
 | `krea2`             | Krea 2 (ComfyUI)            | Text-to-image                 |
+| `fal_nano_banana`   | Nano Banana (Fal.ai)        | Text-to-image (cloud)         |
+| `fal_krea`          | Krea (Fal.ai)               | Text-to-image (cloud)         |
+| `fal_flux_dev`      | Flux Dev (Fal.ai)           | Text-to-image (cloud)         |
+| `fal_flux_2`        | Flux 2 (Fal.ai)             | Text-to-image (cloud)         |
+| `replicate_metaai`  | MetaAI (Replicate)          | Text-to-image (cloud)         |
+| `replicate_flux_schnell` | Flux Schnell (Replicate) | Text-to-image (cloud)       |
+| `replicate_sd_xl`   | SDXL (Replicate)            | Text-to-image (cloud)         |
+
+> 💡 Cloud drivers only appear in the dropdown when the corresponding API key is set in `.env`.
+
+---
+
+## 🎬 Available Video Models
+
+| Model ID              | Display Name              | Type                          |
+| --------------------- | ------------------------- | ----------------------------- |
+| `ltx_video_2_3`       | LTX Video 2.3 (ComfyUI)   | T2V, I2V, first-last frame    |
+| `wan_video`           | Wan Video (ComfyUI)       | T2V, I2V, first-last frame    |
+| `minimax_h3`          | MiniMax H3 (ComfyUI)      | T2V, I2V, reference-to-video  |
+| `fal_seedance`        | Seedance v1 (Fal.ai)      | T2V, I2V, camera control      |
+| `fal_seedance_2`      | Seedance 2 (Fal.ai)       | T2V, I2V, camera control      |
+| `fal_seedance_2_5`    | Seedance 2.5 (Fal.ai)     | T2V, I2V, camera control      |
+| `fal_minimax_h3`      | Minimax H3 (Fal.ai)       | T2V, I2V                      |
+
+> 💡 Local video models require ComfyUI with the appropriate custom nodes installed. Cloud models require `FAL_KEY`.
+
+---
+
+## 🔊 Available Audio Models
+
+| Model ID        | Display Name    | Type                          |
+| --------------- | --------------- | ----------------------------- |
+| `fish_speech`   | Fish Speech     | TTS, voice cloning            |
 
 ---
 
