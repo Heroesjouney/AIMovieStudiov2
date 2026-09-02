@@ -15,7 +15,7 @@
 ## ✨ Features
 
 - **🗂️ Project & Asset Vault** — Local JSON-based storage for projects, scenes, shots, cameras, and assets. Ready to migrate to PostgreSQL.
-- **🎬 Storyboard & 2.5D Stage** — A React Three Fiber canvas for blocking shots in 3D space with camera framing.
+- **🎬 Storyboard & 2.5D Stage** — A React Three Fiber canvas for blocking shots in 3D space with camera framing, featuring a 3D camera angle widget with drag-to-position, compass rose, FOV cone, 180° rule visualization, and action axis tracking.
 - **🧠 Script & Continuity Logic** — Parse scripts into shots, maintain visual continuity across scenes, and build a Style Bible.
 - **🔌 The Driver System** — Model-agnostic AI orchestration. Swap between local ComfyUI workflows and cloud providers without touching the UI.
   - **Image:** Z-Image, Qwen Image, Qwen Image Edit, Qwen Multiangle, Flux 2, Flux 2 Kontext, Krea 2
@@ -24,7 +24,10 @@
   - **Audio:** Fish Speech driver
 - **🖼️ Multi-Reference Generation** — Use character/scene reference images to keep continuity across frames.
 - **🎞️ Timeline & Export** — Assemble shots into a timeline and export (XML via Jinja2 templates).
-- **⚡ Real-Time Status** — WebSocket-backed generation status updates.
+- **⚡ Real-Time Status** — WebSocket-backed generation status updates with elapsed timers.
+- **🎛️ Shot Composition Tools** — Cinematic presets library, shot type quick-select, art style & aspect ratio controls, advanced settings (negative prompt, seed, denoise, CFG, steps), and seed randomization.
+- **📸 Multi-Angle & Variations** — Generate multiple camera angles per shot, create prompt variations, and retake failed generations.
+- **🔀 Shot Management** — Drag-and-drop reordering, shot duplication, next/previous navigation, keyboard shortcuts (Ctrl+Enter to generate), and lightbox image viewer.
 
 ---
 
@@ -96,15 +99,34 @@ AI-MovieStudio2/
 │   │   │   ├── project/[id] # Project workspace
 │   │   │   └── projects/    # Project list
 │   │   ├── components/
-│   │   │   ├── studio/      # 3D stage canvas (R3F)
-│   │   │   ├── shots/       # Storyboard + shot detail
-│   │   │   ├── library/     # Asset grid
-│   │   │   ├── camera/      # Camera controls
-│   │   │   ├── timeline/    # Shot timeline
+│   │   │   ├── studio/      # 3D stage canvas (R3F) + inspector
+│   │   │   │   ├── GenerationPanel.tsx
+│   │   │   │   └── InspectorPanel.tsx
+│   │   │   ├── shots/       # Storyboard, shot detail & composition
+│   │   │   │   ├── ShotComposer.tsx       # Main storyboard grid + drag-drop
+│   │   │   │   ├── ShotCreatePanel.tsx    # New shot creation UI
+│   │   │   │   ├── ShotDetail.tsx         # Shot detail with next/prev nav
+│   │   │   │   ├── CameraAngleWidget.tsx  # 3D camera positioning (R3F)
+│   │   │   │   ├── ShotTypeLibrary.tsx    # Cinematic preset quick-select
+│   │   │   │   ├── ScenePanel.tsx         # Scene list sidebar
+│   │   │   │   ├── MultiAnglePanel.tsx    # Multi-angle generation
+│   │   │   │   ├── VariationPanel.tsx     # Prompt variation generation
+│   │   │   │   └── RetakePanel.tsx        # Retake failed generations
+│   │   │   ├── shared/      # Reusable UI components
+│   │   │   │   ├── AssetPicker.tsx        # Asset selection dropdown
+│   │   │   │   ├── ShotFrameLinker.tsx    # Link reference frames to shots
+│   │   │   │   ├── ModelSelector.tsx      # AI model dropdown with grouping
+│   │   │   │   └── Lightbox.tsx           # Fullscreen image viewer
+│   │   │   ├── library/     # Asset grid & detail panel
+│   │   │   ├── camera/      # Camera director (video generation)
+│   │   │   ├── timeline/    # Shot timeline, dialogue & audio
 │   │   │   └── export/      # Export panel
 │   │   └── lib/
-│   │       ├── api.ts       # API client
-│   │       └── store.ts     # Zustand state management
+│   │       ├── api.ts                  # API client
+│   │       ├── store.ts                # Zustand state management
+│   │       ├── useGenerationPolling.ts # Reusable polling hook for async jobs
+│   │       ├── useAuth.ts             # Authentication hook
+│   │       └── cinematicPresets.ts    # Shot type & camera preset definitions
 │   ├── next.config.mjs      # API proxy config
 │   └── package.json
 └── README.md
@@ -205,12 +227,15 @@ App: **http://localhost:3000**
 
 1. Open http://localhost:3000 in your browser.
 2. Create or select a project.
-3. Build scenes and shots in the storyboard.
-4. Block shots on the 2.5D stage and frame the camera.
-5. Generate AI images via the asset panel or shot detail panel.
-6. Select a ComfyUI model driver from the dropdown (Z-Image, Qwen Image, Flux 2, etc.).
-7. Generated images are saved to `backend/assets/generated/` and served at `/assets/generated/`.
-8. Assemble shots on the timeline and export.
+3. Create scenes in the left sidebar — add reference assets (characters, locations, props) to build a scene recipe.
+4. Create shots within a scene. The first shot is auto-established; subsequent shots open the 3D camera angle widget for precise positioning.
+5. Use the 3D widget to drag the camera around the subject, or use the slider controls. The widget shows compass directions, FOV cone, previous shot angles, and 180° rule warnings.
+6. Pick a cinematic preset (establishing, over-shoulder, close-up, POV, etc.) or manually set horizontal/vertical angle and zoom.
+7. Generate AI frames via the shot create panel or regenerate from shot cards. Advanced settings include negative prompt, seed (with randomize button), denoise, CFG, and steps.
+8. In shot detail: generate multi-angle variants, create prompt variations, retake failed generations, and navigate between shots with next/prev buttons.
+9. Drag-and-drop shot cards to reorder. Duplicate shots to experiment with different prompts.
+10. Switch to the Camera Director tab for video generation (text-to-video, image-to-video with camera control).
+11. Assemble shots on the timeline, add dialogue and audio, then export.
 
 ---
 
@@ -261,6 +286,12 @@ Adding a new model = adding a new Driver. No frontend changes required.
 **Frontend can't reach API**
 - Backend must be on port 8001 (configured in `next.config.mjs`).
 - Check http://localhost:8001/health responds.
+
+**3D camera widget not appearing / WebGL error**
+- The 3D widget requires a WebGL context. If it fails, a slider-based fallback is shown automatically.
+- Close other browser tabs using WebGL (maps, games, other dev sessions) — browsers limit concurrent contexts (~16).
+- Enable hardware acceleration in your browser settings and restart.
+- A hard refresh (Ctrl+Shift+R) or fresh tab often fixes context exhaustion from hot reloads.
 
 ---
 
