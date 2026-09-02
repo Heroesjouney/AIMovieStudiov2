@@ -12,26 +12,45 @@
 >
 > ⚠️ **Work in Progress** — This project is under active development. Features may change, and some pipelines are experimental. Expect breaking changes between updates.
 
+### What is this?
+
+AI Movie Studio 2 is a browser-based tool for AI-assisted filmmaking. Think of it as a **virtual film studio** — you design scenes, place cameras, generate storyboard frames with AI, turn them into videos, add dialogue and audio, then export the final timeline.
+
+You don't need to be a developer to use it. If you can use a web browser, you can use AI Movie Studio. The setup below is for developers who want to run it locally or contribute.
+
 ![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
+
+---
+
+## 📋 Table of Contents
+
+- [Features](#-features)
+- [Quick Start](#-quick-start-5-minutes)
+- [How to Use](#-how-to-use)
+- [Available Models](#-available-image-models)
+- [Architecture](#-architecture)
+- [Troubleshooting](#-troubleshooting)
+- [Project History](#-project-history)
+- [Roadmap](#-roadmap)
+- [Licensing](#-licensing--commercial-use)
 
 ---
 
 ## ✨ Features
 
-- **🗂️ Project & Asset Vault** — Local JSON-based storage for projects, scenes, shots, cameras, and assets. Ready to migrate to PostgreSQL.
-- **🎬 Storyboard & 2.5D Stage** — A React Three Fiber canvas for blocking shots in 3D space with camera framing, featuring a 3D camera angle widget with drag-to-position, compass rose, FOV cone, 180° rule visualization, and action axis tracking.
-- **🧠 Script & Continuity Logic** — Parse scripts into shots, maintain visual continuity across scenes, and build a Style Bible.
-- **🔌 The Driver System** — Model-agnostic AI orchestration. Swap between local ComfyUI workflows and cloud providers without touching the UI.
-  - **Image:** Z-Image, Qwen Image, Qwen Image Edit, Qwen Multiangle, Flux 2, Flux 2 Kontext, Krea 2
-  - **Video:** ComfyUI video pipelines + Fal / Replicate drivers
-  - **Camera:** ComfyUI camera control drivers
-  - **Audio:** Fish Speech driver
-- **🖼️ Multi-Reference Generation** — Use character/scene reference images to keep continuity across frames.
-- **🎞️ Timeline & Export** — Assemble shots into a timeline and export (XML via Jinja2 templates).
-- **⚡ Real-Time Status** — WebSocket-backed generation status updates with elapsed timers.
-- **🎛️ Shot Composition Tools** — Cinematic presets library, shot type quick-select, art style & aspect ratio controls, advanced settings (negative prompt, seed, denoise, CFG, steps), and seed randomization.
-- **📸 Multi-Angle & Variations** — Generate multiple camera angles per shot, create prompt variations, and retake failed generations.
-- **🔀 Shot Management** — Drag-and-drop reordering, shot duplication, next/previous navigation, keyboard shortcuts (Ctrl+Enter to generate), and lightbox image viewer.
+- **🗂️ Project & Asset Vault** — All your projects, scenes, shots, and assets are stored locally. No cloud dependency required.
+- **🎬 3D Storyboard** — Place a virtual camera in 3D space and frame your shots visually. Drag to position, see compass directions, FOV cone, and get warnings when you break the 180° rule.
+- **🧠 Continuity System** — Keep characters and locations consistent across frames using reference images.
+- **🔌 Works with Any AI Model** — The "Driver System" lets you swap between local ComfyUI and cloud providers (Fal, Replicate) without changing the UI.
+  - **Image generation:** 7+ local models, 7+ cloud models
+  - **Video generation:** 3 local models, 4 cloud models
+  - **Audio:** Fish Speech for TTS and voice cloning
+- **🖼️ Multi-Reference Generation** — Feed the AI multiple character/scene reference images to maintain visual consistency.
+- **🎞️ Timeline & Export** — Assemble shots into a timeline, add audio, and export to XML for editing in Premiere, DaVinci, etc.
+- **⚡ Live Status** — Watch generation progress in real-time with elapsed timers.
+- **🎛️ Shot Composition Tools** — Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
+- **📸 Multi-Angle & Variations** — Generate alternate camera angles, prompt variations, and retake failed shots.
+- **🔀 Shot Management** — Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
 
 ---
 
@@ -140,106 +159,120 @@ AI-MovieStudio2/
 
 ## ✅ Prerequisites
 
-- **Python 3.10+** with `pip`
-- **Node.js 18+** with `npm`
-- **ComfyUI** running locally (for local image/video generation)
-- **GPU** with CUDA support (recommended for local generation)
+You'll need these installed before setting up the project:
+
+- **[Python 3.10+](https://www.python.org/downloads/)** with `pip`
+- **[Node.js 18+](https://nodejs.org/)** with `npm`
+- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** running locally (for AI image/video generation)
+- **GPU** with CUDA support (recommended for local generation — cloud models work without one)
 
 ---
 
-## 🚀 Setup
+## 🚀 Quick Start (5 minutes)
 
-### 1. Backend
+> **New to this?** Follow these steps in order. You'll need **3 terminal windows** open at the same time.
+
+### Step 1 — Install the Backend
 
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the `backend/` directory (optional — only needed for cloud drivers):
+Create a `.env` file in the `backend/` directory:
 
 ```env
+# Required for local generation
 COMFY_URL=http://127.0.0.1:8188
 
-# Cloud providers (optional)
+# Optional — only needed if using cloud AI models
 FAL_KEY=your_fal_api_key
 REPLICATE_API_TOKEN=your_replicate_token
 ```
 
-### 2. Frontend
+> 💡 Don't have API keys? You can skip the cloud lines and use local ComfyUI only.
+
+### Step 2 — Install the Frontend
 
 ```bash
 cd frontend
 npm install
 ```
 
-### 3. ComfyUI
+### Step 3 — Start ComfyUI
 
-Start ComfyUI separately (default port 8188):
-
-```bash
-cd /path/to/ComfyUI
-python main.py
-```
-
-If you get Flash Attention warnings on non-Ampere GPUs, force SDPA:
-
-```powershell
-# Windows PowerShell
-$env:ATTN_BACKEND="sdpa"
-python main.py
-```
-
----
-
-## ▶️ Running the App
-
-You need **three services** running simultaneously.
-
-### Terminal 1 — ComfyUI
+ComfyUI is the AI engine that generates images and videos. Start it in its own terminal:
 
 ```bash
 cd /path/to/ComfyUI
 python main.py
 ```
 
-### Terminal 2 — Backend (FastAPI)
+> ⚠️ **Flash Attention warning on older GPUs?** Force SDPA mode:
+> ```powershell
+> $env:ATTN_BACKEND="sdpa"  # Windows PowerShell
+> python main.py
+> ```
+
+### Step 4 — Start the Backend
+
+In a second terminal:
 
 ```bash
 cd backend
 python main.py serve --reload
 ```
 
-| URL                              | Description        |
-| -------------------------------- | ------------------ |
-| http://localhost:8001            | API root           |
-| http://localhost:8001/docs       | Interactive API docs |
-| http://localhost:8001/health     | Health check       |
+You should see the API running at http://localhost:8001. Check http://localhost:8001/health to confirm.
 
-### Terminal 3 — Frontend (Next.js)
+### Step 5 — Start the Frontend
+
+In a third terminal:
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-App: **http://localhost:3000**
+Open **http://localhost:3000** in your browser. You're ready to go! 🎬
 
 ---
 
-## 🧭 Usage
+## ▶️ Running the App (Day-to-Day)
 
-1. Open http://localhost:3000 in your browser.
-2. Create or select a project.
-3. Create scenes in the left sidebar — add reference assets (characters, locations, props) to build a scene recipe.
-4. Create shots within a scene. The first shot is auto-established; subsequent shots open the 3D camera angle widget for precise positioning.
-5. Use the 3D widget to drag the camera around the subject, or use the slider controls. The widget shows compass directions, FOV cone, previous shot angles, and 180° rule warnings.
-6. Pick a cinematic preset (establishing, over-shoulder, close-up, POV, etc.) or manually set horizontal/vertical angle and zoom.
-7. Generate AI frames via the shot create panel or regenerate from shot cards. Advanced settings include negative prompt, seed (with randomize button), denoise, CFG, and steps.
-8. In shot detail: generate multi-angle variants, create prompt variations, retake failed generations, and navigate between shots with next/prev buttons.
-9. Drag-and-drop shot cards to reorder. Duplicate shots to experiment with different prompts.
-10. Switch to the Camera Director tab for video generation (text-to-video, image-to-video with camera control).
-11. Assemble shots on the timeline, add dialogue and audio, then export.
+Once everything is installed (see Quick Start above), you just need to start the 3 services each time:
+
+| Terminal | Command | URL |
+| -------- | ------- | --- |
+| 1 — ComfyUI | `python main.py` | http://localhost:8188 |
+| 2 — Backend | `python main.py serve --reload` | http://localhost:8001 |
+| 3 — Frontend | `npm run dev` | http://localhost:3000 |
+
+> 💡 The backend also has an interactive API explorer at http://localhost:8001/docs
+
+---
+
+## 🧭 How to Use
+
+Once the app is running in your browser:
+
+1. **Create a project** — Click "New Project" or select an existing one.
+2. **Build scenes** — In the left sidebar, create scenes and add reference assets (characters, locations, props). These form the "recipe" the AI uses to keep your film consistent.
+3. **Create shots** — Click "New Shot" within a scene. The first shot is auto-established (wide shot). Subsequent shots open the **3D camera widget** where you can:
+   - Drag the camera around the subject in 3D space
+   - Use sliders for precise horizontal/vertical angle and zoom
+   - See compass directions, FOV cone, and previous shot angles
+   - Get warnings if you cross the 180° line
+4. **Pick a preset** — Choose from cinematic presets (establishing, over-shoulder, close-up, POV, etc.) or position the camera manually.
+5. **Generate frames** — Click "Create & Generate" (or press Ctrl+Enter). The AI creates a storyboard frame using your scene's reference images.
+6. **Refine** — Click any shot to open its detail panel where you can:
+   - Generate alternate camera angles
+   - Create prompt variations
+   - Retake failed generations
+   - Navigate between shots with next/prev buttons
+7. **Reorder & duplicate** — Drag shot cards to reorder them. Use the duplicate button to experiment with different prompts.
+8. **Generate video** — Switch to the Camera Director tab to turn frames into video clips (text-to-video or image-to-video with camera movement).
+9. **Assemble & export** — Arrange shots on the timeline, add dialogue and audio, then export to XML for your editing software.
 
 ---
 
@@ -290,9 +323,15 @@ App: **http://localhost:3000**
 
 ---
 
-## 🧩 The Driver System
+## 🧩 How the Driver System Works
 
-The Driver System is the core design principle: **the app is never hard-coded to one model.** Generic Drivers implement a common interface (`base.py`) so the API layer can talk to any provider uniformly.
+The app is **never hard-coded to one AI model**. Instead, it uses "Drivers" — small adapter modules that all speak the same interface. This means you can swap from local ComfyUI to cloud Fal.ai without touching the UI.
+
+```
+Frontend dropdown → Backend API → Driver Registry → ComfyUI / Fal / Replicate
+```
+
+Want to add a new model? Just add a new Driver. No frontend changes needed:
 
 ```python
 # backend/core/drivers/base.py  (conceptual)
@@ -300,8 +339,6 @@ class ImageDriver(ABC):
     @abstractmethod
     async def generate(self, prompt: str, references: list[bytes], **opts) -> bytes: ...
 ```
-
-Adding a new model = adding a new Driver. No frontend changes required.
 
 ---
 
