@@ -332,8 +332,15 @@ Adding a new model = adding a new Driver. No frontend changes required.
 
 ---
 
-## 🗺️ Roadmap
+## � Project History
 
+This project began as an ambitious AI filmmaking tool over a year ago. The original version packed in every feature imaginable — but the interface became cluttered, the workflow was hard to navigate, and the tooling overhead outweighed the creative benefits. Rather than patching the old codebase, I started over from scratch with a clear goal: **a clean, focused UI with a streamlined creative flow.** This is version 2 — simpler, faster, and built around the actual filmmaking workflow rather than a kitchen-sink feature list. Additional tools like inpainting will be added once they fit naturally into the flow.
+
+---
+
+## �🗺️ Roadmap
+
+- [ ] Inpainting & masking tools
 - [ ] PostgreSQL migration for the Vault
 - [ ] Video timeline preview & scrubbing
 - [ ] Voice cloning / lip-sync pipeline
