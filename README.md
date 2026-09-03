@@ -1,5 +1,7 @@
 # 🎬 AI Movie Studio 2
 
+![Cinematic Film Strip](docs/cinematic_film_strip.jpg)
+
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-14.2-000000?logo=next.js&logoColor=white)](https://nextjs.org/)
@@ -19,8 +21,6 @@ AI Movie Studio 2 is a browser-based tool for AI-assisted filmmaking. Think of i
 You don't need to be a developer to use it. If you can use a web browser, you can use AI Movie Studio. The setup below is for developers who want to run it locally or contribute.
 
 ![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
-
-![Cinematic Film Strip](docs/cinematic_film_strip.jpg)
 
 ---
 
