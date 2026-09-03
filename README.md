@@ -20,6 +20,8 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 
 ![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
 
+![Cinematic Film Strip](docs/cinematic_film_strip.jpg)
+
 ---
 
 ## 📋 Table of Contents
