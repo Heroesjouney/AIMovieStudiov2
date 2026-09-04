@@ -26,8 +26,25 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 
 ---
 
+## 🎬 The Story
+
+AI Movie Studio didn't come out of a hackathon. It came out of 25 years on real film sets.
+
+I'm **Nathan McConnell** — a filmmaker, camera assistant, and virtual production specialist based in Atlanta. I started in the business while still in high school, cutting cable commercials at a local production studio, then moved into Turner Broadcasting's creative services department. A detour into computer animation took me to Escape Studios in London, but the pull of the set brought me back to Atlanta, where I spent over 14 years in the camera department — pulling focus, lining up shots, and learning the craft from the ground up on productions like *The Hunger Games: Mockingjay*, *Kill the Messenger*, *What to Expect When You're Expecting*, *The Collection*, and *Emperor*. ([IMDb](https://www.imdb.com/name/nm2468122/))
+
+Today I manage LED volume stages for virtual production and in-camera VFX at SCAD Atlanta, and I run Sandbox Entertainment Company. I teach and mentor filmmakers on both the creative and technical sides of modern production.
+
+### Why this project exists
+
+Filmmaking has always been expensive — prohibitively so for independent creators. For decades, the cost of cameras, lighting, stages, crew, and post-production has acted as a gatekeeper, silencing voices that didn't have access to capital or industry connections. The tools existed, but the system kept them out of reach.
+
+AI filmmaking is changing that. It's not replacing the craft — it's handing the craft back to the people who were locked out of it. A single storyteller with a vision can now plan scenes, generate storyboards, prototype a look, and build a pitch that holds up next to a studio package. **AI Movie Studio 2 is my attempt to build the tool I wish I'd had** — one that treats filmmaking as a craft, not a budget line.
+
+---
+
 ## 📋 Table of Contents
 
+- [The Story](#-the-story)
 - [Features](#-features)
 - [Quick Start](#-quick-start-5-minutes)
 - [How to Use](#-how-to-use)
