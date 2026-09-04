@@ -22,6 +22,8 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 
 ![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
 
+![AI Movie Studio 2 — Camera Director](docs/screenshot2.png)
+
 ---
 
 ## 📋 Table of Contents
