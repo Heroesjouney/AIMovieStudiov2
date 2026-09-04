@@ -32,11 +32,15 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - [Quick Start](#-quick-start-5-minutes)
 - [How to Use](#-how-to-use)
 - [Available Models](#-available-image-models)
+- [Environment Variables](#-environment-variables)
+- [ComfyUI Custom Nodes](#-comfyui-custom-nodes)
 - [Architecture](#-architecture)
 - [Troubleshooting](#-troubleshooting)
+- [FAQ](#-faq)
 - [Project History](#-project-history)
 - [Roadmap](#-roadmap)
 - [Licensing](#-licensing--commercial-use)
+- [Acknowledgments](#-acknowledgments)
 
 ---
 
@@ -169,6 +173,16 @@ You'll need these installed before setting up the project:
 - **[Node.js 18+](https://nodejs.org/)** with `npm`
 - **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** running locally (for AI image/video generation)
 - **GPU** with CUDA support (recommended for local generation — cloud models work without one)
+
+### Hardware Recommendations
+
+| Tier | GPU | VRAM | Use Case |
+| ---- | --- | ---- | -------- |
+| **Minimum** | RTX 3060 / RTX 4060 | 8 GB | Image generation (Z-Image, Qwen), short video clips (LTX, 5s) |
+| **Recommended** | RTX 4070 Ti / RTX 4080 | 12–16 GB | All image models + video (Wan, MiniMax H3), faster iteration |
+| **Enthusiast** | RTX 4090 / RTX 5090 | 24+ GB | Multi-reference video, long clips, batch generation |
+
+> 💡 **No GPU?** You can use cloud-only models (Fal.ai, Replicate) — just set the API keys and skip ComfyUI entirely.
 
 ---
 
@@ -327,6 +341,38 @@ Once the app is running in your browser:
 
 ---
 
+## ⚙️ Environment Variables
+
+All configuration is done through a single `.env` file in the `backend/` directory.
+
+| Variable | Required? | Default | Description |
+| -------- | --------- | ------- | ----------- |
+| `COMFY_URL` | **Yes** (local) | `http://127.0.0.1:8188` | URL of your local ComfyUI instance |
+| `COMFY_OUTPUT_DIR` | No | *(auto-detect)* | Path to ComfyUI's output folder (for reading saved text/metadata) |
+| `FAL_KEY` | No | — | Fal.ai API key. Enables cloud image + video models (Seedance, MiniMax H3, Nano Banana, etc.) |
+| `REPLICATE_API_TOKEN` | No | — | Replicate API token. Enables cloud image models (MetaAI, Flux Schnell, SDXL) + Fish Speech TTS |
+| `FISH_SPEECH_URL` | No | — | URL for a self-hosted Fish Speech instance (alternative to Replicate-hosted TTS) |
+
+> 💡 You only need **one** of the cloud API keys. If you only use local ComfyUI, just set `COMFY_URL` and skip the rest.
+
+---
+
+## 🧩 ComfyUI Custom Nodes
+
+Local video models require specific custom nodes installed in ComfyUI. Here's what you need per model:
+
+| Model | Required Custom Nodes |
+| ----- | --------------------- |
+| **LTX Video 2.3** | [LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) |
+| **Wan Video** | [WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) |
+| **MiniMax H3** | [MiniMax H3 nodes](https://github.com/kijai/ComfyUI-MiniMax) |
+
+**Image models** (Z-Image, Qwen Image, Flux 2, Krea 2) require their respective custom nodes — check the ComfyUI Manager for the latest installations.
+
+> ⚠️ Custom node compatibility changes frequently. If a model fails to load, update the custom node to the latest version via ComfyUI Manager.
+
+---
+
 ## 🧩 How the Driver System Works
 
 The app is **never hard-coded to one AI model**. Instead, it uses "Drivers" — small adapter modules that all speak the same interface. This means you can swap from local ComfyUI to cloud Fal.ai without touching the UI.
@@ -373,13 +419,35 @@ class ImageDriver(ABC):
 
 ---
 
-## � Project History
+## ❓ FAQ
+
+**Do I need a GPU?**
+No. Cloud models (Fal.ai, Replicate) handle generation on their servers. You only need a GPU if you want to run local models via ComfyUI.
+
+**Can I use cloud-only mode without ComfyUI?**
+Yes. Set `FAL_KEY` and/or `REPLICATE_API_TOKEN` in your `.env` and skip starting ComfyUI. Cloud image and video models will appear in the dropdowns automatically.
+
+**Which cloud provider should I choose — Fal or Replicate?**
+Fal.ai offers the best video models (Seedance, MiniMax H3) and is generally faster. Replicate is great for image models (MetaAI, Flux) and hosts Fish Speech for TTS. You can set both keys and use models from either provider.
+
+**Where is my project data stored?**
+All projects, scenes, shots, and assets are stored locally in `backend/assets/` (the "Vault"). No data leaves your machine unless you use cloud generation APIs.
+
+**Can I use this for commercial projects?**
+The software itself is AGPLv3 licensed. For commercial use without open-sourcing your code, see the [Licensing](#-licensing--commercial-use) section. AI-generated content is subject to the terms of whichever model you use — check your provider's usage rights.
+
+**How do I add a new AI model?**
+Add a new Driver in `backend/core/drivers/`. The adapter pattern means no frontend changes are needed — the model appears in the UI automatically once registered.
+
+---
+
+## 🎬 Project History
 
 This project began as an ambitious AI filmmaking tool over a year ago. The original version packed in every feature imaginable — but the interface became cluttered, the workflow was hard to navigate, and the tooling overhead outweighed the creative benefits. Rather than patching the old codebase, I started over from scratch with a clear goal: **a clean, focused UI with a streamlined creative flow.** This is version 2 — simpler, faster, and built around the actual filmmaking workflow rather than a kitchen-sink feature list. Additional tools like inpainting will be added once they fit naturally into the flow.
 
 ---
 
-## �🗺️ Roadmap
+## 🗺️ Roadmap
 
 - [ ] Inpainting & masking tools
 - [ ] PostgreSQL migration for the Vault
@@ -401,3 +469,21 @@ You are free to use, modify, and share this software completely for free, provid
 If you want to use this software, modify it, or embed it into a proprietary commercial product without being forced to open-source your own code, **the AGPLv3 license does not permit this**.
 
 We offer **Commercial Licenses** for enterprise use, white-labeling, and closed-source integrations. Please contact nathan.mcconnell@sandboxentmt.com to discuss commercial licensing terms.
+
+---
+
+## 🙏 Acknowledgments
+
+This project stands on the shoulders of giants:
+
+- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** — The local AI generation engine that powers image and video workflows
+- **[Fal.ai](https://fal.ai/)** — Cloud GPU infrastructure for fast video and image generation
+- **[Replicate](https://replicate.com/)** — Cloud model hosting and API platform
+- **[Fish Speech](https://github.com/fishaudio/fish-speech)** — Open-source TTS and voice cloning
+- **[FastAPI](https://fastapi.tiangela.com/)** — Backend web framework
+- **[Next.js](https://nextjs.org/)** & **[React](https://react.dev/)** — Frontend framework
+- **[React Three Fiber](https://r3f.docs.pmnd.rs/)** — 3D storyboard canvas (Three.js for React)
+- **[Tailwind CSS](https://tailwindcss.com/)** — UI styling
+- **[Zustand](https://github.com/pmndrs/zustand)** — State management
+
+Built with respect for the open-source AI community. 🎬
