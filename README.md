@@ -20,9 +20,9 @@ AI Movie Studio 2 is a browser-based tool for AI-assisted filmmaking. Think of i
 
 You don't need to be a developer to use it. If you can use a web browser, you can use AI Movie Studio. The setup below is for developers who want to run it locally or contribute.
 
-![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
-
 ![AI Movie Studio 2 — Camera Director](docs/screenshot2.png)
+
+![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
 
 ---
 
