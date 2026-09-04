@@ -6,7 +6,7 @@ import {
   fetchAssets, uploadAsset, deleteAsset, getAssetThumbnailUrl,
   listVideoAssets, uploadVideoAsset, deleteVideoAsset, getVideoAssetUrl,
   listAudioFiles, uploadAudioFile, deleteAudioFile, getAudioUrl,
-  listImageAssets, deleteImageAsset,
+  listImageAssets, deleteImageAsset, uploadImageAsset,
   fetchShots, selectVideoTake, deleteVideoTake, cleanupStaleVideoRefs, VideoAsset, AudioFileItem, ShotResponse, VideoTake, ImageAssetItem,
 } from "@/lib/api";
 import {
@@ -298,6 +298,21 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   };
 
   const handleCancelCreateAsset = () => {
+    setPendingImage(null);
+    setPendingImageName("");
+  };
+
+  const handleQuickImageUpload = async () => {
+    if (!pendingImage) return;
+    setUniversalUploading(true);
+    try {
+      await uploadImageAsset(pendingImage, projectId);
+      await loadImageAssets();
+    } catch (err) {
+      console.error("Image upload failed:", err);
+      alert(err instanceof Error ? err.message : "Upload failed");
+    }
+    setUniversalUploading(false);
     setPendingImage(null);
     setPendingImageName("");
   };
@@ -1171,6 +1186,15 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
               >
                 {universalUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                 Create Asset
+              </button>
+              <button
+                onClick={handleQuickImageUpload}
+                disabled={universalUploading}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-studio-panel hover:bg-studio-border disabled:opacity-40 text-studio-text text-xs rounded-lg font-medium transition-all border border-studio-border"
+                title="Upload as simple image (no asset metadata)"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Quick Upload
               </button>
               <button
                 onClick={handleCancelCreateAsset}

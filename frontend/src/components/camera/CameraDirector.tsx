@@ -274,10 +274,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   // When shot changes, auto-fill refs for I2V/R2V modes (only if user hasn't manually picked something)
   useEffect(() => {
-    if (selectedShot?.frame_image_path && (mode === "i2v" || mode === "r2v")) {
-      setFirstFramePath((prev) => prev ?? selectedShot.frame_image_path!);
+    const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
+    if (shotFrame && (mode === "i2v" || mode === "r2v")) {
+      setFirstFramePath((prev) => prev ?? shotFrame);
       if (mode === "r2v") {
-        setRefImagePaths((prev) => prev.length > 0 ? prev : [selectedShot.frame_image_path!]);
+        setRefImagePaths((prev) => prev.length > 0 ? prev : [shotFrame]);
       }
     }
   }, [selectedShot, mode]);
@@ -293,41 +294,63 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       setRefVideoPath(null);
       setRefAudioPath(null);
     } else if (newMode === "i2v") {
+      // Clear T2V-only dropdowns since reference image dictates look
+      setArtStyle("");
+      setFraming("");
+      setLens("");
+      setLighting("");
       setRefImagePaths([]);
       setRefVideoPath(null);
       setRefAudioPath(null);
       // Auto-fill first frame from selected shot
-      if (selectedShot?.frame_image_path) {
-        setFirstFramePath(selectedShot.frame_image_path);
+      const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
+      if (shotFrame) {
+        setFirstFramePath(shotFrame);
       }
     } else if (newMode === "r2v") {
+      // Clear T2V-only dropdowns since reference image dictates look
+      setArtStyle("");
+      setFraming("");
+      setLens("");
+      setLighting("");
       // Auto-fill first reference image from selected shot's storyboard frame
-      if (selectedShot?.frame_image_path) {
-        setFirstFramePath(selectedShot.frame_image_path);
-        setRefImagePaths((prev) => prev.length > 0 ? prev : [selectedShot.frame_image_path!]);
+      const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
+      if (shotFrame) {
+        setFirstFramePath(shotFrame);
+        setRefImagePaths((prev) => prev.length > 0 ? prev : [shotFrame]);
       }
     } else if (newMode === "ia2v") {
+      // Clear T2V-only dropdowns since reference image dictates look
+      setArtStyle("");
+      setFraming("");
+      setLens("");
+      setLighting("");
       // IA2V: needs first frame + audio clip
       setLastFramePath(null);
       setRefImagePaths([]);
       setRefVideoPath(null);
-      if (selectedShot?.frame_image_path) {
-        setFirstFramePath(selectedShot.frame_image_path);
+      const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
+      if (shotFrame) {
+        setFirstFramePath(shotFrame);
       }
     }
   };
 
   // When model changes, filter out unsupported mode
+  // Use handleModeChange so dropdowns/refs are properly cleared
   useEffect(() => {
     if (mode === "r2v" && !caps.supportsR2V) {
-      setMode("i2v");
+      handleModeChange("i2v");
     } else if (mode === "ia2v" && !caps.supportsIA2V) {
-      setMode("i2v");
+      handleModeChange("i2v");
+    } else if (mode === "i2v" && !caps.supportsI2V) {
+      handleModeChange("t2v");
     }
-    if (mode === "i2v" && !caps.supportsI2V) {
-      setMode("t2v");
+    // Clamp duration to new model's max
+    if (duration > caps.maxDuration) {
+      setDuration(caps.maxDuration);
     }
-  }, [selectedModelId]);
+  }, [selectedModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // If selected model isn't in the available list, pick the first one
   useEffect(() => {
@@ -525,12 +548,12 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       mode,
       duration_seconds: duration,
       seed: seed ? parseInt(seed) : undefined,
-      first_frame_path: (mode === "i2v" || mode === "ia2v") ? (firstFramePath || undefined) : undefined,
+      first_frame_path: (mode === "i2v" || mode === "ia2v" || mode === "r2v") ? (firstFramePath || undefined) : undefined,
       last_frame_path: mode === "i2v" ? (lastFramePath || undefined) : undefined,
       reference_image_paths: mode === "r2v" ? refImagePaths : undefined,
-      reference_video_path: refVideoPath || undefined,
+      reference_video_path: mode === "r2v" ? (refVideoPath || undefined) : undefined,
       reference_audio_path: (mode === "ia2v" || mode === "r2v") ? (refAudioPath || undefined) : undefined,
-      camera_movement: { preset: cameraMovement, intensity: 1.0 },
+      camera_movement: caps.supportsCameraControl ? { preset: cameraMovement, intensity: 1.0 } : undefined,
       aspect_ratio: aspectRatio,
       extra_params: {
         ...(mode === "ia2v" ? { enhance_prompt: enhancePrompt } : {}),
@@ -747,8 +770,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         {/* ===== Header — shot info or freestyle banner ===== */}
         <div className="flex items-start gap-3 mb-4">
           <div className="w-12 h-12 rounded-lg overflow-hidden bg-studio-panel border border-studio-border shrink-0">
-            {selectedShot?.frame_image_path ? (
-              <img src={selectedShot.frame_image_path} alt="" className="w-full h-full object-cover" />
+            {(selectedShot?.frame_image_path || selectedShot?.last_frame_path) ? (
+              <img src={selectedShot.frame_image_path || selectedShot.last_frame_path!} alt="" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
                 <Camera className="w-5 h-5 text-studio-accent/40" />
@@ -922,7 +945,18 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               </>
             )}
 
-            {/* R2V mode: Images list (multiple) + Video + Audio */}
+            {/* R2V mode: First Frame + Images list (multiple) + Video + Audio */}
+            {mode === "r2v" && caps.supportsFirstFrame && (
+              <RefSlot
+                label="First Frame"
+                icon={ImageIcon}
+                type="image"
+                value={firstFramePath}
+                onPick={() => setActivePicker("firstFrame")}
+                onClear={() => setFirstFramePath(null)}
+                placeholder="Pick first frame (optional)..."
+              />
+            )}
             {mode === "r2v" && caps.supportsReferenceImages && (
               <div className="space-y-2">
                 {/* Reference images list */}
@@ -1022,39 +1056,47 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Describe the video motion, scene, and action..."
-            rows={3}
-            className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-2 text-xs text-studio-text focus:outline-none focus:border-studio-accent resize-none"
+            rows={6}
+            className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-2 text-xs text-studio-text focus:outline-none focus:border-studio-accent resize-y min-h-[120px]"
           />
-          {/* Style + Framing + Lens + Lighting + Camera movement dropdowns */}
+          {/* Cinematic dropdowns — T2V shows all, I2V/R2V/IA2V only show Composition + Camera Movement */}
           <div className="flex flex-wrap gap-2 mt-2">
-            <select
-              value={artStyle}
-              onChange={(e) => setArtStyle(e.target.value)}
-              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
-            >
-              {STYLE_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
-            </select>
-            <select
-              value={framing}
-              onChange={(e) => setFraming(e.target.value)}
-              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
-            >
-              {FRAMING_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
-            </select>
-            <select
-              value={lens}
-              onChange={(e) => setLens(e.target.value)}
-              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
-            >
-              {LENS_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
-            </select>
-            <select
-              value={lighting}
-              onChange={(e) => setLighting(e.target.value)}
-              className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
-            >
-              {LIGHTING_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
-            </select>
+            {mode === "t2v" && (
+              <select
+                value={artStyle}
+                onChange={(e) => setArtStyle(e.target.value)}
+                className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+              >
+                {STYLE_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+              </select>
+            )}
+            {mode === "t2v" && (
+              <select
+                value={framing}
+                onChange={(e) => setFraming(e.target.value)}
+                className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+              >
+                {FRAMING_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+              </select>
+            )}
+            {mode === "t2v" && (
+              <select
+                value={lens}
+                onChange={(e) => setLens(e.target.value)}
+                className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+              >
+                {LENS_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+              </select>
+            )}
+            {mode === "t2v" && (
+              <select
+                value={lighting}
+                onChange={(e) => setLighting(e.target.value)}
+                className="bg-studio-panel border border-studio-border rounded-lg px-2 py-1 text-[10px] text-studio-text focus:border-studio-accent focus:outline-none"
+              >
+                {LIGHTING_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
+              </select>
+            )}
             <select
               value={composition}
               onChange={(e) => setComposition(e.target.value)}
@@ -1213,7 +1255,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               </div>
 
               {/* Continuity Toggle */}
-              {mode === "t2v" && (
+              {(mode === "t2v" || mode === "i2v") && (
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -1222,7 +1264,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                     className="accent-studio-accent w-4 h-4"
                   />
                   <span className="text-xs text-studio-muted">
-                    Auto-continue from previous shot's last frame
+                    Auto-continue from previous shot's last frame{mode === "i2v" ? " (when no first frame picked)" : ""}
                   </span>
                 </label>
               )}

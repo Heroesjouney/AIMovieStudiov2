@@ -229,6 +229,8 @@ class ComfyVideoDriver(VideoDriver):
         wf = json.loads(json.dumps(workflow))
         caps = MODEL_CAPABILITIES.get(self._model_id, {})
 
+        print(f"[comfy_video] raw prompt from frontend: {request.prompt}")
+
         # Augment prompt with camera movement description
         effective_prompt = request.prompt
         if request.camera_movement and caps.get("supports_camera_control", False):
@@ -243,6 +245,8 @@ class ComfyVideoDriver(VideoDriver):
                 cam_desc += f" at {speed} speed"
             if cam_desc and cam_desc not in effective_prompt:
                 effective_prompt = f"{effective_prompt}, {cam_desc}"
+
+        print(f"[comfy_video] effective prompt (after camera aug): {effective_prompt}")
 
         # Track LoadImage node slots we fill
         ref_image_idx = 0

@@ -194,7 +194,10 @@ async def upload_audio_file(project_id: str, file: UploadFile = File(...)):
     audio_folder.mkdir(parents=True, exist_ok=True)
 
     ext = Path(file.filename).suffix or ".wav"
-    filename = f"audio{ext}"
+    original_name = file.filename or f"audio{ext}"
+    # Sanitize filename — keep original name for display
+    safe_stem = Path(original_name).stem.replace(" ", "_").replace("/", "_").replace("\\", "_")
+    filename = f"{safe_stem}{ext}"
     filepath = audio_folder / filename
     with open(filepath, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -202,7 +205,7 @@ async def upload_audio_file(project_id: str, file: UploadFile = File(...)):
     size = filepath.stat().st_size
     audio_url = f"/assets/{project_id}/audio/{audio_id}/{filename}"
     return {
-        "filename": file.filename or filename,
+        "filename": filename,
         "audio_url": audio_url,
         "size_bytes": size,
     }
@@ -226,12 +229,16 @@ async def list_audio_files(project_id: str):
                         "size_bytes": f.stat().st_size,
                         "modified_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
                     })
+    # Sort by modified time, newest first
+    files.sort(key=lambda x: x["modified_at"], reverse=True)
     return {"project_id": project_id, "files": files}
 
 
 @router.delete("/file/{project_id}/{filename}")
 async def delete_audio_file(project_id: str, filename: str):
     """Delete an audio file from the project."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
     audio_dir = VAULT_DIR / project_id / "audio"
     if not audio_dir.exists():
         raise HTTPException(status_code=404, detail="Audio directory not found")
@@ -243,6 +250,12 @@ async def delete_audio_file(project_id: str, filename: str):
             if target.exists():
                 target.unlink()
                 deleted = True
+                # Clean up empty folder
+                try:
+                    if not any(d.iterdir()):
+                        d.rmdir()
+                except Exception:
+                    pass
                 break
 
     return {"project_id": project_id, "filename": filename, "deleted": deleted}

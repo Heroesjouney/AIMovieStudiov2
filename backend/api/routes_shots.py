@@ -1043,6 +1043,31 @@ def _extract_last_frame(video_path: str, output_path: Path) -> bool:
         return False
 
 
+def _extract_first_frame(video_path: str, output_path: Path) -> bool:
+    """Extract the first frame of a video as a PNG using ffmpeg.
+
+    Returns True on success, False on failure.
+    """
+    import subprocess
+    if video_path.startswith("/assets/"):
+        local = VAULT_DIR / video_path[len("/assets/"):]
+        if not local.exists():
+            return False
+        video_path = str(local)
+    elif not Path(video_path).exists():
+        return False
+
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path,
+             "-frames:v", "1", "-q:v", "2", str(output_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.returncode == 0 and output_path.exists()
+    except Exception:
+        return False
+
+
 @router.post("/video")
 async def generate_shot_video(req: ShotVideoGenerateRequest):
     """Generate a video clip (take) for a shot using the selected video driver.
@@ -1220,6 +1245,15 @@ async def check_video_status(job_id: str, model_id: str = "fal_seedance_2_5"):
                         print(f"[routes_shots] extracted last frame for shot {shot_id}: {shot['last_frame_path']}")
                     else:
                         print(f"[routes_shots] failed to extract last frame for shot {shot_id}")
+
+                    # Extract first frame as storyboard image if shot has no frame_image_path
+                    if not shot.get("frame_image_path"):
+                        first_frame_path = shot_folder / "first_frame.png"
+                        if _extract_first_frame(local_path, first_frame_path):
+                            shot["frame_image_path"] = f"/assets/{project_id}/shots/{shot_id}/first_frame.png"
+                            print(f"[routes_shots] extracted first frame as storyboard image for shot {shot_id}: {shot['frame_image_path']}")
+                        else:
+                            print(f"[routes_shots] failed to extract first frame for shot {shot_id}")
 
                     # Handle retake: splice new segment back into original video
                     if job_info.get("is_retake"):
