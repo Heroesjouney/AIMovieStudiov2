@@ -38,7 +38,9 @@ Today I manage LED volume stages for virtual production and in-camera VFX at SCA
 
 Filmmaking has always been expensive — prohibitively so for independent creators. For decades, the cost of cameras, lighting, stages, crew, and post-production has acted as a gatekeeper, silencing voices that didn't have access to capital or industry connections. The tools existed, but the system kept them out of reach.
 
-AI filmmaking is changing that. It's not replacing the craft — it's handing the craft back to the people who were locked out of it. A single storyteller with a vision can now plan scenes, generate storyboards, prototype a look, and build a pitch that holds up next to a studio package. **AI Movie Studio 2 is my attempt to build the tool I wish I'd had** — one that treats filmmaking as a craft, not a budget line.
+And here's the harder truth I learned on the inside: **talent doesn't guarantee you a seat at the table.** The gatekeepers make the rules — who gets funded, who gets heard, who gets a shot. I've watched brilliant, viable voices get silenced not because their work wasn't good enough, but because they didn't have the right access, the right budget, or the right last name. The system isn't neutral. It was built to filter people out.
+
+AI filmmaking is changing that. It's not replacing the craft — it's handing the craft back to the people who were locked out of it. A single storyteller with a vision can now plan scenes, generate storyboards, prototype a look, and build a pitch that holds up next to a studio package. **AI Movie Studio 2 is my attempt to build the tool I wish I'd had** — one that treats filmmaking as a craft, not a budget line, and one that doesn't ask anyone for permission to make something worth watching.
 
 ---
 
