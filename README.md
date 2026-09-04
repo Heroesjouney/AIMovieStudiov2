@@ -10,19 +10,7 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38BDF8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
 
-> A professional, **model-agnostic** AI filmmaking workstation. Plan scenes, generate storyboard frames, manage assets, and orchestrate AI generation through local **ComfyUI** or cloud APIs (**Fal** / **Replicate**).
->
-> ⚠️ **Work in Progress** - This project is under active development. Features may change, and some pipelines are experimental. Expect breaking changes between updates.
-
-### What is this?
-
-AI Movie Studio 2 is a browser-based tool for AI-assisted filmmaking. Think of it as a **virtual film studio** - you design scenes, place cameras, generate storyboard frames with AI, turn them into videos, add dialogue and audio, then export the final timeline.
-
-You don't need to be a developer to use it. If you can use a web browser, you can use AI Movie Studio. The setup below is for developers who want to run it locally or contribute.
-
-![AI Movie Studio 2 - Camera Director](docs/screenshot2.png)
-
-![AI Movie Studio 2 - Project Workspace](docs/screenshot.png)
+> **Filmmaking is the most powerful storytelling medium we have. For too long, only a few got to play. That changes now.**
 
 ---
 
@@ -34,15 +22,31 @@ I'm **Nathan McConnell** - a filmmaker, camera assistant, and virtual production
 
 Today I manage LED volume stages for virtual production and in-camera VFX at SCAD Atlanta, and I run Sandbox Entertainment Company. I teach and mentor filmmakers on both the creative and technical sides of modern production.
 
-Filmmaking isn't just what I do - it's what I'm drawn to. The craft of it, the collaboration, the moment a frame becomes a feeling. That passion is what drives everything I build, including this project. I'm also developing [**Luminara**](https://luminara-kan0.onrender.com/) - a companion project exploring the next layer of AI-assisted creative workflows. (Source is private for now; the live app is available to try.) I also build tools for the virtual production community, including a [**Real Cine Camera plugin for Unreal Engine 5**](https://www.fab.com/listings/a4efb43c-cf8a-4429-814a-812ccfa8d95e) on Fab, which brings real-world lens behavior and camera settings into UE5.
+### Why I'm building this
 
-### Why this project exists
+I love filmmaking. Not in a casual way - in the way that keeps you up at night thinking about a shot, that makes you notice how light falls on a wall and immediately start framing it, that makes the hum of a set feel like home. The craft of it, the collaboration, the moment a frame becomes a feeling. Every tool I build comes from that place. This project especially.
 
-Filmmaking has always been expensive - prohibitively so for independent creators. For decades, the cost of cameras, lighting, stages, crew, and post-production has acted as a gatekeeper, silencing voices that didn't have access to capital or industry connections. The tools existed, but the system kept them out of reach.
+But here's the thing I can't shake: **filmmaking has always been expensive** - prohibitively so for independent creators. For decades, the cost of cameras, lighting, stages, crew, and post-production has acted as a gatekeeper, silencing voices that didn't have access to capital or industry connections. The tools existed, but the system kept them out of reach.
 
 And here's the harder truth I learned on the inside: **talent doesn't guarantee you a seat at the table.** The gatekeepers make the rules - who gets funded, who gets heard, who gets a shot. I've watched brilliant, viable voices get silenced not because their work wasn't good enough, but because they didn't have the right access, the right budget, or the right last name. The system isn't neutral. It was built to filter people out.
 
 AI filmmaking is changing that. It's not replacing the craft - it's handing the craft back to the people who were locked out of it. A single storyteller with a vision can now plan scenes, generate storyboards, prototype a look, and build a pitch that holds up next to a studio package. **AI Movie Studio 2 is my attempt to build the tool I wish I'd had** - one that treats filmmaking as a craft, not a budget line, and one that doesn't ask anyone for permission to make something worth watching.
+
+I'm also developing [**Luminara**](https://luminara-kan0.onrender.com/) - a companion project exploring the next layer of AI-assisted creative workflows (source is private for now; the live app is available to try). And I build tools for the virtual production community, including a [**Real Cine Camera plugin for Unreal Engine 5**](https://www.fab.com/listings/a4efb43c-cf8a-4429-814a-812ccfa8d95e) on Fab, which brings real-world lens behavior and camera settings into UE5.
+
+---
+
+### What is this?
+
+AI Movie Studio 2 is a browser-based, **model-agnostic** AI filmmaking workstation. You design scenes, place cameras in 3D space, generate storyboard frames with AI, turn them into videos, add dialogue and audio, then export the final timeline. It works with local **ComfyUI** or cloud APIs (**Fal** / **Replicate**).
+
+You don't need to be a developer to use it. If you can use a web browser, you can use AI Movie Studio. The setup below is for developers who want to run it locally or contribute.
+
+> ⚠️ **Work in Progress** - This project is under active development. Features may change, and some pipelines are experimental. Expect breaking changes between updates.
+
+![AI Movie Studio 2 - Camera Director](docs/screenshot2.png)
+
+![AI Movie Studio 2 - Project Workspace](docs/screenshot.png)
 
 ---
 
