@@ -34,7 +34,7 @@ I'm **Nathan McConnell** - a filmmaker, camera assistant, and virtual production
 
 Today I manage LED volume stages for virtual production and in-camera VFX at SCAD Atlanta, and I run Sandbox Entertainment Company. I teach and mentor filmmakers on both the creative and technical sides of modern production.
 
-Filmmaking isn't just what I do - it's what I'm drawn to. The craft of it, the collaboration, the moment a frame becomes a feeling. That passion is what drives everything I build, including this project. I'm also developing [**Luminara**](https://luminara-kan0.onrender.com/) - a companion project exploring the next layer of AI-assisted creative workflows. (Source is private for now; the live app is available to try.)
+Filmmaking isn't just what I do - it's what I'm drawn to. The craft of it, the collaboration, the moment a frame becomes a feeling. That passion is what drives everything I build, including this project. I'm also developing [**Luminara**](https://luminara-kan0.onrender.com/) - a companion project exploring the next layer of AI-assisted creative workflows. (Source is private for now; the live app is available to try.) I also build tools for the virtual production community, including a [**Real Cine Camera plugin for Unreal Engine 5**](https://www.fab.com/listings/a4efb43c-cf8a-4429-814a-812ccfa8d95e) on Fab, which brings real-world lens behavior and camera settings into UE5.
 
 ### Why this project exists
 
