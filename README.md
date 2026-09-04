@@ -12,17 +12,17 @@
 
 > A professional, **model-agnostic** AI filmmaking workstation. Plan scenes, generate storyboard frames, manage assets, and orchestrate AI generation through local **ComfyUI** or cloud APIs (**Fal** / **Replicate**).
 >
-> ⚠️ **Work in Progress** — This project is under active development. Features may change, and some pipelines are experimental. Expect breaking changes between updates.
+> ⚠️ **Work in Progress** - This project is under active development. Features may change, and some pipelines are experimental. Expect breaking changes between updates.
 
 ### What is this?
 
-AI Movie Studio 2 is a browser-based tool for AI-assisted filmmaking. Think of it as a **virtual film studio** — you design scenes, place cameras, generate storyboard frames with AI, turn them into videos, add dialogue and audio, then export the final timeline.
+AI Movie Studio 2 is a browser-based tool for AI-assisted filmmaking. Think of it as a **virtual film studio** - you design scenes, place cameras, generate storyboard frames with AI, turn them into videos, add dialogue and audio, then export the final timeline.
 
 You don't need to be a developer to use it. If you can use a web browser, you can use AI Movie Studio. The setup below is for developers who want to run it locally or contribute.
 
-![AI Movie Studio 2 — Camera Director](docs/screenshot2.png)
+![AI Movie Studio 2 - Camera Director](docs/screenshot2.png)
 
-![AI Movie Studio 2 — Project Workspace](docs/screenshot.png)
+![AI Movie Studio 2 - Project Workspace](docs/screenshot.png)
 
 ---
 
@@ -30,19 +30,19 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 
 AI Movie Studio didn't come out of a hackathon. It came out of 25 years on real film sets.
 
-I'm **Nathan McConnell** — a filmmaker, camera assistant, and virtual production specialist based in Atlanta. I started in the business while still in high school, cutting cable commercials at a local production studio, then moved into Turner Broadcasting's creative services department. A detour into computer animation took me to Escape Studios in London, but the pull of the set brought me back to Atlanta, where I spent over 14 years in the camera department — pulling focus, lining up shots, and learning the craft from the ground up on productions like *The Hunger Games: Mockingjay*, *Kill the Messenger*, *What to Expect When You're Expecting*, *The Collection*, and *Emperor*. ([IMDb](https://www.imdb.com/name/nm2468122/))
+I'm **Nathan McConnell** - a filmmaker, camera assistant, and virtual production specialist based in Atlanta. I started in the business while still in high school, cutting cable commercials at a local production studio, then moved into Turner Broadcasting's creative services department. A detour into computer animation took me to Escape Studios in London, but the pull of the set brought me back to Atlanta, where I spent over 14 years in the camera department - pulling focus, lining up shots, and learning the craft from the ground up on productions like *The Hunger Games: Mockingjay*, *Kill the Messenger*, *What to Expect When You're Expecting*, *The Collection*, and *Emperor*. ([IMDb](https://www.imdb.com/name/nm2468122/))
 
 Today I manage LED volume stages for virtual production and in-camera VFX at SCAD Atlanta, and I run Sandbox Entertainment Company. I teach and mentor filmmakers on both the creative and technical sides of modern production.
 
-Filmmaking isn't just what I do — it's what I'm drawn to. The craft of it, the collaboration, the moment a frame becomes a feeling. That passion is what drives everything I build, including this project. I'm also developing [**Luminara**](https://luminara-kan0.onrender.com/) — a companion project exploring the next layer of AI-assisted creative workflows. (Source is private for now; the live app is available to try.)
+Filmmaking isn't just what I do - it's what I'm drawn to. The craft of it, the collaboration, the moment a frame becomes a feeling. That passion is what drives everything I build, including this project. I'm also developing [**Luminara**](https://luminara-kan0.onrender.com/) - a companion project exploring the next layer of AI-assisted creative workflows. (Source is private for now; the live app is available to try.)
 
 ### Why this project exists
 
-Filmmaking has always been expensive — prohibitively so for independent creators. For decades, the cost of cameras, lighting, stages, crew, and post-production has acted as a gatekeeper, silencing voices that didn't have access to capital or industry connections. The tools existed, but the system kept them out of reach.
+Filmmaking has always been expensive - prohibitively so for independent creators. For decades, the cost of cameras, lighting, stages, crew, and post-production has acted as a gatekeeper, silencing voices that didn't have access to capital or industry connections. The tools existed, but the system kept them out of reach.
 
-And here's the harder truth I learned on the inside: **talent doesn't guarantee you a seat at the table.** The gatekeepers make the rules — who gets funded, who gets heard, who gets a shot. I've watched brilliant, viable voices get silenced not because their work wasn't good enough, but because they didn't have the right access, the right budget, or the right last name. The system isn't neutral. It was built to filter people out.
+And here's the harder truth I learned on the inside: **talent doesn't guarantee you a seat at the table.** The gatekeepers make the rules - who gets funded, who gets heard, who gets a shot. I've watched brilliant, viable voices get silenced not because their work wasn't good enough, but because they didn't have the right access, the right budget, or the right last name. The system isn't neutral. It was built to filter people out.
 
-AI filmmaking is changing that. It's not replacing the craft — it's handing the craft back to the people who were locked out of it. A single storyteller with a vision can now plan scenes, generate storyboards, prototype a look, and build a pitch that holds up next to a studio package. **AI Movie Studio 2 is my attempt to build the tool I wish I'd had** — one that treats filmmaking as a craft, not a budget line, and one that doesn't ask anyone for permission to make something worth watching.
+AI filmmaking is changing that. It's not replacing the craft - it's handing the craft back to the people who were locked out of it. A single storyteller with a vision can now plan scenes, generate storyboards, prototype a look, and build a pitch that holds up next to a studio package. **AI Movie Studio 2 is my attempt to build the tool I wish I'd had** - one that treats filmmaking as a craft, not a budget line, and one that doesn't ask anyone for permission to make something worth watching.
 
 ---
 
@@ -67,19 +67,19 @@ AI filmmaking is changing that. It's not replacing the craft — it's handing th
 
 ## ✨ Features
 
-- **🗂️ Project & Asset Vault** — All your projects, scenes, shots, and assets are stored locally. No cloud dependency required.
-- **🎬 3D Storyboard** — Place a virtual camera in 3D space and frame your shots visually. Drag to position, see compass directions, FOV cone, and get warnings when you break the 180° rule.
-- **🧠 Continuity System** — Keep characters and locations consistent across frames using reference images.
-- **🔌 Works with Any AI Model** — The "Driver System" lets you swap between local ComfyUI and cloud providers (Fal, Replicate) without changing the UI.
+- **🗂️ Project & Asset Vault** - All your projects, scenes, shots, and assets are stored locally. No cloud dependency required.
+- **🎬 3D Storyboard** - Place a virtual camera in 3D space and frame your shots visually. Drag to position, see compass directions, FOV cone, and get warnings when you break the 180° rule.
+- **🧠 Continuity System** - Keep characters and locations consistent across frames using reference images.
+- **🔌 Works with Any AI Model** - The "Driver System" lets you swap between local ComfyUI and cloud providers (Fal, Replicate) without changing the UI.
   - **Image generation:** 7+ local models, 7+ cloud models
   - **Video generation:** 3 local models, 4 cloud models
   - **Audio:** Fish Speech for TTS and voice cloning
-- **🖼️ Multi-Reference Generation** — Feed the AI multiple character/scene reference images to maintain visual consistency.
-- **🎞️ Timeline & Export** — Assemble shots into a timeline, add audio, and export to XML for editing in Premiere, DaVinci, etc.
-- **⚡ Live Status** — Watch generation progress in real-time with elapsed timers.
-- **🎛️ Shot Composition Tools** — Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
-- **📸 Multi-Angle & Variations** — Generate alternate camera angles, prompt variations, and retake failed shots.
-- **🔀 Shot Management** — Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
+- **🖼️ Multi-Reference Generation** - Feed the AI multiple character/scene reference images to maintain visual consistency.
+- **🎞️ Timeline & Export** - Assemble shots into a timeline, add audio, and export to XML for editing in Premiere, DaVinci, etc.
+- **⚡ Live Status** - Watch generation progress in real-time with elapsed timers.
+- **🎛️ Shot Composition Tools** - Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
+- **📸 Multi-Angle & Variations** - Generate alternate camera angles, prompt variations, and retake failed shots.
+- **🔀 Shot Management** - Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
 
 ---
 
@@ -193,7 +193,7 @@ You'll need these installed before setting up the project:
 - **[Python 3.10+](https://www.python.org/downloads/)** with `pip`
 - **[Node.js 18+](https://nodejs.org/)** with `npm`
 - **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** running locally (for AI image/video generation)
-- **GPU** with CUDA support (recommended for local generation — cloud models work without one)
+- **GPU** with CUDA support (recommended for local generation - cloud models work without one)
 
 ### Hardware Recommendations
 
@@ -203,7 +203,7 @@ You'll need these installed before setting up the project:
 | **Recommended** | RTX 4070 Ti / RTX 4080 | 12–16 GB | All image models + video (Wan, MiniMax H3), faster iteration |
 | **Enthusiast** | RTX 4090 / RTX 5090 | 24+ GB | Multi-reference video, long clips, batch generation |
 
-> 💡 **No GPU?** You can use cloud-only models (Fal.ai, Replicate) — just set the API keys and skip ComfyUI entirely.
+> 💡 **No GPU?** You can use cloud-only models (Fal.ai, Replicate) - just set the API keys and skip ComfyUI entirely.
 
 ---
 
@@ -211,7 +211,7 @@ You'll need these installed before setting up the project:
 
 > **New to this?** Follow these steps in order. You'll need **3 terminal windows** open at the same time.
 
-### Step 1 — Install the Backend
+### Step 1 - Install the Backend
 
 ```bash
 cd backend
@@ -224,21 +224,21 @@ Create a `.env` file in the `backend/` directory:
 # Required for local generation
 COMFY_URL=http://127.0.0.1:8188
 
-# Optional — only needed if using cloud AI models
+# Optional - only needed if using cloud AI models
 FAL_KEY=your_fal_api_key
 REPLICATE_API_TOKEN=your_replicate_token
 ```
 
 > 💡 Don't have API keys? You can skip the cloud lines and use local ComfyUI only.
 
-### Step 2 — Install the Frontend
+### Step 2 - Install the Frontend
 
 ```bash
 cd frontend
 npm install
 ```
 
-### Step 3 — Start ComfyUI
+### Step 3 - Start ComfyUI
 
 ComfyUI is the AI engine that generates images and videos. Start it in its own terminal:
 
@@ -253,7 +253,7 @@ python main.py
 > python main.py
 > ```
 
-### Step 4 — Start the Backend
+### Step 4 - Start the Backend
 
 In a second terminal:
 
@@ -264,7 +264,7 @@ python main.py serve --reload
 
 You should see the API running at http://localhost:8001. Check http://localhost:8001/health to confirm.
 
-### Step 5 — Start the Frontend
+### Step 5 - Start the Frontend
 
 In a third terminal:
 
@@ -283,9 +283,9 @@ Once everything is installed (see Quick Start above), you just need to start the
 
 | Terminal | Command | URL |
 | -------- | ------- | --- |
-| 1 — ComfyUI | `python main.py` | http://localhost:8188 |
-| 2 — Backend | `python main.py serve --reload` | http://localhost:8001 |
-| 3 — Frontend | `npm run dev` | http://localhost:3000 |
+| 1 - ComfyUI | `python main.py` | http://localhost:8188 |
+| 2 - Backend | `python main.py serve --reload` | http://localhost:8001 |
+| 3 - Frontend | `npm run dev` | http://localhost:3000 |
 
 > 💡 The backend also has an interactive API explorer at http://localhost:8001/docs
 
@@ -295,23 +295,23 @@ Once everything is installed (see Quick Start above), you just need to start the
 
 Once the app is running in your browser:
 
-1. **Create a project** — Click "New Project" or select an existing one.
-2. **Build scenes** — In the left sidebar, create scenes and add reference assets (characters, locations, props). These form the "recipe" the AI uses to keep your film consistent.
-3. **Create shots** — Click "New Shot" within a scene. The first shot is auto-established (wide shot). Subsequent shots open the **3D camera widget** where you can:
+1. **Create a project** - Click "New Project" or select an existing one.
+2. **Build scenes** - In the left sidebar, create scenes and add reference assets (characters, locations, props). These form the "recipe" the AI uses to keep your film consistent.
+3. **Create shots** - Click "New Shot" within a scene. The first shot is auto-established (wide shot). Subsequent shots open the **3D camera widget** where you can:
    - Drag the camera around the subject in 3D space
    - Use sliders for precise horizontal/vertical angle and zoom
    - See compass directions, FOV cone, and previous shot angles
    - Get warnings if you cross the 180° line
-4. **Pick a preset** — Choose from cinematic presets (establishing, over-shoulder, close-up, POV, etc.) or position the camera manually.
-5. **Generate frames** — Click "Create & Generate" (or press Ctrl+Enter). The AI creates a storyboard frame using your scene's reference images.
-6. **Refine** — Click any shot to open its detail panel where you can:
+4. **Pick a preset** - Choose from cinematic presets (establishing, over-shoulder, close-up, POV, etc.) or position the camera manually.
+5. **Generate frames** - Click "Create & Generate" (or press Ctrl+Enter). The AI creates a storyboard frame using your scene's reference images.
+6. **Refine** - Click any shot to open its detail panel where you can:
    - Generate alternate camera angles
    - Create prompt variations
    - Retake failed generations
    - Navigate between shots with next/prev buttons
-7. **Reorder & duplicate** — Drag shot cards to reorder them. Use the duplicate button to experiment with different prompts.
-8. **Generate video** — Switch to the Camera Director tab to turn frames into video clips (text-to-video or image-to-video with camera movement).
-9. **Assemble & export** — Arrange shots on the timeline, add dialogue and audio, then export to XML for your editing software.
+7. **Reorder & duplicate** - Drag shot cards to reorder them. Use the duplicate button to experiment with different prompts.
+8. **Generate video** - Switch to the Camera Director tab to turn frames into video clips (text-to-video or image-to-video with camera movement).
+9. **Assemble & export** - Arrange shots on the timeline, add dialogue and audio, then export to XML for your editing software.
 
 ---
 
@@ -370,9 +370,9 @@ All configuration is done through a single `.env` file in the `backend/` directo
 | -------- | --------- | ------- | ----------- |
 | `COMFY_URL` | **Yes** (local) | `http://127.0.0.1:8188` | URL of your local ComfyUI instance |
 | `COMFY_OUTPUT_DIR` | No | *(auto-detect)* | Path to ComfyUI's output folder (for reading saved text/metadata) |
-| `FAL_KEY` | No | — | Fal.ai API key. Enables cloud image + video models (Seedance, MiniMax H3, Nano Banana, etc.) |
-| `REPLICATE_API_TOKEN` | No | — | Replicate API token. Enables cloud image models (MetaAI, Flux Schnell, SDXL) + Fish Speech TTS |
-| `FISH_SPEECH_URL` | No | — | URL for a self-hosted Fish Speech instance (alternative to Replicate-hosted TTS) |
+| `FAL_KEY` | No | - | Fal.ai API key. Enables cloud image + video models (Seedance, MiniMax H3, Nano Banana, etc.) |
+| `REPLICATE_API_TOKEN` | No | - | Replicate API token. Enables cloud image models (MetaAI, Flux Schnell, SDXL) + Fish Speech TTS |
+| `FISH_SPEECH_URL` | No | - | URL for a self-hosted Fish Speech instance (alternative to Replicate-hosted TTS) |
 
 > 💡 You only need **one** of the cloud API keys. If you only use local ComfyUI, just set `COMFY_URL` and skip the rest.
 
@@ -388,7 +388,7 @@ Local video models require specific custom nodes installed in ComfyUI. Here's wh
 | **Wan Video** | [WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) |
 | **MiniMax H3** | [MiniMax H3 nodes](https://github.com/kijai/ComfyUI-MiniMax) |
 
-**Image models** (Z-Image, Qwen Image, Flux 2, Krea 2) require their respective custom nodes — check the ComfyUI Manager for the latest installations.
+**Image models** (Z-Image, Qwen Image, Flux 2, Krea 2) require their respective custom nodes - check the ComfyUI Manager for the latest installations.
 
 > ⚠️ Custom node compatibility changes frequently. If a model fails to load, update the custom node to the latest version via ComfyUI Manager.
 
@@ -396,7 +396,7 @@ Local video models require specific custom nodes installed in ComfyUI. Here's wh
 
 ## 🧩 How the Driver System Works
 
-The app is **never hard-coded to one AI model**. Instead, it uses "Drivers" — small adapter modules that all speak the same interface. This means you can swap from local ComfyUI to cloud Fal.ai without touching the UI.
+The app is **never hard-coded to one AI model**. Instead, it uses "Drivers" - small adapter modules that all speak the same interface. This means you can swap from local ComfyUI to cloud Fal.ai without touching the UI.
 
 ```
 Frontend dropdown → Backend API → Driver Registry → ComfyUI / Fal / Replicate
@@ -434,7 +434,7 @@ class ImageDriver(ABC):
 
 **3D camera widget not appearing / WebGL error**
 - The 3D widget requires a WebGL context. If it fails, a slider-based fallback is shown automatically.
-- Close other browser tabs using WebGL (maps, games, other dev sessions) — browsers limit concurrent contexts (~16).
+- Close other browser tabs using WebGL (maps, games, other dev sessions) - browsers limit concurrent contexts (~16).
 - Enable hardware acceleration in your browser settings and restart.
 - A hard refresh (Ctrl+Shift+R) or fresh tab often fixes context exhaustion from hot reloads.
 
@@ -448,23 +448,23 @@ No. Cloud models (Fal.ai, Replicate) handle generation on their servers. You onl
 **Can I use cloud-only mode without ComfyUI?**
 Yes. Set `FAL_KEY` and/or `REPLICATE_API_TOKEN` in your `.env` and skip starting ComfyUI. Cloud image and video models will appear in the dropdowns automatically.
 
-**Which cloud provider should I choose — Fal or Replicate?**
+**Which cloud provider should I choose - Fal or Replicate?**
 Fal.ai offers the best video models (Seedance, MiniMax H3) and is generally faster. Replicate is great for image models (MetaAI, Flux) and hosts Fish Speech for TTS. You can set both keys and use models from either provider.
 
 **Where is my project data stored?**
 All projects, scenes, shots, and assets are stored locally in `backend/assets/` (the "Vault"). No data leaves your machine unless you use cloud generation APIs.
 
 **Can I use this for commercial projects?**
-The software itself is AGPLv3 licensed. For commercial use without open-sourcing your code, see the [Licensing](#-licensing--commercial-use) section. AI-generated content is subject to the terms of whichever model you use — check your provider's usage rights.
+The software itself is AGPLv3 licensed. For commercial use without open-sourcing your code, see the [Licensing](#-licensing--commercial-use) section. AI-generated content is subject to the terms of whichever model you use - check your provider's usage rights.
 
 **How do I add a new AI model?**
-Add a new Driver in `backend/core/drivers/`. The adapter pattern means no frontend changes are needed — the model appears in the UI automatically once registered.
+Add a new Driver in `backend/core/drivers/`. The adapter pattern means no frontend changes are needed - the model appears in the UI automatically once registered.
 
 ---
 
 ## 🎬 Project History
 
-This project began as an ambitious AI filmmaking tool over a year ago. The original version packed in every feature imaginable — but the interface became cluttered, the workflow was hard to navigate, and the tooling overhead outweighed the creative benefits. Rather than patching the old codebase, I started over from scratch with a clear goal: **a clean, focused UI with a streamlined creative flow.** This is version 2 — simpler, faster, and built around the actual filmmaking workflow rather than a kitchen-sink feature list. Additional tools like inpainting will be added once they fit naturally into the flow.
+This project began as an ambitious AI filmmaking tool over a year ago. The original version packed in every feature imaginable - but the interface became cluttered, the workflow was hard to navigate, and the tooling overhead outweighed the creative benefits. Rather than patching the old codebase, I started over from scratch with a clear goal: **a clean, focused UI with a streamlined creative flow.** This is version 2 - simpler, faster, and built around the actual filmmaking workflow rather than a kitchen-sink feature list. Additional tools like inpainting will be added once they fit naturally into the flow.
 
 ---
 
@@ -497,14 +497,14 @@ We offer **Commercial Licenses** for enterprise use, white-labeling, and closed-
 
 This project stands on the shoulders of giants:
 
-- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** — The local AI generation engine that powers image and video workflows
-- **[Fal.ai](https://fal.ai/)** — Cloud GPU infrastructure for fast video and image generation
-- **[Replicate](https://replicate.com/)** — Cloud model hosting and API platform
-- **[Fish Speech](https://github.com/fishaudio/fish-speech)** — Open-source TTS and voice cloning
-- **[FastAPI](https://fastapi.tiangela.com/)** — Backend web framework
-- **[Next.js](https://nextjs.org/)** & **[React](https://react.dev/)** — Frontend framework
-- **[React Three Fiber](https://r3f.docs.pmnd.rs/)** — 3D storyboard canvas (Three.js for React)
-- **[Tailwind CSS](https://tailwindcss.com/)** — UI styling
-- **[Zustand](https://github.com/pmndrs/zustand)** — State management
+- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** - The local AI generation engine that powers image and video workflows
+- **[Fal.ai](https://fal.ai/)** - Cloud GPU infrastructure for fast video and image generation
+- **[Replicate](https://replicate.com/)** - Cloud model hosting and API platform
+- **[Fish Speech](https://github.com/fishaudio/fish-speech)** - Open-source TTS and voice cloning
+- **[FastAPI](https://fastapi.tiangela.com/)** - Backend web framework
+- **[Next.js](https://nextjs.org/)** & **[React](https://react.dev/)** - Frontend framework
+- **[React Three Fiber](https://r3f.docs.pmnd.rs/)** - 3D storyboard canvas (Three.js for React)
+- **[Tailwind CSS](https://tailwindcss.com/)** - UI styling
+- **[Zustand](https://github.com/pmndrs/zustand)** - State management
 
 Built with respect for the open-source AI community. 🎬
