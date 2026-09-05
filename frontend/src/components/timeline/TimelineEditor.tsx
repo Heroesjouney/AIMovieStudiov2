@@ -47,6 +47,14 @@ interface TimelineEditorProps {
   projectId?: string;
 }
 
+const TIMELINE_FORMATS = [
+  { id: "16:9_1920x1080", label: "16:9", aspectRatio: "16:9", width: 1920, height: 1080 },
+  { id: "9:16_1080x1920", label: "9:16", aspectRatio: "9:16", width: 1080, height: 1920 },
+  { id: "1:1_1080x1080", label: "1:1", aspectRatio: "1:1", width: 1080, height: 1080 },
+  { id: "4:3_1440x1080", label: "4:3", aspectRatio: "4:3", width: 1440, height: 1080 },
+  { id: "2.39:1_1920x804", label: "2.39:1", aspectRatio: "2.39:1", width: 1920, height: 804 },
+];
+
 export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   const {
     timeline,
@@ -72,19 +80,11 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     toggleTrackLock, toggleTrackSolo, toggleTrackMute,
   } = useStudioStore();
 
-  const TIMELINE_FORMATS = [
-    { id: "16:9_1920x1080", label: "16:9", aspectRatio: "16:9", width: 1920, height: 1080 },
-    { id: "9:16_1080x1920", label: "9:16", aspectRatio: "9:16", width: 1080, height: 1920 },
-    { id: "1:1_1080x1080", label: "1:1", aspectRatio: "1:1", width: 1080, height: 1080 },
-    { id: "4:3_1440x1080", label: "4:3", aspectRatio: "4:3", width: 1440, height: 1080 },
-    { id: "2.39:1_1920x804", label: "2.39:1", aspectRatio: "2.39:1", width: 1920, height: 804 },
-  ];
-
   const selectedTimelineFormat = useMemo(() => {
     const w = timeline.format?.width ?? 1920;
     const h = timeline.format?.height ?? 1080;
     return TIMELINE_FORMATS.find((f) => f.width === w && f.height === h) ?? TIMELINE_FORMATS[0];
-  }, [TIMELINE_FORMATS, timeline.format?.height, timeline.format?.width]);
+  }, [timeline.format?.height, timeline.format?.width]);
 
   const SelectedFormatIcon = useMemo(() => {
     const w = selectedTimelineFormat.width;
@@ -146,9 +146,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   // Export presets
   const [exportPreset, setExportPreset] = useState<"source" | "720p" | "1080p" | "4k">("source");
 
-  // Fade handle dragging
-  const [draggingFade, setDraggingFade] = useState<{ clipId: string; type: "in" | "out"; startX: number; startVal: number } | null>(null);
-
   // Clip properties panel
   const [showPropertiesPanel, setShowPropertiesPanel] = useState(false);
 
@@ -174,7 +171,15 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   >(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const fullscreenVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
+  const togglePlaySequenceRef = useRef<() => void>(() => {});
+  const seekToTimelineTimeRef = useRef<(t: number) => void>(() => {});
+  const playheadSecondsRef = useRef(0);
+  const lastScrubClipIdRef = useRef<string | null>(null);
+  const lastScrubPreviewModeRef = useRef<string | null>(null);
+  const lastScrubPreviewUrlRef = useRef<string | null>(null);
+  const lastSeekTimeRef = useRef<number | null>(null);
   const dissolveNextVideoRef = useRef<HTMLVideoElement | null>(null);
   const dissolvePrevVideoRef = useRef<HTMLVideoElement | null>(null);
   const dissolveNextAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -186,6 +191,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   const timelineCanvasRef = useRef<HTMLDivElement | null>(null);
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
   const hasLoadedTimelineRef = useRef(false);
+  const skipNextSaveRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
   const imagePlaybackTimerRef = useRef<number | null>(null);
   const dragLastClientXRef = useRef<number | null>(null);
@@ -225,6 +231,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       try {
         const loaded = await getTimeline(projectId);
         if (cancelled) return;
+        skipNextSaveRef.current = true;
         hydrateTimeline(loaded as any);
         hasLoadedTimelineRef.current = true;
       } catch (e) {
@@ -242,6 +249,10 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   useEffect(() => {
     if (!hasLoadedTimelineRef.current) return;
     if (timeline.projectId !== projectId) return;
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
 
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
@@ -524,8 +535,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       tRelSeconds: tRel,
       cutTimeSeconds: cutTime,
     };
-
-    return null;
   }, [audioTracks, defaultClipSeconds, playheadSeconds, v1?.clips, videoLayout]);
 
   const nextOverlay = dissolveOverlay?.next ?? null;
@@ -649,26 +658,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     [a1?.clips, v1?.clips]
   );
 
-  const reorderClip = useCallback(
-    (type: "video" | "audio", clipId: string, toIndex: number) => {
-      const clips = getTrackClips(type);
-      const fromIndex = clips.findIndex((c) => c.id === clipId);
-      if (fromIndex < 0 || toIndex < 0 || toIndex >= clips.length) return;
-
-      if (fromIndex === toIndex) return;
-      if (fromIndex < toIndex) {
-        for (let i = fromIndex; i < toIndex; i += 1) {
-          moveTimelineClip(type, clipId, "down");
-        }
-      } else {
-        for (let i = fromIndex; i > toIndex; i -= 1) {
-          moveTimelineClip(type, clipId, "up");
-        }
-      }
-    },
-    [getTrackClips, moveTimelineClip]
-  );
-
   const getDropIndex = useCallback(
     (type: "video" | "audio", clipId: string, dropTimeSeconds: number) => {
       const layout = type === "video" ? videoLayout : audioLayout;
@@ -762,7 +751,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
   const stopPlayback = useCallback(() => {
     if (imagePlaybackTimerRef.current) {
-      window.clearInterval(imagePlaybackTimerRef.current);
+      cancelAnimationFrame(imagePlaybackTimerRef.current);
       imagePlaybackTimerRef.current = null;
     }
     if (videoRef.current) {
@@ -784,10 +773,12 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   }, []);
 
   const audioTrackById = useMemo(() => {
-    const map = new Map<string, { clips: typeof audioTracks[0]["clips"]; layout: typeof audioLayouts[0]["layout"] }>();
+    const map = new Map<string, { clips: typeof audioTracks[0]["clips"]; clipMap: Map<string, typeof audioTracks[0]["clips"][0]>; layout: typeof audioLayouts[0]["layout"] }>();
     for (const t of audioTracks) {
       const layout = audioLayouts.find((l) => l.trackId === t.id)?.layout ?? [];
-      map.set(t.id, { clips: t.clips, layout });
+      const clipMap = new Map<string, typeof audioTracks[0]["clips"][0]>();
+      for (const c of t.clips) clipMap.set(c.id, c);
+      map.set(t.id, { clips: t.clips, clipMap, layout });
     }
     return map;
   }, [audioLayouts, audioTracks]);
@@ -796,11 +787,20 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     (trackId: string, timeSeconds: number): { clip: any; layout: any } | null => {
       const info = audioTrackById.get(trackId);
       if (!info) return null;
-      const { clips, layout } = info;
-      for (const l of layout) {
-        if (timeSeconds >= l.start && timeSeconds < l.end) {
-          const clip = clips.find((c) => c.id === l.id);
+      const { clipMap, layout } = info;
+      // Binary search for the clip containing timeSeconds (layout is sorted by start)
+      let lo = 0, hi = layout.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const l = layout[mid];
+        if (timeSeconds < l.start) {
+          hi = mid - 1;
+        } else if (timeSeconds >= l.end) {
+          lo = mid + 1;
+        } else {
+          const clip = clipMap.get(l.id);
           if (clip) return { clip, layout: l };
+          return null;
         }
       }
       return null;
@@ -1067,7 +1067,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       // Spacebar play/pause
       if (e.key === " " && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        togglePlaySequence();
+        togglePlaySequenceRef.current();
         return;
       }
       // Copy/Paste
@@ -1107,17 +1107,17 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       // J/K/L transport
       if (e.key === "j" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        seekToTimelineTime(Math.max(0, playheadSeconds - 5));
+        seekToTimelineTimeRef.current(Math.max(0, playheadSecondsRef.current - 5));
         return;
       }
       if (e.key === "l" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        seekToTimelineTime(Math.min(totalSeconds, playheadSeconds + 5));
+        seekToTimelineTimeRef.current(Math.min(totalSeconds, playheadSecondsRef.current + 5));
         return;
       }
       if (e.key === "k" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        togglePlaySequence();
+        togglePlaySequenceRef.current();
         return;
       }
       // I/O for in/out points (trim selected clip)
@@ -1126,7 +1126,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         const clip = selectedClip;
         if (clip) {
           const clipStart = clip.startTime;
-          const newTrimIn = (clip.trimInSeconds ?? 0) + (playheadSeconds - clipStart);
+          const newTrimIn = (clip.trimInSeconds ?? 0) + (playheadSecondsRef.current - clipStart);
           if (newTrimIn >= (clip.trimInSeconds ?? 0) && newTrimIn < (clip.trimOutSeconds ?? Infinity)) {
             pushUndoSnapshot();
             updateTimelineClip(selectedTrackType, selectedClipId, { trimInSeconds: newTrimIn });
@@ -1139,7 +1139,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         const clip = selectedClip;
         if (clip) {
           const clipStart = clip.startTime;
-          const newTrimOut = (clip.trimInSeconds ?? 0) + (playheadSeconds - clipStart);
+          const newTrimOut = (clip.trimInSeconds ?? 0) + (playheadSecondsRef.current - clipStart);
           if (newTrimOut > (clip.trimInSeconds ?? 0)) {
             pushUndoSnapshot();
             updateTimelineClip(selectedTrackType, selectedClipId, { trimOutSeconds: newTrimOut });
@@ -1150,13 +1150,13 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       // Razor tool: split selected clip at playhead
       if (e.key === "s" && !e.ctrlKey && !e.metaKey && selectedClipId && selectedTrackType) {
         e.preventDefault();
-        splitClipAtPlayhead(selectedTrackType, selectedClipId, playheadSeconds);
+        splitClipAtPlayhead(selectedTrackType, selectedClipId, playheadSecondsRef.current);
         return;
       }
       // Marker: add marker at playhead
       if (e.key === "m" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        addMarker(playheadSeconds);
+        addMarker(playheadSecondsRef.current);
         return;
       }
       if (!selectedClipId || !selectedTrackType) return;
@@ -1176,7 +1176,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearPreview, removeTimelineClip, rippleDeleteClip, selectedClipId, selectedTrackType, undo, redo, pushUndoSnapshot, splitClipAtPlayhead, addMarker, playheadSeconds, handleCopyClip, handlePasteClip, clipboardClip, selectedClip, updateTimelineClip]);
+  }, [clearPreview, removeTimelineClip, rippleDeleteClip, selectedClipId, selectedTrackType, undo, redo, pushUndoSnapshot, splitClipAtPlayhead, addMarker, handleCopyClip, handlePasteClip, clipboardClip, selectedClip, updateTimelineClip, totalSeconds]);
 
   const setPreviewClip = useCallback(
     (clipId: string) => {
@@ -1247,7 +1247,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       if (isImage && !isVideo) {
         // Clear any existing image timer without stopping everything
         if (imagePlaybackTimerRef.current) {
-          window.clearInterval(imagePlaybackTimerRef.current);
+          cancelAnimationFrame(imagePlaybackTimerRef.current);
           imagePlaybackTimerRef.current = null;
         }
         // Pause video element if it was playing
@@ -1284,7 +1284,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         const lastAudioEnd = audioLayout.length ? audioLayout[audioLayout.length - 1].end : 0;
         const timelineEnd = Math.max(lastVideoEnd, lastAudioEnd);
         
-        imagePlaybackTimerRef.current = window.setInterval(() => {
+        const tick = () => {
           const now = performance.now();
           const elapsed = (now - startedAt) / 1000;
           const nextT = (layout?.start ?? 0) + elapsed;
@@ -1302,12 +1302,9 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
           // Check if we've reached the end of the entire timeline
           if (nextT >= timelineEnd) {
-            if (imagePlaybackTimerRef.current) {
-              window.clearInterval(imagePlaybackTimerRef.current);
-              imagePlaybackTimerRef.current = null;
-            }
+            imagePlaybackTimerRef.current = null;
             stopPlayback();
-            return;
+            return; // Don't re-schedule
           }
           
           // Check if current image clip has ended
@@ -1315,24 +1312,27 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
             const nextIndex = index + 1;
             if (nextIndex >= (v1?.clips.length || 0)) {
               // Video track ended but timeline continues (audio still playing)
-              // Keep timer running - don't clear it
+              // Keep timer running - re-schedule
+              imagePlaybackTimerRef.current = requestAnimationFrame(tick);
               return;
             }
             // Move to next video clip
-            if (imagePlaybackTimerRef.current) {
-              window.clearInterval(imagePlaybackTimerRef.current);
-              imagePlaybackTimerRef.current = null;
-            }
+            imagePlaybackTimerRef.current = null;
             void startPlaybackFromIndex(nextIndex);
+            return; // Don't re-schedule, next clip starts its own loop
           }
-        }, 33);
+          
+          // Re-schedule for next frame
+          imagePlaybackTimerRef.current = requestAnimationFrame(tick);
+        };
+        imagePlaybackTimerRef.current = requestAnimationFrame(tick);
 
         return;
       }
 
       // Clear any existing image timer when switching to video
       if (imagePlaybackTimerRef.current) {
-        window.clearInterval(imagePlaybackTimerRef.current);
+        cancelAnimationFrame(imagePlaybackTimerRef.current);
         imagePlaybackTimerRef.current = null;
       }
       
@@ -1419,15 +1419,13 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
             // ignore
           }
         }
-        console.log("[Video Playback] Starting video play...");
         await videoRef.current.play();
-        console.log("[Video Playback] Video playing successfully");
         setIsPlayingSequence(true);
         
         void syncAllAudioAtTime(startTimelineSeconds);
         updateVideoMuteForTime(startTimelineSeconds, clip as any);
       } catch (e) {
-        console.error("[Video Playback] Error:", e);
+        console.error("[Timeline] Playback error:", e);
         setPlaybackError(e instanceof Error ? e.message : "Playback failed");
         setIsPlayingSequence(false);
       }
@@ -1439,7 +1437,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     (startSeconds: number) => {
       // Clear any existing timers
       if (imagePlaybackTimerRef.current) {
-        window.clearInterval(imagePlaybackTimerRef.current);
+        cancelAnimationFrame(imagePlaybackTimerRef.current);
         imagePlaybackTimerRef.current = null;
       }
 
@@ -1458,20 +1456,20 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       void syncAllAudioAtTime(startT);
       updateVideoMuteForTime(startT, null);
 
-      imagePlaybackTimerRef.current = window.setInterval(() => {
+      const tick = () => {
         const elapsed = (performance.now() - startedAt) / 1000;
         const nextT = startT + elapsed;
         setPlayheadSeconds(nextT);
         void syncAllAudioAtTime(nextT);
         updateVideoMuteForTime(nextT, null);
         if (nextT >= timelineEnd) {
-          if (imagePlaybackTimerRef.current) {
-            window.clearInterval(imagePlaybackTimerRef.current);
-            imagePlaybackTimerRef.current = null;
-          }
+          imagePlaybackTimerRef.current = null;
           stopPlayback();
+          return; // Don't re-schedule
         }
-      }, 33);
+        imagePlaybackTimerRef.current = requestAnimationFrame(tick);
+      };
+      imagePlaybackTimerRef.current = requestAnimationFrame(tick);
     },
     [stopPlayback, syncAllAudioAtTime, totalSeconds, updateVideoMuteForTime]
   );
@@ -1501,6 +1499,10 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     // No more video clips: still allow audio-only playback from cursor.
     startAudioOnlyFromTime(t);
   }, [isPlayingSequence, playheadSeconds, startAudioOnlyFromTime, startPlaybackFromIndex, stopPlayback, v1, videoLayout]);
+
+  useEffect(() => {
+    togglePlaySequenceRef.current = togglePlaySequence;
+  }, [togglePlaySequence]);
 
   const handleTimeUpdate = useCallback(() => {
     if (!videoRef.current || playingIndex === null || !isPlayingSequence) return;
@@ -1540,7 +1542,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
           const audioOnlyStartTime = performance.now();
           const audioOnlyStartSeconds = currentTimelineTime;
           
-          imagePlaybackTimerRef.current = window.setInterval(() => {
+          const audioTick = () => {
             const elapsed = (performance.now() - audioOnlyStartTime) / 1000;
             const nextT = audioOnlyStartSeconds + elapsed;
             setPlayheadSeconds(nextT);
@@ -1550,13 +1552,13 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
             // Check if we've reached the end of the timeline
             if (nextT >= timelineEnd) {
-              if (imagePlaybackTimerRef.current) {
-                window.clearInterval(imagePlaybackTimerRef.current);
-                imagePlaybackTimerRef.current = null;
-              }
+              imagePlaybackTimerRef.current = null;
               stopPlayback();
+              return; // Don't re-schedule
             }
-          }, 33);
+            imagePlaybackTimerRef.current = requestAnimationFrame(audioTick);
+          };
+          imagePlaybackTimerRef.current = requestAnimationFrame(audioTick);
           return;
         }
         stopPlayback();
@@ -1653,19 +1655,35 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       const clip = v1?.clips[layoutIndex];
       if (!clip) return;
 
-      setSelectedClipId(clip.id);
+      // Only update selectedClipId when the clip actually changes
+      if (lastScrubClipIdRef.current !== clip.id) {
+        lastScrubClipIdRef.current = clip.id;
+        setSelectedClipId(clip.id);
+      }
 
       if (clip.sourceType === "asset_image") {
         stopPlayback();
-        setPreviewMode("image");
-        setPreviewImageUrl(clip.sourceUrl);
+        if (lastScrubPreviewModeRef.current !== "image") {
+          lastScrubPreviewModeRef.current = "image";
+          setPreviewMode("image");
+        }
+        if (lastScrubPreviewUrlRef.current !== clip.sourceUrl) {
+          lastScrubPreviewUrlRef.current = clip.sourceUrl;
+          setPreviewImageUrl(clip.sourceUrl);
+        }
         return;
       }
 
       if (!videoRef.current) return;
 
-      setPreviewMode("video");
-      setPreviewImageUrl(null);
+      if (lastScrubPreviewModeRef.current !== "video") {
+        lastScrubPreviewModeRef.current = "video";
+        setPreviewMode("video");
+      }
+      if (lastScrubPreviewUrlRef.current !== null) {
+        lastScrubPreviewUrlRef.current = null;
+        setPreviewImageUrl(null);
+      }
 
       const v = videoRef.current;
       v.pause();
@@ -1686,6 +1704,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       const isSameSrc = lastPreviewVideoSrcRef.current === nextSrc;
       if (!isSameSrc) {
         lastPreviewVideoSrcRef.current = nextSrc;
+        lastSeekTimeRef.current = targetTime;
         let applied = false;
         const applySeek = () => {
           if (applied) return;
@@ -1706,10 +1725,14 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         v.src = nextSrc;
         v.load();
       } else {
-        try {
-          v.currentTime = Math.max(0, targetTime);
-        } catch {
-          // ignore
+        // Only seek if target time has changed by more than 50ms to avoid excessive seeking
+        if (lastSeekTimeRef.current === null || Math.abs(lastSeekTimeRef.current - targetTime) > 0.05) {
+          lastSeekTimeRef.current = targetTime;
+          try {
+            v.currentTime = Math.max(0, targetTime);
+          } catch {
+            // ignore
+          }
         }
       }
 
@@ -1717,6 +1740,14 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     },
     [isPlayingSequence, pxPerSecond, snapTime, stopPlayback, totalSeconds, updateVideoMuteForTime, v1?.clips, videoLayout]
   );
+
+  useEffect(() => {
+    seekToTimelineTimeRef.current = seekToTimelineTime;
+  }, [seekToTimelineTime]);
+
+  useEffect(() => {
+    playheadSecondsRef.current = playheadSeconds;
+  }, [playheadSeconds]);
 
   const scrubToClientX = useCallback(
     (clientX: number) => {
@@ -2336,7 +2367,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         trimRAFRef.current = null;
       }
     };
-  }, [a1?.clips, audioTracks, clientXToTimelineSeconds, defaultClipSeconds, draggingClip, findAudioClipById, getDropIndex, moveAudioClipToTrack, pxPerSecond, reorderClip, stopPlayback, trimmingClip, updateTimelineClip, v1?.clips]);
+  }, [a1?.clips, audioTracks, clientXToTimelineSeconds, defaultClipSeconds, draggingClip, findAudioClipById, getDropIndex, moveAudioClipToTrack, pxPerSecond, stopPlayback, trimmingClip, updateTimelineClip, v1?.clips]);
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-studio-bg">
@@ -4019,7 +4050,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                   style={{ width: 8, height: 8 }}
                                   onMouseDown={(e) => {
                                     e.stopPropagation();
-                                    setDraggingFade({ clipId: clip.id, type: "in", startX: e.clientX, startVal: clip.fadeInSeconds ?? 0 });
                                     const onMove = (ev: MouseEvent) => {
                                       const delta = (ev.clientX - e.clientX) / pxPerSecond;
                                       const newFade = Math.max(0, Math.min(l.duration / 2, (clip.fadeInSeconds ?? 0) + delta));
@@ -4029,7 +4059,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                       }
                                     };
                                     const onUp = () => {
-                                      setDraggingFade(null);
                                       window.removeEventListener("mousemove", onMove);
                                       window.removeEventListener("mouseup", onUp);
                                     };
@@ -4060,7 +4089,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                   style={{ width: 8, height: 8 }}
                                   onMouseDown={(e) => {
                                     e.stopPropagation();
-                                    setDraggingFade({ clipId: clip.id, type: "out", startX: e.clientX, startVal: clip.fadeOutSeconds ?? 0 });
                                     const onMove = (ev: MouseEvent) => {
                                       const delta = (e.clientX - ev.clientX) / pxPerSecond;
                                       const newFade = Math.max(0, Math.min(l.duration / 2, (clip.fadeOutSeconds ?? 0) + delta));
@@ -4070,7 +4098,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                       }
                                     };
                                     const onUp = () => {
-                                      setDraggingFade(null);
                                       window.removeEventListener("mousemove", onMove);
                                       window.removeEventListener("mouseup", onUp);
                                     };
@@ -4320,7 +4347,24 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
             {previewImageUrl ? (
               <img src={previewImageUrl} alt="Fullscreen preview" className="max-w-full max-h-full object-contain" />
             ) : (
-              <video ref={videoRef} className="max-w-full max-h-full" playsInline />
+              <video
+                ref={(el) => {
+                  fullscreenVideoRef.current = el;
+                  if (el && videoRef.current) {
+                    const src = videoRef.current.src;
+                    if (src) {
+                      el.src = src;
+                      el.load();
+                      el.currentTime = videoRef.current.currentTime;
+                      if (isPlayingSequence) {
+                        void el.play().catch(() => {});
+                      }
+                    }
+                  }
+                }}
+                className="max-w-full max-h-full"
+                playsInline
+              />
             )}
           </div>
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/60 text-xs font-mono">{formatSMPTE(playheadSeconds)}</div>

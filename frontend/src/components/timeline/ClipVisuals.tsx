@@ -3,6 +3,47 @@
 import { useEffect, useState, useRef } from "react";
 import { getWaveform, getVideoThumbnails } from "@/lib/api";
 
+// Module-level caches to prevent refetching the same clip data
+const waveformCache = new Map<string, number[]>();
+const waveformFailed = new Set<string>();
+const thumbnailCache = new Map<string, string[]>();
+const thumbnailFailed = new Set<string>();
+// In-flight promise deduplication (prevents Strict Mode double-fetch)
+const waveformInflight = new Map<string, Promise<number[]>>();
+const thumbnailInflight = new Map<string, Promise<string[]>>();
+
+function fetchWaveform(projectId: string, filename: string, cacheKey: string): Promise<number[]> {
+  if (waveformInflight.has(cacheKey)) return waveformInflight.get(cacheKey)!;
+  const p = getWaveform(projectId, filename).then((res) => {
+    if (res.peaks.length === 0) throw new Error("empty waveform");
+    waveformCache.set(cacheKey, res.peaks);
+    return res.peaks;
+  }).catch((e) => {
+    waveformFailed.add(cacheKey);
+    throw e;
+  }).finally(() => {
+    waveformInflight.delete(cacheKey);
+  });
+  waveformInflight.set(cacheKey, p);
+  return p;
+}
+
+function fetchThumbnails(projectId: string, filename: string, count: number, cacheKey: string): Promise<string[]> {
+  if (thumbnailInflight.has(cacheKey)) return thumbnailInflight.get(cacheKey)!;
+  const p = getVideoThumbnails(projectId, filename, count).then((res) => {
+    if (res.thumbnails.length === 0) throw new Error("empty thumbnails");
+    thumbnailCache.set(cacheKey, res.thumbnails);
+    return res.thumbnails;
+  }).catch((e) => {
+    thumbnailFailed.add(cacheKey);
+    throw e;
+  }).finally(() => {
+    thumbnailInflight.delete(cacheKey);
+  });
+  thumbnailInflight.set(cacheKey, p);
+  return p;
+}
+
 interface WaveformDisplayProps {
   projectId: string;
   filename: string;
@@ -11,21 +52,31 @@ interface WaveformDisplayProps {
 }
 
 export function WaveformDisplay({ projectId, filename, height = 24, color = "#10b981" }: WaveformDisplayProps) {
-  const [peaks, setPeaks] = useState<number[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [peaks, setPeaks] = useState<number[]>(() => waveformCache.get(`${projectId}:${filename}`) ?? []);
+  const [loading, setLoading] = useState(() => !waveformCache.has(`${projectId}:${filename}`) && !waveformFailed.has(`${projectId}:${filename}`));
   const cacheKey = `${projectId}:${filename}`;
 
   useEffect(() => {
+    if (waveformCache.has(cacheKey) || waveformFailed.has(cacheKey)) {
+      setPeaks(waveformCache.get(cacheKey) ?? []);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
-    void getWaveform(projectId, filename).then((res) => {
+    void fetchWaveform(projectId, filename, cacheKey).then((peaks) => {
       if (!cancelled) {
-        setPeaks(res.peaks);
+        setPeaks(peaks);
+        setLoading(false);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setPeaks([]);
         setLoading(false);
       }
     });
     return () => { cancelled = true; };
-  }, [cacheKey]);
+  }, [cacheKey, projectId, filename]);
 
   if (loading) {
     return (
@@ -69,22 +120,32 @@ interface ThumbnailStripProps {
 }
 
 export function ThumbnailStrip({ projectId, filename, width, height }: ThumbnailStripProps) {
-  const [thumbnails, setThumbnails] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
   const cacheKey = `${projectId}:${filename}`;
+  const [thumbnails, setThumbnails] = useState<string[]>(() => thumbnailCache.get(cacheKey) ?? []);
+  const [loading, setLoading] = useState(() => !thumbnailCache.has(cacheKey) && !thumbnailFailed.has(cacheKey));
 
   useEffect(() => {
+    if (thumbnailCache.has(cacheKey) || thumbnailFailed.has(cacheKey)) {
+      setThumbnails(thumbnailCache.get(cacheKey) ?? []);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     const count = Math.max(3, Math.min(12, Math.ceil(width / 60)));
-    void getVideoThumbnails(projectId, filename, count).then((res) => {
+    void fetchThumbnails(projectId, filename, count, cacheKey).then((thumbs) => {
       if (!cancelled) {
-        setThumbnails(res.thumbnails);
+        setThumbnails(thumbs);
+        setLoading(false);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setThumbnails([]);
         setLoading(false);
       }
     });
     return () => { cancelled = true; };
-  }, [cacheKey, width]);
+  }, [cacheKey, projectId, filename]);
 
   if (loading) {
     return <div className="w-full h-full bg-studio-border/20 animate-pulse" />;

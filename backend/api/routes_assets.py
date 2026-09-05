@@ -606,7 +606,7 @@ async def get_waveform(project_id: str, filename: str):
             file_path = c
             break
     if not file_path:
-        raise HTTPException(status_code=404, detail=f"File not found: {decoded}")
+        return {"peaks": [], "duration_seconds": 0}
 
     # Use ffmpeg to extract raw PCM audio data, downsample to get peaks
     # Output: raw s16le mono at low sample rate
@@ -624,11 +624,10 @@ async def get_waveform(project_id: str, filename: str):
             timeout=30,
         )
         if result.returncode != 0:
-            raise HTTPException(status_code=500, detail="ffmpeg failed to extract audio")
+            return {"peaks": [], "duration_seconds": 0}
 
-        raw = result.returncode and result.stderr or result.stdout
         if not result.stdout:
-            raise HTTPException(status_code=500, detail="No audio data extracted")
+            return {"peaks": [], "duration_seconds": 0}
 
         # Parse raw s16le samples and compute peaks
         samples = result.stdout
@@ -652,9 +651,9 @@ async def get_waveform(project_id: str, filename: str):
         return {"peaks": peaks, "duration_seconds": round(duration, 2)}
 
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="ffmpeg timed out")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"peaks": [], "duration_seconds": 0}
+    except Exception:
+        return {"peaks": [], "duration_seconds": 0}
 
 
 @router.get("/thumbnails/{project_id}/{filename:path}")
@@ -674,7 +673,7 @@ async def get_video_thumbnails(project_id: str, filename: str, count: int = Quer
             file_path = c
             break
     if not file_path:
-        raise HTTPException(status_code=404, detail=f"Video not found: {decoded}")
+        return {"thumbnails": [], "duration_seconds": 0}
 
     try:
         # Get video duration first
@@ -684,11 +683,11 @@ async def get_video_thumbnails(project_id: str, filename: str, count: int = Quer
             capture_output=True, text=True, timeout=10,
         )
         if duration_result.returncode != 0:
-            raise HTTPException(status_code=500, detail="ffprobe failed")
+            return {"thumbnails": [], "duration_seconds": 0}
         duration = float(duration_result.stdout.strip())
 
         if duration <= 0:
-            raise HTTPException(status_code=400, detail="Invalid video duration")
+            return {"thumbnails": [], "duration_seconds": 0}
 
         # Generate thumbnails at evenly spaced timestamps
         thumbnails = []
@@ -710,6 +709,6 @@ async def get_video_thumbnails(project_id: str, filename: str, count: int = Quer
         return {"thumbnails": thumbnails, "duration_seconds": duration}
 
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="ffmpeg timed out")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"thumbnails": [], "duration_seconds": 0}
+    except Exception:
+        return {"thumbnails": [], "duration_seconds": 0}

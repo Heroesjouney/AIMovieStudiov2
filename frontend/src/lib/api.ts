@@ -1087,12 +1087,12 @@ export interface ThumbnailResponse {
 
 export async function getWaveform(projectId: string, filename: string): Promise<WaveformResponse> {
   const resp = await fetch(`${API_BASE}/assets/waveform/${projectId}/${encodeURIComponent(filename)}`);
-  if (!resp.ok) return { peaks: [], duration_seconds: 0 };
+  if (!resp.ok) throw new Error(`Waveform fetch failed: ${resp.status}`);
   return resp.json();
 }
 
 export async function getVideoThumbnails(projectId: string, filename: string, count: number = 6): Promise<ThumbnailResponse> {
   const resp = await fetch(`${API_BASE}/assets/thumbnails/${projectId}/${encodeURIComponent(filename)}?count=${count}`);
-  if (!resp.ok) return { thumbnails: [], duration_seconds: 0 };
+  if (!resp.ok) throw new Error(`Thumbnail fetch failed: ${resp.status}`);
   return resp.json();
 }
