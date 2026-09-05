@@ -365,6 +365,8 @@ Once the app is running in your browser:
 | --------------- | --------------- | ----------------------------- |
 | `fish_speech`   | Fish Speech     | TTS, voice cloning            |
 
+> ⚠️ **Audio is a work in progress.** The TTS and voice cloning pipeline is under active development and may not be fully functional yet.
+
 ---
 
 ## ⚙️ Environment Variables
