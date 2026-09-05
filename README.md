@@ -59,6 +59,7 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - [Available Models](#-available-image-models)
 - [Environment Variables](#-environment-variables)
 - [ComfyUI Custom Nodes](#-comfyui-custom-nodes)
+- [Required Model Files](#-required-model-files)
 - [Architecture](#-architecture)
 - [Troubleshooting](#-troubleshooting)
 - [FAQ](#-faq)
@@ -395,6 +396,61 @@ Local video models require specific custom nodes installed in ComfyUI. Here's wh
 **Image models** (Z-Image, Qwen Image, Flux 2, Krea 2) require their respective custom nodes - check the ComfyUI Manager for the latest installations.
 
 > ⚠️ Custom node compatibility changes frequently. If a model fails to load, update the custom node to the latest version via ComfyUI Manager.
+
+---
+
+## 📦 Required Model Files
+
+Local models require specific `.safetensors` files downloaded into your ComfyUI `models/` directory. Cloud models (Fal.ai, Replicate) need **no downloads** — just API keys.
+
+### Image Models
+
+| Model | Model Files | ComfyUI Folder |
+| ----- | ----------- | -------------- |
+| **Z-Image Turbo** | `z_image_turbo_bf16.safetensors` | `models/unet/` |
+| | `qwen_3_4b.safetensors` | `models/clip/` |
+| | `ae.safetensors` | `models/vae/` |
+| **Qwen Image** | `z_image_turbo_bf16.safetensors` | `models/unet/` |
+| | `qwen_3_4b.safetensors` | `models/clip/` |
+| | `ae.safetensors` | `models/vae/` |
+| **Qwen Image Edit** | `qwen_image_edit_2511_bf16.safetensors` | `models/unet/` |
+| | `qwen_2.5_vl_7b_fp8_scaled.safetensors` | `models/clip/` |
+| | `qwen_image_vae.safetensors` | `models/vae/` |
+| | `Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors` | `models/loras/` |
+| **Qwen Multiangle** | Same as Qwen Image Edit, plus: | |
+| | `qwen-image-edit-2511-multiple-angles-lora.safetensors` | `models/loras/` |
+| **Flux 2** | `flux2_dev_fp8mixed.safetensors` | `models/unet/` |
+| | `mistral_3_small_flux2_bf16.safetensors` | `models/clip/` |
+| | `flux2-vae.safetensors` | `models/vae/` |
+| **Flux 2 Kontext** | `flux1-dev-kontext_fp8_scaled.safetensors` | `models/unet/` |
+| | `clip_l.safetensors` | `models/clip/` |
+| | `t5xxl_fp8_e4m3fn_scaled.safetensors` | `models/clip/` |
+| | `ae.safetensors` | `models/vae/` |
+| **Krea 2** | *(handled by Krea2 custom node — no manual download)* | |
+
+### Video Models
+
+| Model | Model Files | ComfyUI Folder |
+| ----- | ----------- | -------------- |
+| **LTX Video 2.3** (basic T2V/I2V) | `ltx-video-2b-v0.9.5.safetensors` | `models/checkpoints/` |
+| | `ltx-video-vae.safetensors` | `models/vae/` |
+| **LTX Video 2.3** (first-last frame) | `ltx-2.3-22b-distilled-fp8.safetensors` | `models/checkpoints/` |
+| | `gemma_3_12B_it_fp4_mixed.safetensors` | `models/text_encoders/` |
+| **LTX Video 2.3** (image+audio-to-video) | `ltx-2.3-22b-dev-fp8.safetensors` | `models/checkpoints/` |
+| | `gemma_3_12B_it_fp4_mixed.safetensors` | `models/text_encoders/` |
+| | `ltx-2.3-spatial-upscaler-x2-1.1.safetensors` | `models/upscale_models/` |
+| | `ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors` | `models/loras/` |
+| | `gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors` | `models/loras/` |
+| **MiniMax H3** (T2V/I2V) | `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | `models/unet/` |
+| | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | `models/clip/` |
+| | `minimax_h3_video_vae_fp16.safetensors` | `models/vae/` |
+| | `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/` |
+| **MiniMax H3** (reference-to-video) | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` | `models/unet/` |
+| | *(+ same CLIP and VAE files as above)* | |
+
+> 💡 Model files can be found on [HuggingFace](https://huggingface.co/) or [CivitAI](https://civitai.com/). Search for the exact filename. FP8/INT8 variants are recommended for 12–16 GB VRAM GPUs.
+>
+> ⚠️ **Don't need all models?** Start with just **Z-Image** (fastest image model) and **LTX Video 2.3** (basic T2V/I2V). Add more as you need them. Cloud models (Fal.ai) require zero downloads.
 
 ---
 

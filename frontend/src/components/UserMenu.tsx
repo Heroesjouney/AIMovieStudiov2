@@ -3,14 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut, User as UserIcon, FolderOpen } from "lucide-react";
-import { useAuth } from "@/lib/useAuth";
+import { useAuth, AUTH_ENABLED } from "@/lib/useAuth";
 
 export function UserMenu() {
   const { user, signOut } = useAuth();
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
-  if (!user) return null;
+  if (!AUTH_ENABLED || !user) return null;
 
   return (
     <div className="relative">

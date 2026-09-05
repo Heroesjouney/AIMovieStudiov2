@@ -2,6 +2,15 @@
 
 import { useState, useEffect, useCallback } from "react";
 
+export const AUTH_ENABLED = false;
+
+const DISABLED_USER: User = {
+  id: "local",
+  username: "Local User",
+  email: "",
+  createdAt: new Date().toISOString(),
+};
+
 export interface User {
   id: string;
   username: string;
@@ -63,12 +72,18 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!AUTH_ENABLED) {
+      setUser(DISABLED_USER);
+      setLoading(false);
+      return;
+    }
     setUser(getStoredSession());
     setLoading(false);
   }, []);
 
   const signUp = useCallback(
     (username: string, email: string, password: string): { success: boolean; error?: string } => {
+      if (!AUTH_ENABLED) return { success: true };
       const trimmedUsername = username.trim();
       const trimmedEmail = email.trim().toLowerCase();
 
@@ -116,6 +131,7 @@ export function useAuth() {
 
   const signIn = useCallback(
     (identifier: string, password: string): { success: boolean; error?: string } => {
+      if (!AUTH_ENABLED) return { success: true };
       const trimmed = identifier.trim().toLowerCase();
       if (!trimmed || !password) {
         return { success: false, error: "Please enter your credentials" };
@@ -147,6 +163,7 @@ export function useAuth() {
   );
 
   const signOut = useCallback(() => {
+    if (!AUTH_ENABLED) return;
     saveStoredSession(null);
     setUser(null);
   }, []);
