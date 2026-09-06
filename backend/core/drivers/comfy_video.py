@@ -110,9 +110,17 @@ class ComfyVideoDriver(VideoDriver):
         model_id: str = "ltx_video_2_3",
     ):
         self.comfy_url = comfy_url or os.getenv("COMFY_URL", "http://127.0.0.1:8188")
+        self._auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
         self.output_dir = output_dir or os.getenv("COMFY_OUTPUT_DIR", "")
         self._model_id = model_id
         self._jobs: Dict[str, dict] = {}
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Create an aiohttp session with auth headers if configured."""
+        headers = {}
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
+        return aiohttp.ClientSession(headers=headers)
 
     def _load_workflow(self, name: str) -> dict:
         workflow_path = Path(__file__).parent.parent / "workflows" / f"{name}.json"
@@ -639,7 +647,7 @@ class ComfyVideoDriver(VideoDriver):
         upload_map = {}  # original_path -> comfy_filename
         paths_to_upload = self._resolve_and_upload_paths(request)
         if paths_to_upload:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 for orig_path, local_abs in paths_to_upload.items():
                     try:
                         comfy_name = await self._upload_to_comfy(session, local_abs)
@@ -673,7 +681,7 @@ class ComfyVideoDriver(VideoDriver):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 async with session.post(
                     f"{self.comfy_url}/prompt",
                     json={"prompt": workflow},
@@ -729,7 +737,7 @@ class ComfyVideoDriver(VideoDriver):
             )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 async with session.get(
                     f"{self.comfy_url}/history/{prompt_id}"
                 ) as resp:
@@ -797,7 +805,7 @@ class ComfyVideoDriver(VideoDriver):
         filename = f"{job_id}.mp4"
         output_path = Path(output_dir) / filename
 
-        async with aiohttp.ClientSession() as session:
+        async with self._get_session() as session:
             async with session.get(video_urls[0]) as resp:
                 if resp.status == 200:
                     with open(output_path, "wb") as f:

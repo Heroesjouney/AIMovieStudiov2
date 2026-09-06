@@ -242,6 +242,31 @@ export async function deleteApiKey(keyName: string): Promise<{ status: string }>
   return resp.json();
 }
 
+// ComfyUI Server Config
+export interface ComfyConfig {
+  url: string;
+  auth_token: string;
+  is_remote: boolean;
+}
+
+export async function getComfyConfig(): Promise<ComfyConfig> {
+  const resp = await fetch(`${API_BASE}/settings/comfy-config`);
+  return resp.json();
+}
+
+export async function saveComfyConfig(url: string, authToken: string, isRemote: boolean): Promise<{ status: string }> {
+  const resp = await fetch(`${API_BASE}/settings/comfy-config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, auth_token: authToken, is_remote: isRemote }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Save failed" }));
+    throw new Error(err.detail || "Failed to save ComfyUI config");
+  }
+  return resp.json();
+}
+
 // Custom Workflows
 export interface CustomWorkflow {
   driver_id: string;

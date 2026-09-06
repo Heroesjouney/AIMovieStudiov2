@@ -90,9 +90,17 @@ class ComfyImageDriver(ImageDriver):
         self._workflow_t2i = info["workflow_t2i"]
         self._workflow_i2i = info["workflow_i2i"]
         self.comfy_url = comfy_url or os.getenv("COMFY_URL", "http://127.0.0.1:8188")
+        self._auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
         self.output_dir = output_dir or os.getenv("COMFY_OUTPUT_DIR", "")
         self._jobs: Dict[str, dict] = {}
         self._workflows: Dict[str, dict] = {}
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Create an aiohttp session with auth headers if configured."""
+        headers = {}
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
+        return aiohttp.ClientSession(headers=headers)
 
     def _load_workflow(self, name: str) -> dict:
         """Load a workflow JSON template from the workflows directory."""
@@ -363,7 +371,7 @@ class ComfyImageDriver(ImageDriver):
         if request.reference_image_paths:
             target_w = request.width or 1344
             target_h = request.height or 768
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 for idx, ref_url in enumerate(request.reference_image_paths[:3]):
                     local_path = self._resolve_local_path(ref_url)
                     if local_path:
@@ -433,7 +441,7 @@ class ComfyImageDriver(ImageDriver):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 async with session.post(
                     f"{self.comfy_url}/prompt",
                     json={"prompt": wf},
@@ -525,7 +533,7 @@ class ComfyImageDriver(ImageDriver):
             )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 # Upload image to ComfyUI so LoadImage can access it
                 comfy_filename = await self._upload_to_comfy(session, local_path)
 
@@ -620,7 +628,7 @@ class ComfyImageDriver(ImageDriver):
         view_labels: List[str] = []
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 comfy_filename = await self._upload_to_comfy(session, local_path)
 
                 for view_name, view_prompt_template in self.TURNAROUND_VIEWS:
@@ -787,7 +795,7 @@ class ComfyImageDriver(ImageDriver):
             job_created_at = job.get("created_at", time.time())
 
             try:
-                async with aiohttp.ClientSession() as session:
+                async with self._get_session() as session:
                     for pid in child_prompt_ids:
                         if child_results[pid] is not None:
                             continue
@@ -885,7 +893,7 @@ class ComfyImageDriver(ImageDriver):
             )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 async with session.get(
                     f"{self.comfy_url}/history/{prompt_id}"
                 ) as resp:
@@ -979,7 +987,7 @@ class ComfyImageDriver(ImageDriver):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 comfy_filename = await self._upload_to_comfy(session, local_path)
 
                 # Inject the image into the LoadImage node and filename_prefix into SaveStringKJ
@@ -1054,7 +1062,7 @@ class ComfyImageDriver(ImageDriver):
         filename_prefix = job.get("filename_prefix", "")
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 async with session.get(
                     f"{self.comfy_url}/history/{prompt_id}"
                 ) as resp:

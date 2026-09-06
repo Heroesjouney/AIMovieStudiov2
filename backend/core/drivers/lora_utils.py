@@ -113,9 +113,15 @@ async def fetch_lora_list(comfy_url: str) -> List[Dict[str, Any]]:
     Returns a list of {"name": "filename.safetensors", "size_bytes": ...} dicts.
     """
     import aiohttp
+    import os
+
+    auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
+    headers = {}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(
                 f"{comfy_url}/object_info/LoraLoader",
                 timeout=aiohttp.ClientTimeout(total=10),

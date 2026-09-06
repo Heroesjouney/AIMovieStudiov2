@@ -1,20 +1,57 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import {
   getApiKeys, saveApiKey, deleteApiKey,
+  getComfyConfig, saveComfyConfig,
   fetchModels, uploadModel,
   fetchLoras, uploadLora,
   listWorkflows, registerWorkflow, deleteWorkflow,
-  type ApiKeyInfo, type CustomWorkflow, type LoRAInfo,
+  type ApiKeyInfo, type CustomWorkflow, type LoRAInfo, type ComfyConfig,
 } from "@/lib/api";
 import {
   X, Key, Upload, Loader2, Check, ExternalLink, Trash2,
-  Plus, Box, ChevronDown, Settings, FileJson, Layers,
+  Plus, Box, ChevronDown, Settings, FileJson, Layers, Server,
 } from "lucide-react";
 
 interface SettingsPanelProps {
   onClose: () => void;
+}
+
+function CollapsibleSection({
+  icon: Icon,
+  title,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  badge?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="rounded-xl border border-studio-border bg-studio-panel/30 overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-studio-panel/60 transition-colors"
+      >
+        <Icon className="w-4 h-4 text-studio-accent shrink-0" />
+        <span className="text-sm font-semibold flex-1 text-left">{title}</span>
+        {badge && (
+          <span className="text-[10px] text-studio-muted bg-studio-border/40 px-2 py-0.5 rounded-full">{badge}</span>
+        )}
+        <ChevronDown className={`w-4 h-4 text-studio-muted transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-1">
+          {children}
+        </div>
+      )}
+    </section>
+  );
 }
 
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
@@ -25,6 +62,15 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [savingKey, setSavingKey] = useState(false);
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
+
+  // ComfyUI Config
+  const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
+  const [comfyAuth, setComfyAuth] = useState("");
+  const [comfyRemote, setComfyRemote] = useState(false);
+  const [loadingComfy, setLoadingComfy] = useState(true);
+  const [savingComfy, setSavingComfy] = useState(false);
+  const [comfyMsg, setComfyMsg] = useState<string | null>(null);
+  const [comfyError, setComfyError] = useState<string | null>(null);
 
   // Models
   const [models, setModels] = useState<{ name: string }[]>([]);
@@ -69,6 +115,20 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   }, []);
 
+  const loadComfy = useCallback(async () => {
+    setLoadingComfy(true);
+    try {
+      const cfg = await getComfyConfig();
+      setComfyUrl(cfg.url);
+      setComfyAuth(cfg.auth_token || "");
+      setComfyRemote(cfg.is_remote);
+    } catch {
+      setComfyError("Failed to load ComfyUI config");
+    } finally {
+      setLoadingComfy(false);
+    }
+  }, []);
+
   const loadModels = useCallback(async () => {
     setLoadingModels(true);
     try {
@@ -106,11 +166,26 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   }, []);
 
   useEffect(() => {
+    loadComfy();
     loadKeys();
     loadModels();
     loadLoras();
     loadWorkflows();
-  }, [loadKeys, loadModels, loadLoras, loadWorkflows]);
+  }, [loadComfy, loadKeys, loadModels, loadLoras, loadWorkflows]);
+
+  const handleSaveComfy = async () => {
+    setSavingComfy(true);
+    setComfyError(null);
+    setComfyMsg(null);
+    try {
+      await saveComfyConfig(comfyUrl.trim(), comfyAuth.trim(), comfyRemote);
+      setComfyMsg("ComfyUI server config saved! Restart backend to apply.");
+    } catch (err) {
+      setComfyError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSavingComfy(false);
+    }
+  };
 
   const handleSaveKey = async (keyName: string) => {
     if (!keyValue.trim()) return;
@@ -238,14 +313,71 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           </button>
         </div>
 
-        <div className="p-5 space-y-6">
-          {/* API Keys Section */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <Key className="w-4 h-4 text-studio-accent" />
-              <h3 className="text-sm font-semibold">Cloud API Keys</h3>
-            </div>
-            <p className="text-[11px] text-studio-muted mb-4">
+        <div className="p-5 space-y-3">
+          {/* ComfyUI Server */}
+          <CollapsibleSection icon={Server} title="ComfyUI Server" defaultOpen>
+            <p className="text-[11px] text-studio-muted mb-3">
+              Connect to a local or remote ComfyUI instance. Use <code className="text-studio-accent">http://127.0.0.1:8188</code> for local, or any URL for a cloud-hosted ComfyUI.
+            </p>
+
+            {loadingComfy ? (
+              <div className="flex items-center gap-2 text-xs text-studio-muted">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Loading...
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1">Server URL</label>
+                  <input
+                    value={comfyUrl}
+                    onChange={(e) => setComfyUrl(e.target.value)}
+                    placeholder="http://127.0.0.1:8188"
+                    className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1">
+                    Auth Token <span className="normal-case opacity-50">(optional — for cloud instances)</span>
+                  </label>
+                  <input
+                    value={comfyAuth}
+                    onChange={(e) => setComfyAuth(e.target.value)}
+                    type="password"
+                    placeholder="Bearer token or API key"
+                    className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none"
+                  />
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={comfyRemote}
+                    onChange={(e) => setComfyRemote(e.target.checked)}
+                    className="accent-studio-accent w-4 h-4"
+                  />
+                  <span className="text-xs text-studio-muted">
+                    Remote / cloud server (uses API for file uploads instead of filesystem)
+                  </span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleSaveComfy}
+                    disabled={savingComfy || !comfyUrl.trim()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 text-white text-xs rounded-lg font-medium transition-all"
+                  >
+                    {savingComfy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                    Save
+                  </button>
+                  {comfyMsg && <p className="text-[10px] text-green-500">{comfyMsg}</p>}
+                  {comfyError && <p className="text-[10px] text-studio-danger">{comfyError}</p>}
+                </div>
+              </div>
+            )}
+          </CollapsibleSection>
+
+          {/* Cloud API Keys */}
+          <CollapsibleSection icon={Key} title="Cloud API Keys" badge={Object.values(apiKeys).filter(k => k.is_set).length > 0 ? `${Object.values(apiKeys).filter(k => k.is_set).length} connected` : undefined}>
+            <p className="text-[11px] text-studio-muted mb-3">
               Connect cloud generation services. Keys are stored locally in <code className="text-studio-accent">settings.json</code> and loaded into environment variables on backend restart.
             </p>
 
@@ -356,15 +488,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
             {keyMsg && <p className="text-[10px] text-green-500 mt-2">{keyMsg}</p>}
             {keyError && <p className="text-[10px] text-studio-danger mt-2">{keyError}</p>}
-          </section>
+          </CollapsibleSection>
 
-          {/* Model Upload Section */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <Box className="w-4 h-4 text-studio-accent" />
-              <h3 className="text-sm font-semibold">ComfyUI Models</h3>
-            </div>
-            <p className="text-[11px] text-studio-muted mb-4">
+          {/* ComfyUI Models */}
+          <CollapsibleSection icon={Box} title="ComfyUI Models" badge={models.length > 0 ? `${models.length} models` : undefined}>
+            <p className="text-[11px] text-studio-muted mb-3">
               Upload checkpoint models (.safetensors, .ckpt, .pt) to ComfyUI's <code className="text-studio-accent">models/checkpoints/</code> directory.
             </p>
 
@@ -381,7 +509,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 onClick={() => setShowModels(!showModels)}
                 className="flex items-center gap-1.5 px-3 py-2 bg-studio-panel border border-studio-border hover:border-studio-accent/50 text-studio-muted hover:text-studio-text text-xs rounded-lg transition-all"
               >
-                {loadingModels ? `${models.length} models` : `${models.length} models`}
+                {models.length} models
                 <ChevronDown className={`w-3 h-3 transition-transform ${showModels ? "rotate-180" : ""}`} />
               </button>
               <input
@@ -424,15 +552,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 )}
               </div>
             )}
-          </section>
+          </CollapsibleSection>
 
-          {/* LoRAs Section */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <Layers className="w-4 h-4 text-studio-accent" />
-              <h3 className="text-sm font-semibold">ComfyUI LoRAs</h3>
-            </div>
-            <p className="text-[11px] text-studio-muted mb-4">
+          {/* ComfyUI LoRAs */}
+          <CollapsibleSection icon={Layers} title="ComfyUI LoRAs" badge={loras.length > 0 ? `${loras.length} LoRAs` : undefined}>
+            <p className="text-[11px] text-studio-muted mb-3">
               Upload LoRA files (.safetensors, .pt, .pth) to ComfyUI's <code className="text-studio-accent">models/loras/</code> directory. These appear in the LoRA selector in all generation tabs.
             </p>
 
@@ -492,15 +616,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 )}
               </div>
             )}
-          </section>
+          </CollapsibleSection>
 
-          {/* Custom Workflows Section */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <FileJson className="w-4 h-4 text-studio-accent" />
-              <h3 className="text-sm font-semibold">Custom ComfyUI Workflows</h3>
-            </div>
-            <p className="text-[11px] text-studio-muted mb-4">
+          {/* Custom Workflows */}
+          <CollapsibleSection icon={FileJson} title="Custom ComfyUI Workflows" badge={workflows.length > 0 ? `${workflows.length} workflows` : undefined}>
+            <p className="text-[11px] text-studio-muted mb-3">
               Build a workflow in ComfyUI, export it as JSON (API format), then upload it here. It will appear as a new model in the dropdowns — no code changes needed.
             </p>
 
@@ -627,7 +747,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 Add Custom Workflow
               </button>
             )}
-          </section>
+          </CollapsibleSection>
         </div>
       </div>
     </div>

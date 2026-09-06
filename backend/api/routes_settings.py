@@ -50,13 +50,20 @@ def _save_settings(data: dict):
 
 
 def load_api_keys_into_env():
-    """Load saved API keys into environment variables at startup."""
+    """Load saved API keys and ComfyUI config into environment variables at startup."""
     settings = _load_settings()
     api_keys = settings.get("api_keys", {})
     for key_name, value in api_keys.items():
         if value and key_name not in os.environ:
             os.environ[key_name] = value
             print(f"[Settings] Loaded API key '{key_name}' from settings.json")
+
+    comfy_config = settings.get("comfy_config", {})
+    if comfy_config.get("url"):
+        os.environ["COMFY_URL"] = comfy_config["url"]
+        print(f"[Settings] Loaded ComfyUI URL from settings.json: {comfy_config['url']}")
+    if comfy_config.get("auth_token"):
+        os.environ["COMFY_AUTH_TOKEN"] = comfy_config["auth_token"]
 
 
 @router.get("/api-keys")
@@ -126,6 +133,51 @@ async def delete_api_key(key_name: str):
 
     print(f"[Settings] Deleted API key '{key_name}'")
     return {"status": "ok", "key_name": key_name}
+
+
+# =============================================================================
+# ComfyUI Server Configuration
+# =============================================================================
+
+
+@router.get("/comfy-config")
+async def get_comfy_config():
+    """Return the current ComfyUI server configuration."""
+    settings = _load_settings()
+    comfy = settings.get("comfy_config", {})
+    return {
+        "url": comfy.get("url", os.getenv("COMFY_URL", "http://127.0.0.1:8188")),
+        "auth_token": comfy.get("auth_token", ""),
+        "is_remote": comfy.get("is_remote", False),
+    }
+
+
+class SaveComfyConfigRequest(BaseModel):
+    url: str
+    auth_token: Optional[str] = ""
+    is_remote: bool = False
+
+
+@router.post("/comfy-config")
+async def save_comfy_config(req: SaveComfyConfigRequest):
+    """Save ComfyUI server configuration."""
+    settings = _load_settings()
+    settings["comfy_config"] = {
+        "url": req.url,
+        "auth_token": req.auth_token or "",
+        "is_remote": req.is_remote,
+    }
+    _save_settings(settings)
+
+    # Update env immediately
+    os.environ["COMFY_URL"] = req.url
+    if req.auth_token:
+        os.environ["COMFY_AUTH_TOKEN"] = req.auth_token
+    elif "COMFY_AUTH_TOKEN" in os.environ:
+        del os.environ["COMFY_AUTH_TOKEN"]
+
+    print(f"[Settings] Saved ComfyUI config: url={req.url}, remote={req.is_remote}")
+    return {"status": "ok"}
 
 
 # =============================================================================

@@ -58,8 +58,16 @@ class ComfyCameraDriver(ImageDriver):
         output_dir: Optional[str] = None,
     ):
         self.comfy_url = comfy_url or os.getenv("COMFY_URL", "http://127.0.0.1:8188")
+        self._auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
         self.output_dir = output_dir or os.getenv("COMFY_OUTPUT_DIR", "")
         self._jobs: Dict[str, dict] = {}
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Create an aiohttp session with auth headers if configured."""
+        headers = {}
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
+        return aiohttp.ClientSession(headers=headers)
 
     def _load_workflow(self) -> dict:
         workflow_path = Path(__file__).parent.parent / "workflows" / "3d_camera_multiview.json"
@@ -167,7 +175,7 @@ class ComfyCameraDriver(ImageDriver):
 
             sub_job_id = str(uuid.uuid4())
             try:
-                async with aiohttp.ClientSession() as session:
+                async with self._get_session() as session:
                     async with session.post(
                         f"{self.comfy_url}/prompt",
                         json={"prompt": wf},
@@ -228,7 +236,7 @@ class ComfyCameraDriver(ImageDriver):
                 workflow = inject_loras(workflow, loras)
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 async with session.post(
                     f"{self.comfy_url}/prompt",
                     json={"prompt": workflow},
@@ -284,7 +292,7 @@ class ComfyCameraDriver(ImageDriver):
             return ImageGenerationResponse(job_id=job_id, status=GenerationStatus.PENDING)
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._get_session() as session:
                 async with session.get(f"{self.comfy_url}/history/{prompt_id}") as resp:
                     if resp.status == 200:
                         history = await resp.json()

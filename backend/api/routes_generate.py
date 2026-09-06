@@ -106,10 +106,14 @@ async def upload_lora(file: UploadFile = File(...)):
 async def list_models():
     """List available checkpoint models from the local ComfyUI instance."""
     comfy_url = os.getenv("COMFY_URL", "http://127.0.0.1:8188")
+    auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
     import aiohttp
 
     try:
-        async with aiohttp.ClientSession() as session:
+        headers = {}
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+        async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(
                 f"{comfy_url}/object_info/CheckpointLoaderSimple",
                 timeout=aiohttp.ClientTimeout(total=10),
