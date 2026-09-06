@@ -56,6 +56,9 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - [Features](#-features)
 - [Quick Start](#-quick-start-5-minutes)
 - [How to Use](#-how-to-use)
+- [LoRA Support](#-lora-support)
+- [Settings & Configuration](#-settings--configuration)
+- [Custom Workflows](#-custom-comfyui-workflows)
 - [Available Models](#-available-image-models)
 - [Environment Variables](#-environment-variables)
 - [ComfyUI Custom Nodes](#-comfyui-custom-nodes)
@@ -85,6 +88,9 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - **🎛️ Shot Composition Tools** - Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
 - **📸 Multi-Angle & Variations** - Generate alternate camera angles, prompt variations, and retake failed shots.
 - **🔀 Shot Management** - Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
+- **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders.
+- **⚙️ Settings Panel** - A built-in settings panel (gear icon in header) for managing cloud API keys, uploading models to ComfyUI, and registering custom workflows — no code changes or `.env` editing required.
+- **🔧 Custom Workflows** - Build workflows in ComfyUI, export as JSON, and upload them through the Settings panel. Custom workflows appear as new models in all dropdowns with full LoRA support.
 
 ---
 
@@ -118,18 +124,21 @@ AI-MovieStudio2/
 │   │   ├── routes_assets.py
 │   │   ├── routes_audio.py
 │   │   ├── routes_export.py
-│   │   ├── routes_generate.py
+│   │   ├── routes_generate.py   # Image/video gen + LoRA/model upload endpoints
 │   │   ├── routes_projects.py
 │   │   ├── routes_render.py
 │   │   ├── routes_scenes.py
+│   │   ├── routes_settings.py   # API key management + custom workflow registration
 │   │   ├── routes_shots.py
 │   │   └── routes_timeline.py
 │   ├── core/
 │   │   ├── drivers/         # AI model adapters (the "Driver System")
-│   │   │   ├── base.py              # Abstract base classes
-│   │   │   ├── comfy_image.py
-│   │   │   ├── comfy_video.py
-│   │   │   ├── comfy_camera.py
+│   │   │   ├── __init__.py          # Driver registry + custom workflow support
+│   │   │   ├── base.py              # Abstract base classes + DriverInfo schema
+│   │   │   ├── comfy_image.py       # ComfyUI image driver (LoRA injection)
+│   │   │   ├── comfy_video.py       # ComfyUI video driver (LoRA injection)
+│   │   │   ├── comfy_camera.py      # ComfyUI multi-angle driver (LoRA injection)
+│   │   │   ├── lora_utils.py        # Shared LoRA injection + listing utilities
 │   │   │   ├── fal_image.py
 │   │   │   ├── fal_video.py
 │   │   │   ├── fish_speech.py
@@ -146,7 +155,8 @@ AI-MovieStudio2/
 │   ├── assets/              # The Vault (project data + generated media)
 │   │   ├── default/         # Default project workspace
 │   │   ├── generated/       # AI-generated images & videos
-│   │   └── status/          # Generation status tracking
+│   │   ├── status/          # Generation status tracking
+│   │   └── settings.json    # API keys + custom workflow registrations
 │   ├── app.py               # FastAPI app
 │   ├── main.py              # CLI entry point
 │   └── requirements.txt
@@ -173,6 +183,8 @@ AI-MovieStudio2/
 │   │   │   │   ├── AssetPicker.tsx        # Asset selection dropdown
 │   │   │   │   ├── ShotFrameLinker.tsx    # Link reference frames to shots
 │   │   │   │   ├── ModelSelector.tsx      # AI model dropdown with grouping
+│   │   │   │   ├── LoRASelector.tsx       # LoRA picker with upload + strength sliders
+│   │   │   │   ├── SettingsPanel.tsx      # API keys + model upload + custom workflows
 │   │   │   │   └── Lightbox.tsx           # Fullscreen image viewer
 │   │   │   ├── library/     # Asset grid & detail panel
 │   │   │   ├── camera/      # Camera director (video generation)
@@ -317,6 +329,109 @@ Once the app is running in your browser:
 7. **Reorder & duplicate** - Drag shot cards to reorder them. Use the duplicate button to experiment with different prompts.
 8. **Generate video** - Switch to the Camera Director tab to turn frames into video clips (text-to-video or image-to-video with camera movement).
 9. **Assemble & export** - Arrange shots on the timeline, add dialogue and audio, then export to XML for your editing software.
+10. **Apply LoRAs** - In any generation tab (Generate, Shots, Camera Director), expand **Advanced Settings** to add LoRAs with adjustable strength sliders. Upload new LoRAs directly from the UI.
+11. **Manage settings** - Click the **gear icon** (⚙) in the header to open the Settings panel where you can:
+    - Link cloud API keys (Fal.ai, Replicate)
+    - Upload model files to ComfyUI
+    - Register custom ComfyUI workflows
+
+---
+
+## 🎨 LoRA Support
+
+AI Movie Studio 2 includes built-in LoRA (Low-Rank Adaptation) support for all local ComfyUI drivers. LoRAs let you fine-tune generation with style or character modifications.
+
+### Using LoRAs
+
+1. In any generation tab (Generate, Shots, Camera Director), expand **Advanced Settings**
+2. The **LoRAs** section appears when a local ComfyUI driver is selected
+3. Click **Add LoRA** to open a searchable dropdown of all LoRAs in ComfyUI's `models/loras/` directory
+4. Select one or more LoRAs — each gets a strength slider (0–2, default 0.8)
+5. Click the **upload icon** (⬆) to upload a new `.safetensors` LoRA file directly to ComfyUI
+6. The LoRA list refreshes automatically after upload
+
+### How It Works
+
+- LoRAs are injected as `LoraLoader` nodes into the ComfyUI workflow JSON
+- Multiple LoRAs chain sequentially (each LoRA feeds into the next)
+- LoRA selections are passed via `extra_params.loras` in generation requests
+- All local ComfyUI drivers (image, video, camera) support LoRAs
+- The `supports_loras` flag on each driver controls UI visibility
+
+### LoRA Upload Endpoint
+
+- **`POST /api/generate/loras/upload`** — Uploads `.safetensors`, `.pt`, `.pth`, `.ckpt`, or `.gguf` files to ComfyUI's `models/loras/` directory
+- Target directory resolved from `COMFY_LORAS_DIR`, `COMFY_MODELS_DIR`, or `COMFY_DIR` env vars
+
+---
+
+## ⚙️ Settings & Configuration
+
+The Settings panel (gear icon ⚙ in the header) provides a UI for managing app configuration without editing `.env` files or code.
+
+### Cloud API Keys
+
+Link cloud generation services directly from the UI:
+
+- **Fal.ai** — Enables cloud image and video models (Seedance, MiniMax H3, Nano Banana, etc.)
+- **Replicate** — Enables cloud image models (MetaAI, Flux, SDXL) and Fish Speech TTS
+
+Keys are stored locally in `backend/assets/settings.json` and loaded into environment variables at backend startup. After saving a key, **restart the backend** for cloud drivers to appear in dropdowns.
+
+**Endpoints:**
+- `GET /api/settings/api-keys` — List key status (masked values)
+- `POST /api/settings/api-keys` — Save or update a key
+- `DELETE /api/settings/api-keys/{key_name}` — Remove a key
+
+### Model Upload
+
+Upload checkpoint models (`.safetensors`, `.ckpt`, `.pt`) directly to ComfyUI's `models/checkpoints/` directory:
+
+- **`GET /api/generate/models`** — Lists available checkpoints from ComfyUI
+- **`POST /api/generate/models/upload`** — Uploads a model file
+- Target directory resolved from `COMFY_CHECKPOINTS_DIR`, `COMFY_MODELS_DIR`, or `COMFY_DIR` env vars
+
+> 💡 Models are stored in ComfyUI's directory — our app just queries ComfyUI's API to list them. No duplication.
+
+---
+
+## 🔧 Custom ComfyUI Workflows
+
+You can add new AI models without writing any code. Build a workflow in ComfyUI, export it, and register it through the Settings panel.
+
+### How to Add a Custom Workflow
+
+1. **Build your workflow in ComfyUI** — Set up nodes, models, and parameters
+2. **Export as API JSON** — In ComfyUI, click the menu → **Save (API Format)** → saves a `.json` file
+3. **Open Settings** in AI Movie Studio — Click the gear icon (⚙) in the header
+4. Scroll to **Custom ComfyUI Workflows** and click **Add Custom Workflow**
+5. Fill in:
+   - **Display Name** — What shows in the model dropdown (e.g. "My Custom Flux")
+   - **Driver ID** — Internal ID, auto-generated from filename (e.g. `my_custom_flux`)
+   - **Category** — Image or Video
+   - **Workflow JSON** — Paste the JSON or click **Load from file** to upload the exported `.json`
+6. Click **Register Workflow**
+7. **Refresh the page** — The new model appears in all model dropdowns
+
+### What Happens Behind the Scenes
+
+- The workflow JSON is saved to `backend/core/workflows/{driver_id}.json`
+- A driver entry is registered in `backend/assets/settings.json` under `custom_workflows`
+- `list_image_drivers()` / `list_video_drivers()` automatically include custom workflows
+- `get_image_driver()` / `get_video_driver()` instantiate a ComfyUI driver with the custom workflow
+- LoRA injection works automatically (all custom workflows get `supports_loras: true`)
+
+### Managing Custom Workflows
+
+- All registered workflows are listed in the Settings panel
+- Click the **trash icon** to delete a workflow (removes from `settings.json` + deletes the JSON file)
+- Re-uploading with the same Driver ID updates the existing workflow
+- You can register unlimited custom workflows
+
+**Endpoints:**
+- `GET /api/settings/workflows` — List custom workflows
+- `POST /api/settings/workflows` — Register a new workflow
+- `DELETE /api/settings/workflows/{driver_id}` — Delete a workflow
 
 ---
 
@@ -377,11 +492,15 @@ All configuration is done through a single `.env` file in the `backend/` directo
 | -------- | --------- | ------- | ----------- |
 | `COMFY_URL` | **Yes** (local) | `http://127.0.0.1:8188` | URL of your local ComfyUI instance |
 | `COMFY_OUTPUT_DIR` | No | *(auto-detect)* | Path to ComfyUI's output folder (for reading saved text/metadata) |
-| `FAL_KEY` | No | - | Fal.ai API key. Enables cloud image + video models (Seedance, MiniMax H3, Nano Banana, etc.) |
-| `REPLICATE_API_TOKEN` | No | - | Replicate API token. Enables cloud image models (MetaAI, Flux Schnell, SDXL) + Fish Speech TTS |
+| `COMFY_DIR` | No | - | Path to your ComfyUI installation. Used for LoRA/model uploads (resolves `models/loras/` and `models/checkpoints/`) |
+| `COMFY_LORAS_DIR` | No | - | Direct path to ComfyUI's LoRAs directory (overrides `COMFY_DIR`/`COMFY_MODELS_DIR` for LoRA uploads) |
+| `COMFY_CHECKPOINTS_DIR` | No | - | Direct path to ComfyUI's checkpoints directory (overrides `COMFY_DIR`/`COMFY_MODELS_DIR` for model uploads) |
+| `COMFY_MODELS_DIR` | No | - | Path to ComfyUI's `models/` directory (used as fallback for both LoRA and checkpoint uploads) |
+| `FAL_KEY` | No | - | Fal.ai API key. Enables cloud image + video models. Can also be set via Settings panel UI. |
+| `REPLICATE_API_TOKEN` | No | - | Replicate API token. Enables cloud image models + Fish Speech TTS. Can also be set via Settings panel UI. |
 | `FISH_SPEECH_URL` | No | - | URL for a self-hosted Fish Speech instance (alternative to Replicate-hosted TTS) |
 
-> 💡 You only need **one** of the cloud API keys. If you only use local ComfyUI, just set `COMFY_URL` and skip the rest.
+> 💡 You only need **one** of the cloud API keys. If you only use local ComfyUI, just set `COMFY_URL` and skip the rest. API keys can also be managed via the Settings panel (gear icon in header) — they're stored in `backend/assets/settings.json`.
 
 ---
 
@@ -464,7 +583,11 @@ The app is **never hard-coded to one AI model**. Instead, it uses "Drivers" - sm
 Frontend dropdown → Backend API → Driver Registry → ComfyUI / Fal / Replicate
 ```
 
-Want to add a new model? Just add a new Driver. No frontend changes needed:
+Want to add a new model? Two options:
+
+**Option 1 — No code (Custom Workflows):** Build a workflow in ComfyUI, export as API JSON, and register it via the Settings panel (gear icon in header). See [Custom Workflows](#-custom-comfyui-workflows) above.
+
+**Option 2 — Code a new Driver:** Add a new Driver in `backend/core/drivers/`. The adapter pattern means no frontend changes are needed — the model appears in the UI automatically once registered.
 
 ```python
 # backend/core/drivers/base.py  (conceptual)
@@ -520,7 +643,13 @@ All projects, scenes, shots, and assets are stored locally in `backend/assets/` 
 The software itself is AGPLv3 licensed. For commercial use without open-sourcing your code, see the [Licensing](#-licensing--commercial-use) section. AI-generated content is subject to the terms of whichever model you use - check your provider's usage rights.
 
 **How do I add a new AI model?**
-Add a new Driver in `backend/core/drivers/`. The adapter pattern means no frontend changes are needed - the model appears in the UI automatically once registered.
+Two ways: (1) Build a workflow in ComfyUI, export as API JSON, and register it via the Settings panel (gear icon in header) — no code needed. (2) Add a new Driver class in `backend/core/drivers/` for more complex integrations. See [Custom Workflows](#-custom-comfyui-workflows) for details.
+
+**How do I add LoRAs?**
+In any generation tab, expand Advanced Settings and use the LoRA selector. You can upload `.safetensors` LoRA files directly from the UI — they're saved to ComfyUI's `models/loras/` directory. See [LoRA Support](#-lora-support) for details.
+
+**How do I set API keys without editing .env?**
+Click the gear icon (⚙) in the header to open the Settings panel. You can add, update, and remove Fal.ai and Replicate API keys from there. Keys are stored in `backend/assets/settings.json` and loaded at backend startup.
 
 ---
 
@@ -532,11 +661,14 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 
 ## 🗺️ Roadmap
 
+- [x] LoRA support (upload, select, strength control)
+- [x] Settings panel (API keys, model upload, custom workflows)
+- [x] Custom ComfyUI workflow registration (no-code model addition)
 - [ ] Inpainting & masking tools
 - [ ] PostgreSQL migration for the Vault
 - [ ] Video timeline preview & scrubbing
 - [ ] Voice cloning / lip-sync pipeline
-- [ ] Cloud-only mode (no local ComfyUI required)
+- [x] Cloud-only mode (no local ComfyUI required — set API keys via Settings panel)
 - [ ] Multi-user project sharing
 
 ---
