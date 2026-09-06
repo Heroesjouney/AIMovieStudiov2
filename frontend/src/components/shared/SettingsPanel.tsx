@@ -4,12 +4,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getApiKeys, saveApiKey, deleteApiKey,
   fetchModels, uploadModel,
+  fetchLoras, uploadLora,
   listWorkflows, registerWorkflow, deleteWorkflow,
-  type ApiKeyInfo, type CustomWorkflow,
+  type ApiKeyInfo, type CustomWorkflow, type LoRAInfo,
 } from "@/lib/api";
 import {
   X, Key, Upload, Loader2, Check, ExternalLink, Trash2,
-  Plus, Box, ChevronDown, Settings, FileJson,
+  Plus, Box, ChevronDown, Settings, FileJson, Layers,
 } from "lucide-react";
 
 interface SettingsPanelProps {
@@ -33,6 +34,15 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [modelMsg, setModelMsg] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const modelFileRef = useRef<HTMLInputElement | null>(null);
+
+  // LoRAs
+  const [loras, setLoras] = useState<LoRAInfo[]>([]);
+  const [loadingLoras, setLoadingLoras] = useState(true);
+  const [showLoras, setShowLoras] = useState(false);
+  const [uploadingLora, setUploadingLora] = useState(false);
+  const [loraMsg, setLoraMsg] = useState<string | null>(null);
+  const [loraError, setLoraError] = useState<string | null>(null);
+  const loraFileRef = useRef<HTMLInputElement | null>(null);
 
   // Workflows
   const [workflows, setWorkflows] = useState<CustomWorkflow[]>([]);
@@ -71,6 +81,18 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   }, []);
 
+  const loadLoras = useCallback(async () => {
+    setLoadingLoras(true);
+    try {
+      const resp = await fetchLoras();
+      setLoras(resp.loras);
+    } catch {
+      setLoraError("Failed to load LoRAs");
+    } finally {
+      setLoadingLoras(false);
+    }
+  }, []);
+
   const loadWorkflows = useCallback(async () => {
     setLoadingWorkflows(true);
     try {
@@ -86,8 +108,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   useEffect(() => {
     loadKeys();
     loadModels();
+    loadLoras();
     loadWorkflows();
-  }, [loadKeys, loadModels, loadWorkflows]);
+  }, [loadKeys, loadModels, loadLoras, loadWorkflows]);
 
   const handleSaveKey = async (keyName: string) => {
     if (!keyValue.trim()) return;
@@ -163,6 +186,21 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       if (!wfId) setWfId(file.name.replace(/\.json$/i, "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase());
     };
     reader.readAsText(file);
+  };
+
+  const handleUploadLora = async (file: File) => {
+    setUploadingLora(true);
+    setLoraError(null);
+    setLoraMsg(null);
+    try {
+      await uploadLora(file);
+      setLoraMsg(`Uploaded ${file.name} — refreshing list...`);
+      await loadLoras();
+    } catch (err) {
+      setLoraError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingLora(false);
+    }
   };
 
   const handleUploadModel = async (file: File) => {
@@ -381,6 +419,74 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     >
                       <Box className="w-3 h-3 text-studio-accent/60 shrink-0" />
                       <span className="truncate">{model.name}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* LoRAs Section */}
+          <section>
+            <div className="flex items-center gap-2 mb-3">
+              <Layers className="w-4 h-4 text-studio-accent" />
+              <h3 className="text-sm font-semibold">ComfyUI LoRAs</h3>
+            </div>
+            <p className="text-[11px] text-studio-muted mb-4">
+              Upload LoRA files (.safetensors, .pt, .pth) to ComfyUI's <code className="text-studio-accent">models/loras/</code> directory. These appear in the LoRA selector in all generation tabs.
+            </p>
+
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => loraFileRef.current?.click()}
+                disabled={uploadingLora}
+                className="flex items-center gap-1.5 px-3 py-2 bg-studio-panel border border-studio-border hover:border-studio-accent/50 text-studio-muted hover:text-studio-text text-xs rounded-lg transition-all disabled:opacity-40"
+              >
+                {uploadingLora ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                Upload LoRA
+              </button>
+              <button
+                onClick={() => setShowLoras(!showLoras)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-studio-panel border border-studio-border hover:border-studio-accent/50 text-studio-muted hover:text-studio-text text-xs rounded-lg transition-all"
+              >
+                {loras.length} LoRAs
+                <ChevronDown className={`w-3 h-3 transition-transform ${showLoras ? "rotate-180" : ""}`} />
+              </button>
+              <input
+                ref={loraFileRef}
+                type="file"
+                accept=".safetensors,.pt,.pth,.ckpt,.gguf"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleUploadLora(file);
+                  if (e.target) e.target.value = "";
+                }}
+              />
+            </div>
+
+            {loraMsg && <p className="text-[10px] text-green-500 mb-2">{loraMsg}</p>}
+            {loraError && <p className="text-[10px] text-studio-danger mb-2">{loraError}</p>}
+
+            {showLoras && (
+              <div className="max-h-48 overflow-y-auto bg-studio-bg rounded-lg border border-studio-border">
+                {loadingLoras ? (
+                  <div className="flex items-center gap-2 p-3 text-xs text-studio-muted">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Loading LoRAs...
+                  </div>
+                ) : loras.length === 0 ? (
+                  <p className="p-3 text-[10px] text-studio-muted text-center">
+                    No LoRAs found. Is ComfyUI running?
+                  </p>
+                ) : (
+                  loras.map((lora) => (
+                    <div
+                      key={lora.name}
+                      className="flex items-center gap-2 px-3 py-2 text-[11px] border-b border-studio-border/30 last:border-0"
+                    >
+                      <Layers className="w-3 h-3 text-studio-accent/60 shrink-0" />
+                      <span className="truncate">{lora.name}</span>
                     </div>
                   ))
                 )}
