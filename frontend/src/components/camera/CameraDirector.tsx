@@ -27,6 +27,7 @@ import {
   Type, Layers, Wand2, Trash2, RotateCcw, Dices,
   ChevronDown, Settings, Clock,
 } from "lucide-react";
+import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
 
 // =============================================================================
 // Constants
@@ -212,6 +213,9 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   // Advanced settings toggle
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // LoRA selections
+  const [loras, setLoras] = useState<LoRASelection[]>([]);
 
   // Prompt history
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -465,6 +469,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setShowAdvanced(false);
     setShowPromptHistory(false);
     setElapsedSeconds(0);
+    setLoras([]);
   };
 
   const handleGenerate = async () => {
@@ -558,6 +563,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       extra_params: {
         ...(mode === "ia2v" ? { enhance_prompt: enhancePrompt } : {}),
         megapixels: RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
+        ...(loras.length > 0 ? { loras } : {}),
       },
       skip_continuity: skipContinuity,
     };
@@ -1267,6 +1273,17 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                     Auto-continue from previous shot's last frame{mode === "i2v" ? " (when no first frame picked)" : ""}
                   </span>
                 </label>
+              )}
+
+              {/* LoRAs */}
+              {videoDrivers.find((d: any) => d.driver_id === selectedModelId)?.supports_loras && (
+                <div>
+                  <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
+                    <Layers className="w-3 h-3" />
+                    LoRAs
+                  </label>
+                  <LoRASelector selected={loras} onChange={setLoras} />
+                </div>
               )}
             </div>
           )}

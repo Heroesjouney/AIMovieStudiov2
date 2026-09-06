@@ -151,6 +151,7 @@ class DriverInfo(BaseModel):
     max_reference_audio: int = 1
     max_total_references: int = 4
     resolution_tiers: List[str] = Field(default_factory=lambda: ["native"])
+    supports_loras: bool = False
 
 
 # =============================================================================

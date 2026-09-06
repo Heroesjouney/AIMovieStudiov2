@@ -8,11 +8,12 @@ import {
 import {
   Plus, Loader2, ImageIcon, Camera,
   Link2, X, Layers, Sparkles,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, ChevronDown, Settings,
 } from "lucide-react";
 import { AssetPicker } from "../shared/AssetPicker";
 import { ShotFrameLinker } from "../shared/ShotFrameLinker";
 import { ModelSelector } from "../shared/ModelSelector";
+import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
 import { Lightbox } from "../shared/Lightbox";
 import { MultiAnglePanel } from "./MultiAnglePanel";
 import { VariationPanel } from "./VariationPanel";
@@ -37,6 +38,10 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
   const [showImageLinker, setShowImageLinker] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const poll = useGenerationPolling();
+
+  // LoRA selections
+  const [loras, setLoras] = useState<LoRASelection[]>([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const availableAssets = assets.filter((a) => a.primary_image);
 
@@ -78,10 +83,16 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
     const genHeight = recipeParams?.height ?? 768;
 
     try {
+      const extraParams: Record<string, any> = {};
+      if (loras.length > 0) {
+        extraParams.loras = loras;
+      }
       const resp = await generateShotFrame(
         shot.id, prompt, selectedImageDriver,
         negativePrompt || undefined, genWidth, genHeight, undefined,
         linkedImagePaths.length > 0 ? linkedImagePaths : undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        Object.keys(extraParams).length > 0 ? extraParams : undefined,
       );
       if (resp.status === "failed") { poll.setError(resp.error_message || "Failed"); return; }
 
@@ -271,6 +282,29 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
                 onToggle={() => setShowImageLinker(!showImageLinker)}
               />
             </div>
+
+            {/* Advanced: LoRAs */}
+            {imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_loras && (
+              <div className="mb-2">
+                <button
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider hover:text-studio-text transition-colors mb-1"
+                >
+                  <Settings className="w-3 h-3" />
+                  Advanced
+                  <ChevronDown className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
+                </button>
+                {showAdvanced && (
+                  <div className="p-2 bg-studio-bg rounded-lg border border-studio-border/50">
+                    <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
+                      <Layers className="w-3 h-3" />
+                      LoRAs
+                    </label>
+                    <LoRASelector selected={loras} onChange={setLoras} compact />
+                  </div>
+                )}
+              </div>
+            )}
 
             <button
               onClick={handleGenerateFrame}

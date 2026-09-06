@@ -3,9 +3,10 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useStudioStore } from "@/lib/store";
 import { generateImage, checkGenerationStatus, saveGeneratedToAsset, fetchAssets } from "@/lib/api";
+import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
 import {
   Sparkles, Loader2, Save, Download, Check, RotateCcw,
-  Dices, ChevronDown, Settings, Clock, X,
+  Dices, ChevronDown, Settings, Clock, X, Layers,
 } from "lucide-react";
 
 // =============================================================================
@@ -91,6 +92,9 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   // Advanced settings toggle
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // LoRA selections
+  const [loras, setLoras] = useState<LoRASelection[]>([]);
+
   // Prompt history
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [showPromptHistory, setShowPromptHistory] = useState(false);
@@ -148,6 +152,10 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
         ? ", pure white background, isolated on white, no background"
         : "";
       const finalPrompt = prompt + bgSuffix;
+      const extraParams: Record<string, any> = {};
+      if (loras.length > 0) {
+        extraParams.loras = loras;
+      }
       const response = await generateImage(
         finalPrompt,
         selectedImageDriver,
@@ -156,6 +164,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
         height,
         seed ? Number(seed) : undefined,
         refPaths,
+        Object.keys(extraParams).length > 0 ? extraParams : undefined,
       );
 
       if (response.status === "failed") {
@@ -228,6 +237,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
     setShowAdvanced(false);
     setShowPromptHistory(false);
     setElapsedSeconds(0);
+    setLoras([]);
   };
 
   const handleSaveOne = async (index: number, imageUrl: string) => {
@@ -526,6 +536,17 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
                 </button>
               </div>
             </div>
+
+            {/* LoRAs */}
+            {currentDriver?.supports_loras && (
+              <div>
+                <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
+                  <Layers className="w-3 h-3" />
+                  LoRAs
+                </label>
+                <LoRASelector selected={loras} onChange={setLoras} />
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -130,6 +130,7 @@ class ShotFrameGenerateRequest(BaseModel):
     vertical_angle: Optional[int] = None
     zoom: Optional[float] = None
     prompt_override: Optional[str] = None
+    extra_params: Dict[str, Any] = Field(default_factory=dict, description="Model-specific extra params (e.g. loras, cfg, steps)")
 
 
 class ShotVariationRequest(BaseModel):

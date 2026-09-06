@@ -9,10 +9,11 @@ import { ShotComposer } from "@/components/shots/ShotComposer";
 import { InspectorPanel } from "@/components/studio/InspectorPanel";
 import { TimelineEditor } from "@/components/timeline/TimelineEditor";
 import { UserMenu } from "@/components/UserMenu";
-import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles, Video, ChevronDown, ChevronUp } from "lucide-react";
+import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles, Video, ChevronDown, ChevronUp, Settings } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { useRouter } from "next/navigation";
+import { SettingsPanel } from "@/components/shared/SettingsPanel";
 
 export default function ProjectWorkspacePage() {
   const params = useParams();
@@ -28,6 +29,7 @@ export default function ProjectWorkspacePage() {
 
   const [loaded, setLoaded] = useState(false);
   const [connected, setConnected] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
   const [assetPanelCollapsed, setAssetPanelCollapsed] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [storyboardCollapsed, setStoryboardCollapsed] = useState(false);
@@ -164,6 +166,15 @@ export default function ProjectWorkspacePage() {
           </button>
 
           <div className="w-px h-5 bg-studio-border" />
+
+          {/* Settings */}
+          <button
+            onClick={() => setShowSettings(true)}
+            className="p-1.5 rounded-lg text-studio-muted hover:text-studio-text hover:bg-studio-panelHover transition-colors"
+            title="Settings & API Keys"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
 
           <UserMenu />
         </div>
@@ -334,6 +345,9 @@ export default function ProjectWorkspacePage() {
           )}
         </main>
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

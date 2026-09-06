@@ -612,6 +612,9 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     extra_params["shot_type"] = "establishing" if is_establishing else "subsequent"
     if req.composition_preset:
         extra_params["composition_preset"] = req.composition_preset
+    # Merge caller-supplied extra_params (e.g. loras)
+    if req.extra_params:
+        extra_params.update(req.extra_params)
 
     gen_req = ImageGenerationRequest(
         prompt=effective_prompt,

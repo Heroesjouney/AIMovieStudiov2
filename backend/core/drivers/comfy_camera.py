@@ -25,6 +25,7 @@ from .base import (
     ImageDriver, ImageGenerationRequest, ImageGenerationResponse,
     GenerationStatus, DriverCategory, DriverInfo,
 )
+from .lora_utils import inject_loras
 from core.schemas.camera import CameraParams, CameraAnglePreset, MultiAngleRequest
 
 
@@ -125,7 +126,7 @@ class ComfyCameraDriver(ImageDriver):
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
         """Standard image generation (not used for camera — use generate_angles instead)."""
-        return await self._submit_workflow(request.prompt, request.reference_image_paths, request.width, request.height, request.seed)
+        return await self._submit_workflow(request.prompt, request.reference_image_paths, request.width, request.height, request.seed, request.extra_params)
 
     async def generate_angles(self, req: MultiAngleRequest) -> ImageGenerationResponse:
         """
@@ -158,6 +159,11 @@ class ComfyCameraDriver(ImageDriver):
 
             if not wf:
                 continue
+
+            # Inject LoRAs if provided in extra_params
+            loras = req.extra_params.get("loras", []) if hasattr(req, "extra_params") else []
+            if loras:
+                wf = inject_loras(wf, loras)
 
             sub_job_id = str(uuid.uuid4())
             try:
@@ -202,7 +208,8 @@ class ComfyCameraDriver(ImageDriver):
         )
 
     async def _submit_workflow(
-        self, prompt: str, ref_paths: List[str], width: int, height: int, seed: Optional[int]
+        self, prompt: str, ref_paths: List[str], width: int, height: int, seed: Optional[int],
+        extra_params: Optional[Dict[str, Any]] = None,
     ) -> ImageGenerationResponse:
         """Submit a single workflow to ComfyUI."""
         job_id = str(uuid.uuid4())
@@ -213,6 +220,12 @@ class ComfyCameraDriver(ImageDriver):
                 status=GenerationStatus.FAILED,
                 error_message="3D camera workflow template not found",
             )
+
+        # Inject LoRAs if provided
+        if extra_params:
+            loras = extra_params.get("loras", [])
+            if loras:
+                workflow = inject_loras(workflow, loras)
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -347,4 +360,5 @@ class ComfyCameraDriver(ImageDriver):
             category=self.category,
             supported_features=self.supported_features,
             requires_api_key=False,
+            supports_loras=True,
         )

@@ -5,8 +5,9 @@ Used by the Asset generation panel and the model selector dropdown.
 """
 
 import json
+import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -14,6 +15,7 @@ from core.drivers import (
     get_image_driver, list_image_drivers, list_video_drivers, list_audio_drivers,
 )
 from core.drivers.base import ImageGenerationRequest, ImageGenerationResponse, GenerationStatus
+from core.drivers.lora_utils import fetch_lora_list
 
 router = APIRouter()
 
@@ -45,6 +47,147 @@ async def get_audio_drivers():
     return [d.model_dump() for d in list_audio_drivers()]
 
 
+@router.get("/loras")
+async def list_loras():
+    """List available LoRA models from the local ComfyUI instance."""
+    comfy_url = os.getenv("COMFY_URL", "http://127.0.0.1:8188")
+    loras = await fetch_lora_list(comfy_url)
+    return {"loras": loras, "comfy_url": comfy_url}
+
+
+@router.post("/loras/upload")
+async def upload_lora(file: UploadFile = File(...)):
+    """Upload a LoRA file (.safetensors) to ComfyUI's models/loras directory.
+
+    The target directory is determined by (in order):
+    1. COMFY_LORAS_DIR env var
+    2. COMFY_MODELS_DIR env var + /loras
+    3. COMFY_DIR env var + /models/loras
+    4. Fallback: ./ComfyUI/models/loras relative to CWD
+    """
+    loras_dir = (
+        os.getenv("COMFY_LORAS_DIR")
+        or (os.path.join(os.getenv("COMFY_MODELS_DIR", ""), "loras") if os.getenv("COMFY_MODELS_DIR") else None)
+        or (os.path.join(os.getenv("COMFY_DIR", ""), "models", "loras") if os.getenv("COMFY_DIR") else None)
+        or os.path.join(os.getcwd(), "ComfyUI", "models", "loras")
+    )
+
+    loras_path = Path(loras_dir)
+    if not loras_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"ComfyUI loras directory not found: {loras_path}. Set COMFY_LORAS_DIR or COMFY_DIR env var.",
+        )
+
+    # Validate file extension
+    filename = file.filename or "uploaded.safetensors"
+    if not filename.lower().endswith((".safetensors", ".pt", ".pth", ".ckpt", ".gguf")):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .safetensors, .pt, .pth, .ckpt, or .gguf files are allowed.",
+        )
+
+    dest = loras_path / filename
+    if dest.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A LoRA named '{filename}' already exists.",
+        )
+
+    # Write the file
+    content = await file.read()
+    dest.write_bytes(content)
+    print(f"[LoRA] Uploaded '{filename}' ({len(content)} bytes) to {dest}")
+
+    return {"name": filename, "size_bytes": len(content), "path": str(dest)}
+
+
+@router.get("/models")
+async def list_models():
+    """List available checkpoint models from the local ComfyUI instance."""
+    comfy_url = os.getenv("COMFY_URL", "http://127.0.0.1:8188")
+    import aiohttp
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{comfy_url}/object_info/CheckpointLoaderSimple",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    return {"models": [], "comfy_url": comfy_url}
+                data = await resp.json()
+                ckpt_info = data.get("CheckpointLoaderSimple", {})
+                input_spec = ckpt_info.get("input", {})
+                ckpt_input = input_spec.get("ckpt_name", {})
+                if isinstance(ckpt_input, dict):
+                    filenames = ckpt_input.get("values", [])
+                elif isinstance(ckpt_input, list):
+                    filenames = ckpt_input
+                else:
+                    filenames = []
+                return {"models": [{"name": fn} for fn in filenames], "comfy_url": comfy_url}
+    except Exception as e:
+        print(f"[Models] Failed to fetch checkpoint list from ComfyUI: {e}")
+        return {"models": [], "comfy_url": comfy_url}
+
+
+@router.post("/models/upload")
+async def upload_model(file: UploadFile = File(...)):
+    """Upload a checkpoint model file to ComfyUI's models/checkpoints directory.
+
+    The target directory is determined by (in order):
+    1. COMFY_CHECKPOINTS_DIR env var
+    2. COMFY_MODELS_DIR env var + /checkpoints
+    3. COMFY_DIR env var + /models/checkpoints
+    4. Fallback: ./ComfyUI/models/checkpoints relative to CWD
+    """
+    ckpt_dir = (
+        os.getenv("COMFY_CHECKPOINTS_DIR")
+        or (os.path.join(os.getenv("COMFY_MODELS_DIR", ""), "checkpoints") if os.getenv("COMFY_MODELS_DIR") else None)
+        or (os.path.join(os.getenv("COMFY_DIR", ""), "models", "checkpoints") if os.getenv("COMFY_DIR") else None)
+        or os.path.join(os.getcwd(), "ComfyUI", "models", "checkpoints")
+    )
+
+    ckpt_path = Path(ckpt_dir)
+    if not ckpt_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"ComfyUI checkpoints directory not found: {ckpt_path}. Set COMFY_CHECKPOINTS_DIR or COMFY_DIR env var.",
+        )
+
+    filename = file.filename or "uploaded.safetensors"
+    if not filename.lower().endswith((".safetensors", ".pt", ".pth", ".ckpt", ".gguf")):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .safetensors, .pt, .pth, .ckpt, or .gguf files are allowed.",
+        )
+
+    dest = ckpt_path / filename
+    if dest.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A model named '{filename}' already exists.",
+        )
+
+    content = await file.read()
+    dest.write_bytes(content)
+    print(f"[Models] Uploaded '{filename}' ({len(content)} bytes) to {dest}")
+
+    return {"name": filename, "size_bytes": len(content), "path": str(dest)}
+
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    model_id: str = "qwen_image"
+    negative_prompt: Optional[str] = None
+    width: int = 1024
+    height: int = 1024
+    seed: Optional[int] = None
+    reference_image_paths: List[str] = []
+    extra_params: Optional[dict] = None
+
+
 @router.post("/image")
 async def generate_image(
     prompt: str,
@@ -54,11 +197,22 @@ async def generate_image(
     height: int = 1024,
     seed: Optional[int] = None,
     reference_image_paths: List[str] = None,
+    extra_params: Optional[str] = None,
 ):
-    """Generate an image using the selected driver."""
+    """Generate an image using the selected driver.
+
+    extra_params: JSON-encoded string with optional keys like {"loras": [...], "cfg": ..., "steps": ...}
+    """
     driver = get_image_driver(model_id)
     if not driver:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
+
+    parsed_extra: dict = {}
+    if extra_params:
+        try:
+            parsed_extra = json.loads(extra_params)
+        except (json.JSONDecodeError, TypeError):
+            parsed_extra = {}
 
     req = ImageGenerationRequest(
         prompt=prompt,
@@ -67,6 +221,7 @@ async def generate_image(
         height=height,
         seed=seed,
         reference_image_paths=reference_image_paths or [],
+        extra_params=parsed_extra,
     )
     response = await driver.generate(req)
     return response.model_dump()

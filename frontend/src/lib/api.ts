@@ -24,6 +24,7 @@ export interface DriverInfo {
   max_reference_audio?: number;
   max_total_references?: number;
   resolution_tiers?: string[];
+  supports_loras?: boolean;
 }
 
 export interface DriversList {
@@ -156,6 +157,142 @@ export async function getDrivers(): Promise<DriversList> {
   return resp.json();
 }
 
+export interface LoRAInfo {
+  name: string;
+}
+
+export async function fetchLoras(): Promise<{ loras: LoRAInfo[]; comfy_url: string }> {
+  const resp = await fetch(`${API_BASE}/generate/loras`);
+  return resp.json();
+}
+
+export async function uploadLora(file: File): Promise<{ name: string; size_bytes: number; path: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const resp = await fetch(`${API_BASE}/generate/loras/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(err.detail || "Failed to upload LoRA");
+  }
+  return resp.json();
+}
+
+// Models (checkpoints)
+export interface ModelInfo {
+  name: string;
+}
+
+export async function fetchModels(): Promise<{ models: ModelInfo[]; comfy_url: string }> {
+  const resp = await fetch(`${API_BASE}/generate/models`);
+  return resp.json();
+}
+
+export async function uploadModel(file: File): Promise<{ name: string; size_bytes: number; path: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const resp = await fetch(`${API_BASE}/generate/models/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(err.detail || "Failed to upload model");
+  }
+  return resp.json();
+}
+
+// Settings / API Keys
+export interface ApiKeyInfo {
+  label: string;
+  description: string;
+  url: string;
+  is_set: boolean;
+  masked_value: string;
+}
+
+export async function getApiKeys(): Promise<Record<string, ApiKeyInfo>> {
+  const resp = await fetch(`${API_BASE}/settings/api-keys`);
+  return resp.json();
+}
+
+export async function saveApiKey(keyName: string, value: string): Promise<{ status: string }> {
+  const resp = await fetch(`${API_BASE}/settings/api-keys`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key_name: keyName, value }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Save failed" }));
+    throw new Error(err.detail || "Failed to save API key");
+  }
+  return resp.json();
+}
+
+export async function deleteApiKey(keyName: string): Promise<{ status: string }> {
+  const resp = await fetch(`${API_BASE}/settings/api-keys/${keyName}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Delete failed" }));
+    throw new Error(err.detail || "Failed to delete API key");
+  }
+  return resp.json();
+}
+
+// Custom Workflows
+export interface CustomWorkflow {
+  driver_id: string;
+  display_name: string;
+  category: string;
+  supported_features: string[];
+  workflow_file: string;
+  supports_loras: boolean;
+}
+
+export async function listWorkflows(): Promise<{ workflows: CustomWorkflow[] }> {
+  const resp = await fetch(`${API_BASE}/settings/workflows`);
+  return resp.json();
+}
+
+export async function registerWorkflow(
+  driverId: string,
+  displayName: string,
+  category: string,
+  workflowJson: Record<string, any>,
+  supportedFeatures?: string[],
+): Promise<{ status: string; driver_id: string }> {
+  const resp = await fetch(`${API_BASE}/settings/workflows`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      driver_id: driverId,
+      display_name: displayName,
+      category,
+      workflow_json: workflowJson,
+      supported_features: supportedFeatures || ["text_to_image"],
+    }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Registration failed" }));
+    throw new Error(err.detail || "Failed to register workflow");
+  }
+  return resp.json();
+}
+
+export async function deleteWorkflow(driverId: string): Promise<{ status: string }> {
+  const resp = await fetch(`${API_BASE}/settings/workflows/${driverId}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Delete failed" }));
+    throw new Error(err.detail || "Failed to delete workflow");
+  }
+  return resp.json();
+}
+
 // Assets
 export async function fetchAssets(projectId: string, type?: string): Promise<AssetResponse[]> {
   const url = type
@@ -235,6 +372,7 @@ export async function generateImage(
   height?: number,
   seed?: number,
   referenceImagePaths?: string[],
+  extraParams?: Record<string, any>,
 ): Promise<GenerationResponse> {
   const params = new URLSearchParams({ prompt, model_id: modelId });
   if (negativePrompt) params.set("negative_prompt", negativePrompt);
@@ -243,6 +381,9 @@ export async function generateImage(
   if (seed !== undefined) params.set("seed", String(seed));
   if (referenceImagePaths?.length) {
     params.set("reference_image_paths", referenceImagePaths.join(","));
+  }
+  if (extraParams && Object.keys(extraParams).length > 0) {
+    params.set("extra_params", JSON.stringify(extraParams));
   }
   const resp = await fetch(`${API_BASE}/generate/image?${params}`, { method: "POST" });
   return resp.json();
@@ -376,6 +517,7 @@ export async function generateShotFrame(
   verticalAngle?: number,
   zoom?: number,
   compositionPreset?: string,
+  extraParams?: Record<string, any>,
 ): Promise<GenerationResponse> {
   const resp = await fetch(`${API_BASE}/shots/frame`, {
     method: "POST",
@@ -396,6 +538,7 @@ export async function generateShotFrame(
       vertical_angle: verticalAngle,
       zoom,
       composition_preset: compositionPreset,
+      extra_params: extraParams || {},
     }),
   });
   return resp.json();

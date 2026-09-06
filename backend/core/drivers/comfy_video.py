@@ -29,6 +29,7 @@ from .base import (
     GenerationStatus, DriverCategory, DriverInfo, AspectRatio,
     VideoGenerationMode,
 )
+from .lora_utils import inject_loras
 
 
 # Camera movement preset → motion prompt augmentation
@@ -650,6 +651,11 @@ class ComfyVideoDriver(VideoDriver):
                 error_message=f"Workflow template '{self._model_id}' not found or empty",
             )
 
+        # Inject LoRAs if provided
+        loras = request.extra_params.get("loras", [])
+        if loras:
+            workflow = inject_loras(workflow, loras)
+
         self._jobs[job_id] = {
             "workflow": workflow,
             "status": GenerationStatus.PENDING,
@@ -800,4 +806,5 @@ class ComfyVideoDriver(VideoDriver):
             supported_features=self.supported_features,
             max_duration_seconds=self.max_duration_seconds,
             requires_api_key=False,
+            supports_loras=True,
         )

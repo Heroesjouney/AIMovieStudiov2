@@ -6,7 +6,7 @@ used by the 3D Camera Director for multi-angle generation.
 """
 
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -119,6 +119,7 @@ class MultiAngleRequest(BaseModel):
     height: int = Field(default=1024)
     seed: Optional[int] = None
     reference_image_paths: List[str] = Field(default_factory=list, description="Additional reference images (character, location)")
+    extra_params: Dict[str, Any] = Field(default_factory=dict, description="Model-specific extra params (e.g. loras)")
 
 
 class CameraDirectionResponse(BaseModel):

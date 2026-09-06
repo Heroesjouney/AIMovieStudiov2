@@ -87,6 +87,10 @@ from api.routes_audio import router as audio_router
 from api.routes_timeline import router as timeline_router
 from api.routes_export import router as export_router
 from api.routes_projects import router as projects_router
+from api.routes_settings import router as settings_router, load_api_keys_into_env
+
+# Load saved API keys into env before drivers are initialized
+load_api_keys_into_env()
 
 app.include_router(projects_router, prefix="/api/projects", tags=["Projects"])
 app.include_router(assets_router, prefix="/api/assets", tags=["Assets"])
@@ -97,3 +101,4 @@ app.include_router(render_router, prefix="/api/render", tags=["Render"])
 app.include_router(audio_router, prefix="/api/audio", tags=["Audio"])
 app.include_router(timeline_router, prefix="/api/timeline", tags=["Timeline"])
 app.include_router(export_router, prefix="/api/export", tags=["Export"])
+app.include_router(settings_router, prefix="/api/settings", tags=["Settings"])

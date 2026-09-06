@@ -24,6 +24,7 @@ from .base import (
     ImageDriver, ImageGenerationRequest, ImageGenerationResponse,
     GenerationStatus, DriverCategory, DriverInfo,
 )
+from .lora_utils import inject_loras
 
 
 class ComfyImageDriver(ImageDriver):
@@ -410,6 +411,11 @@ class ComfyImageDriver(ImageDriver):
             user_cfg=request.extra_params.get("cfg"),
             user_steps=request.extra_params.get("steps"),
         )
+
+        # Inject LoRAs if provided
+        loras = request.extra_params.get("loras", [])
+        if loras:
+            wf = inject_loras(wf, loras)
 
         # Debug: log injected LoadImage values and denoise
         for nid, nd in wf.items():
@@ -1128,4 +1134,5 @@ class ComfyImageDriver(ImageDriver):
             category=self.category,
             supported_features=self.supported_features,
             requires_api_key=False,
+            supports_loras=True,
         )

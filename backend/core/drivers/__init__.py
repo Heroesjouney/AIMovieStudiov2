@@ -24,6 +24,24 @@ def get_image_driver(model_id: str) -> Optional[ImageDriver]:
             from .comfy_image import ComfyImageDriver
             _comfy_image_cache[model_id] = ComfyImageDriver(model_id=model_id)
         return _comfy_image_cache[model_id]
+    # Custom workflows (image)
+    from api.routes_settings import get_custom_workflow_by_id
+    custom = get_custom_workflow_by_id(model_id)
+    if custom and custom.get("category") == "image":
+        if model_id not in _comfy_image_cache:
+            from .comfy_image import ComfyImageDriver
+            driver = ComfyImageDriver(model_id=model_id)
+            # Inject custom workflow into MODEL_INFO so _load_workflow finds it
+            driver.MODEL_INFO[model_id] = {
+                "name": custom["display_name"],
+                "workflow_t2i": model_id,
+                "workflow_i2i": model_id,
+            }
+            driver._model_name = custom["display_name"]
+            driver._workflow_t2i = model_id
+            driver._workflow_i2i = model_id
+            _comfy_image_cache[model_id] = driver
+        return _comfy_image_cache[model_id]
     if model_id.startswith("fal_") and model_id not in ("fal_seedance", "fal_minimax_h3"):
         key = model_id.replace("fal_", "")
         from .fal_image import FalImageDriver
@@ -47,6 +65,23 @@ def get_video_driver(model_id: str) -> Optional[VideoDriver]:
         if model_id not in _comfy_video_cache:
             from .comfy_video import ComfyVideoDriver
             _comfy_video_cache[model_id] = ComfyVideoDriver(model_id=model_id)
+        return _comfy_video_cache[model_id]
+    # Custom workflows (video)
+    from api.routes_settings import get_custom_workflow_by_id
+    custom = get_custom_workflow_by_id(model_id)
+    if custom and custom.get("category") == "video":
+        if model_id not in _comfy_video_cache:
+            from .comfy_video import ComfyVideoDriver
+            driver = ComfyVideoDriver(model_id=model_id)
+            driver.MODEL_INFO[model_id] = {
+                "name": custom["display_name"],
+                "workflow_t2i": model_id,
+                "workflow_i2i": model_id,
+            }
+            driver._model_name = custom["display_name"]
+            driver._workflow_t2i = model_id
+            driver._workflow_i2i = model_id
+            _comfy_video_cache[model_id] = driver
         return _comfy_video_cache[model_id]
     if model_id in ("fal_seedance", "fal_seedance_2", "fal_seedance_2_5", "fal_minimax_h3"):
         key = model_id.replace("fal_", "")
@@ -75,24 +110,28 @@ def list_image_drivers() -> List[DriverInfo]:
         display_name="Qwen Image (ComfyUI)",
         category=DriverCategory.LOCAL,
         supported_features=["text_to_image", "image_to_image", "inpainting"],
+        supports_loras=True,
     ))
     drivers.append(DriverInfo(
         driver_id="z_image",
         display_name="Z-Image (ComfyUI)",
         category=DriverCategory.LOCAL,
         supported_features=["text_to_image", "image_to_image"],
+        supports_loras=True,
     ))
     drivers.append(DriverInfo(
         driver_id="krea2",
         display_name="Krea 2 (ComfyUI)",
         category=DriverCategory.LOCAL,
         supported_features=["text_to_image", "image_to_image"],
+        supports_loras=True,
     ))
     drivers.append(DriverInfo(
         driver_id="flux2",
         display_name="Flux 2 (ComfyUI)",
         category=DriverCategory.LOCAL,
         supported_features=["text_to_image", "image_to_image"],
+        supports_loras=True,
     ))
     # Storyboard - ComfyUI
     drivers.append(DriverInfo(
@@ -102,6 +141,7 @@ def list_image_drivers() -> List[DriverInfo]:
         supported_features=["image_to_image", "multi_reference", "storyboard"],
         max_reference_images=3,
         max_total_references=3,
+        supports_loras=True,
     ))
     drivers.append(DriverInfo(
         driver_id="qwen_multiangle",
@@ -110,12 +150,14 @@ def list_image_drivers() -> List[DriverInfo]:
         supported_features=["image_to_image", "multi_angle", "multi_reference", "storyboard"],
         max_reference_images=3,
         max_total_references=3,
+        supports_loras=True,
     ))
     drivers.append(DriverInfo(
         driver_id="flux2_kontext",
         display_name="Flux 2 Kontext (ComfyUI)",
         category=DriverCategory.LOCAL,
         supported_features=["image_to_image", "multi_reference", "storyboard"],
+        supports_loras=True,
     ))
     # Cloud - Fal.ai
     for mid, name in [("nano_banana", "Nano Banana (Fal.ai)"), ("krea", "Krea (Fal.ai)"), ("flux_dev", "Flux Dev (Fal.ai)"), ("flux_2", "Flux 2 (Fal.ai)")]:
@@ -139,6 +181,20 @@ def list_image_drivers() -> List[DriverInfo]:
                 requires_api_key=True,
                 api_key_env_var="REPLICATE_API_TOKEN",
             ))
+    # Custom workflows (image)
+    try:
+        from api.routes_settings import get_custom_workflows
+        for wf in get_custom_workflows():
+            if wf.get("category") == "image":
+                drivers.append(DriverInfo(
+                    driver_id=wf["driver_id"],
+                    display_name=wf["display_name"],
+                    category=DriverCategory.LOCAL,
+                    supported_features=wf.get("supported_features", ["text_to_image"]),
+                    supports_loras=wf.get("supports_loras", True),
+                ))
+    except Exception:
+        pass
     return drivers
 
 
@@ -156,6 +212,7 @@ def list_video_drivers() -> List[DriverInfo]:
         max_reference_videos=1,
         max_total_references=2,
         resolution_tiers=["native", "fast"],
+        supports_loras=True,
     ))
     drivers.append(DriverInfo(
         driver_id="wan_video",
@@ -163,6 +220,7 @@ def list_video_drivers() -> List[DriverInfo]:
         category=DriverCategory.LOCAL,
         supported_features=["text_to_video", "image_to_video", "first_last_frame"],
         max_duration_seconds=10.0,
+        supports_loras=True,
     ))
     drivers.append(DriverInfo(
         driver_id="minimax_h3",
@@ -175,6 +233,7 @@ def list_video_drivers() -> List[DriverInfo]:
         max_reference_audio=3,
         max_total_references=12,
         resolution_tiers=["native", "fast"],
+        supports_loras=True,
     ))
     # Cloud - Fal.ai
     if os.getenv("FAL_KEY"):
@@ -214,6 +273,20 @@ def list_video_drivers() -> List[DriverInfo]:
             requires_api_key=True,
             api_key_env_var="FAL_KEY",
         ))
+    # Custom workflows (video)
+    try:
+        from api.routes_settings import get_custom_workflows
+        for wf in get_custom_workflows():
+            if wf.get("category") == "video":
+                drivers.append(DriverInfo(
+                    driver_id=wf["driver_id"],
+                    display_name=wf["display_name"],
+                    category=DriverCategory.LOCAL,
+                    supported_features=wf.get("supported_features", ["text_to_video"]),
+                    supports_loras=wf.get("supports_loras", True),
+                ))
+    except Exception:
+        pass
     return drivers
 
 
