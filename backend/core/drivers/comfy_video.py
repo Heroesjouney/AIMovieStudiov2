@@ -416,6 +416,13 @@ class ComfyVideoDriver(VideoDriver):
                     inputs["seed"] = request.seed
                 else:
                     inputs["seed"] = int(time.time()) % (2**32)
+                # User overrides for steps/cfg
+                user_steps = request.extra_params.get("steps") if request.extra_params else None
+                user_cfg = request.extra_params.get("cfg") if request.extra_params else None
+                if user_steps is not None and "steps" in inputs:
+                    inputs["steps"] = user_steps
+                if user_cfg is not None and "cfg" in inputs:
+                    inputs["cfg"] = user_cfg
 
             # --- MiniMax H3: seed is in RandomNoise node ---
             if ct == "RandomNoise":

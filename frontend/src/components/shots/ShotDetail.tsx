@@ -14,6 +14,7 @@ import { AssetPicker } from "../shared/AssetPicker";
 import { ShotFrameLinker } from "../shared/ShotFrameLinker";
 import { ModelSelector } from "../shared/ModelSelector";
 import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
+import { StepsCfgControl } from "../shared/StepsCfgControl";
 import { Lightbox } from "../shared/Lightbox";
 import { MultiAnglePanel } from "./MultiAnglePanel";
 import { VariationPanel } from "./VariationPanel";
@@ -42,6 +43,10 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
   // LoRA selections
   const [loras, setLoras] = useState<LoRASelection[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Steps & CFG overrides
+  const [userSteps, setUserSteps] = useState<number | null>(null);
+  const [userCfg, setUserCfg] = useState<number | null>(null);
 
   const availableAssets = assets.filter((a) => a.primary_image);
 
@@ -87,6 +92,8 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       if (loras.length > 0) {
         extraParams.loras = loras;
       }
+      if (userSteps !== null) extraParams.steps = userSteps;
+      if (userCfg !== null) extraParams.cfg = userCfg;
       const resp = await generateShotFrame(
         shot.id, prompt, selectedImageDriver,
         negativePrompt || undefined, genWidth, genHeight, undefined,
@@ -283,28 +290,37 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
               />
             </div>
 
-            {/* Advanced: LoRAs */}
-            {imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_loras && (
-              <div className="mb-2">
-                <button
-                  onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider hover:text-studio-text transition-colors mb-1"
-                >
-                  <Settings className="w-3 h-3" />
-                  Advanced
-                  <ChevronDown className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
-                </button>
-                {showAdvanced && (
-                  <div className="p-2 bg-studio-bg rounded-lg border border-studio-border/50">
-                    <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
-                      <Layers className="w-3 h-3" />
-                      LoRAs
-                    </label>
-                    <LoRASelector selected={loras} onChange={setLoras} compact />
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Advanced: Steps/CFG + LoRAs */}
+            <div className="mb-2">
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider hover:text-studio-text transition-colors mb-1"
+              >
+                <Settings className="w-3 h-3" />
+                Advanced
+                <ChevronDown className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
+              </button>
+              {showAdvanced && (
+                <div className="p-2 bg-studio-bg rounded-lg border border-studio-border/50 space-y-3">
+                  <StepsCfgControl
+                    steps={userSteps}
+                    cfg={userCfg}
+                    onStepsChange={setUserSteps}
+                    onCfgChange={setUserCfg}
+                    compact
+                  />
+                  {imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_loras && (
+                    <div>
+                      <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
+                        <Layers className="w-3 h-3" />
+                        LoRAs
+                      </label>
+                      <LoRASelector selected={loras} onChange={setLoras} compact />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             <button
               onClick={handleGenerateFrame}

@@ -28,6 +28,7 @@ import {
   ChevronDown, Settings, Clock,
 } from "lucide-react";
 import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
+import { StepsCfgControl } from "@/components/shared/StepsCfgControl";
 
 // =============================================================================
 // Constants
@@ -216,6 +217,10 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   // LoRA selections
   const [loras, setLoras] = useState<LoRASelection[]>([]);
+
+  // Steps & CFG overrides
+  const [userSteps, setUserSteps] = useState<number | null>(null);
+  const [userCfg, setUserCfg] = useState<number | null>(null);
 
   // Prompt history
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -470,6 +475,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setShowPromptHistory(false);
     setElapsedSeconds(0);
     setLoras([]);
+    setUserSteps(null);
+    setUserCfg(null);
   };
 
   const handleGenerate = async () => {
@@ -564,6 +571,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         ...(mode === "ia2v" ? { enhance_prompt: enhancePrompt } : {}),
         megapixels: RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
         ...(loras.length > 0 ? { loras } : {}),
+        ...(userSteps !== null ? { steps: userSteps } : {}),
+        ...(userCfg !== null ? { cfg: userCfg } : {}),
       },
       skip_continuity: skipContinuity,
     };
@@ -1274,6 +1283,14 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                   </span>
                 </label>
               )}
+
+              {/* Steps & CFG */}
+              <StepsCfgControl
+                steps={userSteps}
+                cfg={userCfg}
+                onStepsChange={setUserSteps}
+                onCfgChange={setUserCfg}
+              />
 
               {/* LoRAs */}
               {videoDrivers.find((d: any) => d.driver_id === selectedModelId)?.supports_loras && (

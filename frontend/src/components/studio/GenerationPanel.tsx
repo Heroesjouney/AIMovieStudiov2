@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useStudioStore } from "@/lib/store";
 import { generateImage, checkGenerationStatus, saveGeneratedToAsset, fetchAssets } from "@/lib/api";
 import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
+import { StepsCfgControl } from "@/components/shared/StepsCfgControl";
 import {
   Sparkles, Loader2, Save, Download, Check, RotateCcw,
   Dices, ChevronDown, Settings, Clock, X, Layers,
@@ -95,6 +96,10 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   // LoRA selections
   const [loras, setLoras] = useState<LoRASelection[]>([]);
 
+  // Steps & CFG overrides
+  const [userSteps, setUserSteps] = useState<number | null>(null);
+  const [userCfg, setUserCfg] = useState<number | null>(null);
+
   // Prompt history
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [showPromptHistory, setShowPromptHistory] = useState(false);
@@ -156,6 +161,8 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
       if (loras.length > 0) {
         extraParams.loras = loras;
       }
+      if (userSteps !== null) extraParams.steps = userSteps;
+      if (userCfg !== null) extraParams.cfg = userCfg;
       const response = await generateImage(
         finalPrompt,
         selectedImageDriver,
@@ -238,6 +245,8 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
     setShowPromptHistory(false);
     setElapsedSeconds(0);
     setLoras([]);
+    setUserSteps(null);
+    setUserCfg(null);
   };
 
   const handleSaveOne = async (index: number, imageUrl: string) => {
@@ -536,6 +545,14 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
                 </button>
               </div>
             </div>
+
+            {/* Steps & CFG */}
+            <StepsCfgControl
+              steps={userSteps}
+              cfg={userCfg}
+              onStepsChange={setUserSteps}
+              onCfgChange={setUserCfg}
+            />
 
             {/* LoRAs */}
             {currentDriver?.supports_loras && (
