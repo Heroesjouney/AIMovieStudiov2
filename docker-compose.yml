@@ -1,0 +1,31 @@
+services:
+  backend:
+    build: ./backend
+    # Bound to loopback on purpose. The studio, your projects and your API keys are
+    # not exposed to the rest of your network. Change to "8001:8001" only if you
+    # deliberately want it reachable from other machines.
+    ports:
+      - "127.0.0.1:8001:8001"
+    env_file:
+      - path: ./backend/.env
+        required: false
+    volumes:
+      # Projects, renders and settings.json persist on the host, never in the image.
+      - ./backend/assets:/app/assets
+      # Custom ComfyUI workflows uploaded through the UI survive a rebuild.
+      - ./backend/core/workflows:/app/core/workflows
+    extra_hosts:
+      # Lets the container reach ComfyUI running on the host machine.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      BACKEND_URL: http://backend:8001
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
