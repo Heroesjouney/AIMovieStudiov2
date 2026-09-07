@@ -37,12 +37,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Frontend API functions** — `listWorkflows()`, `registerWorkflow()`, `deleteWorkflow()` in `api.ts`
 - **Custom Workflows UI section** — Added to SettingsPanel with form for display name, driver ID, category (image/video), and JSON paste/file upload
 
+#### Long Take Mode (Experimental)
+- **Keyframe interpolation for continuous shots** — Chain multiple first-last-frame-to-video (FLF2V) segments to generate shots longer than a single clip allows
+- **Flexible keyframe definitions** — Each keyframe can be defined by an image, a prompt, or both. Prompt-only keyframes automatically generate an image via T2I (Flux 2 / Qwen Image fallback) before interpolation
+- **Per-keyframe prompts** — Each keyframe has its own action prompt describing what happens *by* that keyframe. Combined with the global scene prompt for per-segment generation
+- **Mode-aware UI** — T2V mode uses prompt-only keyframes (images auto-generated). I2V/R2V modes allow image+prompt or image-only keyframes
+- **Long Take schema** (`LongTakeRequest` in `shot.py`) — Validates at least 2 keyframes (image or prompt), segment duration, and model FLF2V support
+- **Backend endpoint** (`POST /long-take`, `GET /long-take/status/{job_id}`) — Manages multi-segment generation pipeline: T2I for missing keyframe images → sequential FLF2V segment generation → ffmpeg concat stitching → stores as single take on shot
+- **Frontend UI** (`CameraDirector.tsx`) — Long Take toggle (visible only for FLF2V-capable models), keyframe cards with image thumbnails or prompt placeholders, per-keyframe prompt inputs, segment duration slider, progress bar with polling
+- **Global Scene Prompt labeling** — In Long Take mode, the main prompt is relabeled to "Global Scene Prompt" to distinguish scene context from per-keyframe action prompts
+- **Seed continuity** — Base seed derived from request or time, incremented per segment for variety while maintaining consistency
+- **Take metadata** — Completed long takes store `segment_prompts` and `keyframe_paths` for reproducibility
+- **Memory cleanup** — Long take jobs are cleaned up from in-memory dict after completion or failure
+- **Shared asset path resolution** — Extracted `_resolve_asset_path()` helper used by `_concat_videos`, `_splice_video`, and `_extract_last_frame`
+
+> ⚠️ **Experimental status** — Long Take Mode is under active development. The multi-segment pipeline may fail mid-generation without retry capability. T2I image generation for prompt-only keyframes blocks the initial request. Results may vary significantly between models. Use with LTX Video 2.3 or Wan Video for best results.
+
 ### Changed
 - **`routes_generate.py`** — Added `UploadFile` and `File` imports; added LoRA upload, model listing, and model upload endpoints
 - **`routes_shots.py`** — Shot frame generation now merges `extra_params` (including LoRAs) into the generation request
 - **`camera.py` schema** — Added `extra_params` field to `MultiAngleRequest`
 - **`app.py`** — Registered settings router; loads saved API keys into env vars at startup
-- **`README.md`** — Updated with LoRA Support, Settings & Configuration, Custom Workflows sections; updated directory layout, environment variables, FAQ, and roadmap
+- **`README.md`** — Updated with LoRA Support, Settings & Configuration, Custom Workflows sections; updated directory layout, environment variables, FAQ, and roadmap; added Long Take Mode (Experimental) to Features and Roadmap
 - **`ShotDetail.tsx`** — Added `ChevronDown` import for collapsible Advanced section
 
 ### Fixed

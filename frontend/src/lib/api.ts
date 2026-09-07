@@ -725,6 +725,80 @@ export async function cleanupStaleVideoRefs(projectId: string): Promise<{ status
   return resp.json();
 }
 
+// =============================================================================
+// Long Take — Keyframe interpolation for continuous shots >15s
+// =============================================================================
+
+export interface LongTakeRequest {
+  project_id?: string;
+  shot_id: string;
+  prompt: string;
+  negative_prompt?: string;
+  model_id: string;
+  keyframe_paths: string[];
+  keyframe_prompts?: string[];
+  segment_duration?: number;
+  seed?: number;
+  aspect_ratio?: string;
+  camera_movement?: { preset: string; intensity: number };
+  extra_params?: Record<string, any>;
+  skip_continuity?: boolean;
+}
+
+export interface LongTakeResponse {
+  job_id: string;
+  take_id: string;
+  shot_id: string;
+  total_segments: number;
+  total_duration: number;
+  status: string;
+}
+
+export interface LongTakeStatusResponse {
+  status: string;
+  progress: { current: number; total: number };
+  error?: string | null;
+  video_url?: string;
+  take_id?: string;
+  shot_id?: string;
+}
+
+export async function generateLongTake(req: LongTakeRequest): Promise<LongTakeResponse> {
+  const resp = await fetch(`${API_BASE}/shots/long-take`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: req.project_id || "default",
+      shot_id: req.shot_id,
+      prompt: req.prompt,
+      negative_prompt: req.negative_prompt,
+      model_id: req.model_id,
+      keyframe_paths: req.keyframe_paths,
+      keyframe_prompts: req.keyframe_prompts || [],
+      segment_duration: req.segment_duration ?? 5.0,
+      seed: req.seed,
+      aspect_ratio: req.aspect_ratio || "16:9",
+      camera_movement: req.camera_movement,
+      extra_params: req.extra_params || {},
+      skip_continuity: req.skip_continuity ?? false,
+    }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Status ${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
+export async function checkLongTakeStatus(jobId: string): Promise<LongTakeStatusResponse> {
+  const resp = await fetch(`${API_BASE}/shots/long-take/status/${jobId}`);
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Status ${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
 // Retake Mode
 export async function retakeVideo(
   projectId: string,

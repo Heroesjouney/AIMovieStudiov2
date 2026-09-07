@@ -8,7 +8,7 @@ including model, seed, prompts, references, and camera parameters.
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .camera import CameraParams, CameraMovement
 
@@ -177,6 +177,52 @@ class ShotVideoGenerateRequest(BaseModel):
     prompt_override: Optional[str] = Field(None, description="Manual override of the auto-compiled prompt")
     skip_continuity: bool = Field(default=False, description="If True, do not auto-inject previous shot's last frame as first frame")
     extra_params: Dict[str, Any] = Field(default_factory=dict, description="Model-specific extra params (e.g. enhance_prompt for LTX IA2V)")
+
+
+class LongTakeRequest(BaseModel):
+    """Request to generate a long take via keyframe interpolation.
+
+    Multiple keyframes are interpolated pairwise using FLF2V,
+    then stitched together with ffmpeg into a single continuous video.
+
+    Each keyframe can be defined by an image, a prompt, or both:
+    - Image only: FLF2V interpolates between the images
+    - Prompt only: An image is generated via T2I from the prompt, then FLF2V
+    - Both: FLF2V uses the image, prompt enriches the segment description
+
+    Per-keyframe prompts follow the MiniMax H3 Director Chain pattern:
+    - `prompt` is the global prompt (scene context, overall action)
+    - `keyframe_prompts[i]` describes what happens *by* keyframe i
+    - Segment between KF[i] and KF[i+1] uses: global_prompt + keyframe_prompts[i+1]
+    """
+    project_id: str = Field(default="default")
+    shot_id: str
+    prompt: str = Field(..., description="Global prompt: scene context + overall action, prepended to every segment")
+    negative_prompt: Optional[str] = None
+    model_id: str = Field(default="ltx_video_2_3", description="Must support first+last frame (FLF2V)")
+    keyframe_paths: List[str] = Field(default_factory=list, description="Ordered keyframe image paths. Use empty string for prompt-only keyframes.")
+    keyframe_prompts: List[str] = Field(default_factory=list, description="Per-keyframe action prompts. keyframe_prompts[i] describes what happens by keyframe i.")
+    segment_duration: float = Field(default=5.0, ge=1.0, description="Duration per segment in seconds. Capped by model's max duration.")
+    seed: Optional[int] = None
+    aspect_ratio: str = Field(default="16:9")
+    camera_movement: Optional[Dict[str, Any]] = Field(None, description="Camera movement preset applied to each segment")
+    extra_params: Dict[str, Any] = Field(default_factory=dict, description="Model-specific extra params (e.g. steps, cfg)")
+    skip_continuity: bool = Field(default=False)
+
+    @model_validator(mode="after")
+    def validate_keyframes(self):
+        """Ensure at least 2 keyframes total, each with either an image or prompt."""
+        n_paths = len(self.keyframe_paths)
+        n_prompts = len(self.keyframe_prompts)
+        n_keyframes = max(n_paths, n_prompts)
+        if n_keyframes < 2:
+            raise ValueError("At least 2 keyframes are required (image or prompt)")
+        for i in range(n_keyframes):
+            has_image = i < n_paths and self.keyframe_paths[i]
+            has_prompt = i < n_prompts and self.keyframe_prompts[i]
+            if not has_image and not has_prompt:
+                raise ValueError(f"Keyframe {i} has neither an image nor a prompt")
+        return self
 
 
 class ShotResponse(BaseModel):

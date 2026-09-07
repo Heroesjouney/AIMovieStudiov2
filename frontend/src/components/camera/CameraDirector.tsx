@@ -14,6 +14,8 @@ import {
   updateShot,
   createShot,
   fetchShots,
+  generateLongTake,
+  checkLongTakeStatus,
   type ShotVideoRequest,
   type AudioFileItem,
   type VideoAsset,
@@ -25,7 +27,7 @@ import {
   Camera, Loader2, Film, Video, Mic, Image as ImageIcon,
   Plus, Send, Check, X, AlertCircle, Sparkles, Play,
   Type, Layers, Wand2, Trash2, RotateCcw, Dices,
-  ChevronDown, Settings, Clock,
+  ChevronDown, Settings, Clock, Route,
 } from "lucide-react";
 import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
 import { StepsCfgControl } from "@/components/shared/StepsCfgControl";
@@ -222,6 +224,14 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const [userSteps, setUserSteps] = useState<number | null>(null);
   const [userCfg, setUserCfg] = useState<number | null>(null);
 
+  // Long Take mode
+  const [longTakeMode, setLongTakeMode] = useState(false);
+  const [keyframePaths, setKeyframePaths] = useState<string[]>([]);
+  const [keyframePrompts, setKeyframePrompts] = useState<string[]>([]);
+  const [segmentDuration, setSegmentDuration] = useState(5);
+  const [longTakeProgress, setLongTakeProgress] = useState<{ current: number; total: number } | null>(null);
+  const keyframePickerIdxRef = useRef<number | null>(null);
+
   // Prompt history
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [showPromptHistory, setShowPromptHistory] = useState(false);
@@ -359,6 +369,9 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     if (duration > caps.maxDuration) {
       setDuration(caps.maxDuration);
     }
+    if (segmentDuration > caps.maxDuration) {
+      setSegmentDuration(caps.maxDuration);
+    }
   }, [selectedModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // If selected model isn't in the available list, pick the first one
@@ -395,7 +408,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   // Load uploaded images when any image picker opens
   useEffect(() => {
-    const isImagePicker = activePicker === "firstFrame" || activePicker === "lastFrame" || activePicker?.startsWith("refImage_");
+    const isImagePicker = activePicker === "firstFrame" || activePicker === "lastFrame" || activePicker === "long-take-keyframe" || activePicker?.startsWith("refImage_");
     if (!isImagePicker || loadedPickersRef.current.has("images")) return;
     loadedPickersRef.current.add("images");
     setUploadedImagesLoading(true);
@@ -430,6 +443,18 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           else next.push(path);
           return next;
         });
+      }
+      else if (current === "long-take-keyframe") {
+        setKeyframePaths((prev) => {
+          const idx = keyframePickerIdxRef.current;
+          if (idx !== null && idx < prev.length) {
+            const next = [...prev];
+            next[idx] = path;
+            return next;
+          }
+          return [...prev, path];
+        });
+        keyframePickerIdxRef.current = null;
       }
       return null;
     });
@@ -477,6 +502,125 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setLoras([]);
     setUserSteps(null);
     setUserCfg(null);
+    setLongTakeMode(false);
+    setKeyframePaths([]);
+    setKeyframePrompts([]);
+    setSegmentDuration(5);
+    setLongTakeProgress(null);
+  };
+
+  const handleLongTakeGenerate = async (effectiveShotId: string) => {
+    const stopElapsedTimer = () => {
+      if (elapsedRef.current) {
+        window.clearInterval(elapsedRef.current);
+        elapsedRef.current = null;
+      }
+    };
+
+    // Filter out blank keyframes (no image AND no prompt)
+    const validIndices = keyframePaths
+      .map((kp, i) => (kp || (keyframePrompts[i] || "").trim()) ? i : -1)
+      .filter((i) => i >= 0);
+    const validKeyframes = validIndices.length;
+
+    if (validKeyframes < 2) {
+      setError("Long Take requires at least 2 keyframes (each with an image or prompt)");
+      stopElapsedTimer();
+      setGenerating(false);
+      return;
+    }
+
+    const totalSegments = validKeyframes - 1;
+    const totalDuration = totalSegments * segmentDuration;
+    setStatus(`Starting long take: ${totalSegments} segments × ${segmentDuration}s = ${totalDuration}s...`);
+    setLongTakeProgress({ current: 0, total: totalSegments });
+
+    try {
+      const filteredPaths = validIndices.map((i) => keyframePaths[i] || "");
+      const filteredPrompts = validIndices.map((i) => keyframePrompts[i] || "");
+
+      const resp = await generateLongTake({
+        project_id: projectId,
+        shot_id: effectiveShotId,
+        prompt: [artStyle, framing, lens, lighting, composition, prompt.trim()].filter(Boolean).join(". "),
+        negative_prompt: negativePrompt.trim() || undefined,
+        model_id: selectedModelId,
+        keyframe_paths: filteredPaths,
+        keyframe_prompts: filteredPrompts,
+        segment_duration: segmentDuration,
+        seed: seed ? parseInt(seed) : undefined,
+        aspect_ratio: aspectRatio,
+        camera_movement: caps.supportsCameraControl ? { preset: cameraMovement, intensity: 1.0 } : undefined,
+        extra_params: {
+          megapixels: RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
+          ...(loras.length > 0 ? { loras } : {}),
+          ...(userSteps !== null ? { steps: userSteps } : {}),
+          ...(userCfg !== null ? { cfg: userCfg } : {}),
+        },
+        skip_continuity: skipContinuity,
+      });
+
+      if (resp.status === "failed") {
+        setError("Failed to start long take generation");
+        stopElapsedTimer();
+        setGenerating(false);
+        return;
+      }
+
+      setStatus(`Generating segment 1/${totalSegments}...`);
+
+      let pollErrors = 0;
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const st = await checkLongTakeStatus(resp.job_id);
+          setLongTakeProgress(st.progress);
+
+          if (st.status === "completed" && st.video_url) {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setStatus("Long take complete!");
+            stopElapsedTimer();
+            setGenerating(false);
+            setLongTakeProgress(null);
+
+            await fetchShots(projectId);
+            setFreestyleResult({
+              videoUrl: st.video_url,
+              prompt: prompt.trim(),
+              shotId: effectiveShotId,
+            });
+          } else if (st.status === "failed") {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setError(st.error || "Long take generation failed");
+            stopElapsedTimer();
+            setGenerating(false);
+            setLongTakeProgress(null);
+          } else if (st.status === "stitching") {
+            setStatus("Stitching segments...");
+          } else {
+            setStatus(`Generating segment ${st.progress.current}/${st.progress.total}...`);
+          }
+        } catch (e) {
+          pollErrors++;
+          if (pollErrors > 10) {
+            if (pollRef.current) {
+              window.clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            setError("Lost connection to backend while polling long take.");
+            stopElapsedTimer();
+            setGenerating(false);
+            setLongTakeProgress(null);
+          }
+        }
+      }, 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start long take");
+      stopElapsedTimer();
+      setGenerating(false);
+      setLongTakeProgress(null);
+    }
   };
 
   const handleGenerate = async () => {
@@ -549,6 +693,12 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         setGenerating(false);
         return;
       }
+    }
+
+    // Branch: Long Take mode uses a separate generation flow
+    if (longTakeMode) {
+      await handleLongTakeGenerate(effectiveShotId!);
+      return;
     }
 
     const req: ShotVideoRequest = {
@@ -1034,7 +1184,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
-              Prompt
+              {longTakeMode ? "Global Scene Prompt" : "Prompt"}
             </label>
             <div className="flex items-center gap-2">
               {promptHistory.length > 0 && (
@@ -1070,7 +1220,9 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Describe the video motion, scene, and action..."
+            placeholder={longTakeMode
+              ? "Scene context: setting, mood, visual style... (per-keyframe action goes in keyframe prompts below)"
+              : "Describe the video motion, scene, and action..."}
             rows={6}
             className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-2 text-xs text-studio-text focus:outline-none focus:border-studio-accent resize-y min-h-[120px]"
           />
@@ -1137,7 +1289,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
         {/* ===== Controls Grid (Basic) ===== */}
         <div className="mb-3 grid grid-cols-2 gap-3">
-          {/* Duration with presets */}
+          {/* Duration with presets — hidden in Long Take mode (segment duration replaces it) */}
+          {!longTakeMode && (
           <div className="col-span-2">
             <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
               Duration <span className="opacity-50">max {caps.maxDuration}s</span>
@@ -1170,8 +1323,174 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               ))}
             </div>
           </div>
+          )}
 
-          {/* Resolution quality */}
+          {/* Long Take toggle — only for models that support first+last frame */}
+          {caps.supportsFirstFrame && caps.supportsLastFrame && (
+            <div className="col-span-2">
+              <button
+                onClick={() => {
+                  setLongTakeMode(!longTakeMode);
+                  if (!longTakeMode) {
+                    setKeyframePaths([]);
+                    setKeyframePrompts([]);
+                    setLongTakeProgress(null);
+                  }
+                }}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
+                  longTakeMode
+                    ? "bg-studio-accent/15 text-studio-accent border-studio-accent/40"
+                    : "bg-studio-panel text-studio-muted border-studio-border hover:text-studio-text"
+                }`}
+              >
+                <Route className="w-3.5 h-3.5" />
+                Long Take Mode
+                {longTakeMode && (
+                  <span className="ml-auto text-[10px] opacity-70">
+                    {(() => {
+                      const valid = keyframePaths.filter((kp, i) => kp || (keyframePrompts[i] || "").trim()).length;
+                      return valid > 0
+                        ? `${valid - 1} segments × ${segmentDuration}s = ${(valid - 1) * segmentDuration}s`
+                        : "Add keyframes";
+                    })()}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Long Take: Keyframe picker + segment duration */}
+          {longTakeMode && (
+            <div className="col-span-2 space-y-2">
+              {/* Segment duration */}
+              <div>
+                <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1 block">
+                  Segment Duration <span className="opacity-50">per keyframe pair</span>
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={caps.maxDuration}
+                    step={1}
+                    value={segmentDuration}
+                    onChange={(e) => setSegmentDuration(parseInt(e.target.value))}
+                    className="flex-1 accent-studio-accent"
+                  />
+                  <span className="text-sm text-studio-text font-medium w-8 text-right">{segmentDuration}s</span>
+                </div>
+              </div>
+
+              {/* Keyframe cards — T2V is prompt-only, I2V/R2V allows image+prompt */}
+              <div>
+                <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
+                  Keyframes ({keyframePaths.length}) — ordered: start → end
+                  <span className="normal-case font-normal opacity-60 ml-1">
+                    {mode === "t2v" ? "· prompt per keyframe, images auto-generated" : "· image, prompt, or both per keyframe"}
+                  </span>
+                </label>
+                <div className="flex gap-2 flex-wrap items-start">
+                  {keyframePaths.map((kp, idx) => (
+                    <div key={idx} className="relative group flex flex-col gap-1 w-32">
+                      <div className="relative">
+                        {kp ? (
+                          <img
+                            src={kp}
+                            alt={`Keyframe ${idx + 1}`}
+                            className="w-full h-20 object-cover rounded-lg border border-studio-border"
+                          />
+                        ) : mode === "t2v" ? (
+                          <div className="w-full h-20 flex flex-col items-center justify-center gap-1 rounded-lg border border-studio-border bg-studio-panel/50">
+                            <Type className="w-4 h-4 text-studio-muted/60" />
+                            <span className="text-[9px] text-studio-muted/60">Prompt-defined</span>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              keyframePickerIdxRef.current = idx;
+                              setActivePicker("long-take-keyframe");
+                            }}
+                            className="w-full h-20 flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-studio-border text-studio-muted hover:text-studio-accent hover:border-studio-accent/40 transition-all"
+                          >
+                            <ImageIcon className="w-4 h-4" />
+                            <span className="text-[9px]">Add image</span>
+                          </button>
+                        )}
+                        <span className="absolute top-0.5 left-0.5 text-[9px] bg-studio-bg/80 text-studio-text px-1 rounded">
+                          {idx === 0 ? "Start" : idx === keyframePaths.length - 1 ? "End" : `KF${idx}`}
+                        </span>
+                        {kp && (
+                          <button
+                            onClick={() => {
+                              const next = [...keyframePaths];
+                              next[idx] = "";
+                              setKeyframePaths(next);
+                            }}
+                            className="absolute -top-1 -right-1 w-4 h-4 bg-studio-bg border border-studio-border rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Remove image"
+                          >
+                            <X className="w-2.5 h-2.5 text-studio-muted" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            setKeyframePaths(keyframePaths.filter((_, i) => i !== idx));
+                            setKeyframePrompts(keyframePrompts.filter((_, i) => i !== idx));
+                          }}
+                          className={`absolute -bottom-1 -right-1 w-4 h-4 bg-studio-bg border border-studio-border rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${kp ? "" : "opacity-100"}`}
+                            title="Remove keyframe"
+                          >
+                            <Trash2 className="w-2.5 h-2.5 text-studio-muted" />
+                          </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={keyframePrompts[idx] || ""}
+                        onChange={(e) => {
+                          const next = [...keyframePrompts];
+                          while (next.length <= idx) next.push("");
+                          next[idx] = e.target.value;
+                          setKeyframePrompts(next);
+                        }}
+                        placeholder={idx === 0
+                          ? "Starting state (optional)"
+                          : `Action by ${idx === keyframePaths.length - 1 ? "end" : `KF${idx}`}`}
+                        className={`w-full bg-studio-panel border rounded-md px-1.5 py-1 text-[10px] text-studio-text focus:outline-none focus:border-studio-accent placeholder:text-studio-muted/40 ${
+                          mode === "t2v" ? "border-studio-accent/30" : "border-studio-border"
+                        }`}
+                      />
+                    </div>
+                  ))}
+                  {/* Add keyframe button */}
+                  <button
+                    onClick={() => {
+                      setKeyframePaths([...keyframePaths, ""]);
+                      setKeyframePrompts([...keyframePrompts, ""]);
+                    }}
+                    className="w-16 h-20 flex items-center justify-center rounded-lg border border-dashed border-studio-border text-studio-muted hover:text-studio-accent hover:border-studio-accent/40 transition-all flex-shrink-0"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress indicator during generation */}
+              {longTakeProgress && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-studio-panel/50 rounded-lg">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-studio-accent" />
+                  <span className="text-xs text-studio-text">
+                    Segment {longTakeProgress.current}/{longTakeProgress.total}
+                  </span>
+                  <div className="flex-1 h-1.5 bg-studio-border rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-studio-accent transition-all"
+                      style={{ width: `${(longTakeProgress.current / longTakeProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
               Resolution
@@ -1310,11 +1629,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         <div className="flex gap-2">
           <button
             onClick={handleGenerate}
-            disabled={generating || !prompt.trim()}
+            disabled={generating || !prompt.trim() || (longTakeMode && keyframePaths.filter((kp, i) => kp || (keyframePrompts[i] || "").trim()).length < 2)}
             className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs rounded-lg font-medium transition-all hover:scale-[1.01] shadow-md shadow-studio-accent/20"
           >
             {generating ? (
               <Loader2 className="w-4 h-4 animate-spin" />
+            ) : longTakeMode ? (
+              <Route className="w-4 h-4" />
             ) : (
               <Wand2 className="w-4 h-4" />
             )}
@@ -1325,7 +1646,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               </span>
             ) : (
               <span className="flex items-center gap-1.5">
-                Generate Take
+                {longTakeMode ? "Generate Long Take" : "Generate Take"}
                 <kbd className="hidden sm:inline text-[9px] px-1 py-0.5 rounded bg-white/10 border border-white/20">Ctrl+↵</kbd>
               </span>
             )}
@@ -1595,6 +1916,7 @@ const RefPickerModal = memo(function RefPickerModal({
   onClose: () => void;
 }) {
   const isRefImagePicker = pickerType.startsWith("refImage_");
+  const isKeyframePicker = pickerType === "long-take-keyframe";
   const title = isRefImagePicker
     ? `Pick Reference Image ${parseInt(pickerType.split("_")[1]) + 1}`
     : {
@@ -1602,6 +1924,7 @@ const RefPickerModal = memo(function RefPickerModal({
         lastFrame: "Pick Last Frame",
         refVideo: "Pick Video Reference (Motion / Mocap)",
         audio: "Pick Audio Reference (Voice Lock)",
+        "long-take-keyframe": "Pick Keyframe Image",
       }[pickerType] || "Pick Reference";
 
   return (
@@ -1626,7 +1949,7 @@ const RefPickerModal = memo(function RefPickerModal({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4">
-          {(pickerType === "firstFrame" || pickerType === "lastFrame" || isRefImagePicker) && (
+          {(pickerType === "firstFrame" || pickerType === "lastFrame" || isRefImagePicker || isKeyframePicker) && (
             <div className="space-y-4">
               {/* Section 1: Storyboard Frames */}
               <div>

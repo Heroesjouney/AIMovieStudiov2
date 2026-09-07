@@ -87,6 +87,7 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - **⚡ Live Status** - Watch generation progress in real-time with elapsed timers.
 - **🎛️ Shot Composition Tools** - Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
 - **📸 Multi-Angle & Variations** - Generate alternate camera angles, prompt variations, and retake failed shots.
+- **🎞️ Long Take Mode** *(Experimental)* - Chain keyframe interpolation across multiple segments to generate continuous shots longer than a single clip. Define keyframes by image, prompt, or both. The backend generates missing images via T2I, interpolates between keyframe pairs using first-last-frame-to-video (FLF2V), and stitches segments with ffmpeg. Only available for models that support first+last frame (e.g. LTX Video 2.3, Wan Video).
 - **🔀 Shot Management** - Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
 - **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders.
 - **⚙️ Settings Panel** - A built-in settings panel (gear icon in header) for managing cloud API keys, uploading models to ComfyUI, and registering custom workflows — no code changes or `.env` editing required.
@@ -651,6 +652,15 @@ In any generation tab, expand Advanced Settings and use the LoRA selector. You c
 **How do I set API keys without editing .env?**
 Click the gear icon (⚙) in the header to open the Settings panel. You can add, update, and remove Fal.ai and Replicate API keys from there. Keys are stored in `backend/assets/settings.json` and loaded at backend startup.
 
+**Can I connect to a remote/cloud ComfyUI instance?**
+Yes. Open the Settings panel → **ComfyUI Server** section. Enter your remote ComfyUI URL (e.g. `https://my-comfy-cloud.example.com`) and an optional auth token (Bearer). Check the "Remote / cloud server" checkbox. All HTTP calls — prompt submission, image download, LoRA/model listing — will include the auth header automatically. This lets you run ComfyUI on a GPU server or managed service (ComfyDeploy, Modal, RunPod) while controlling it from your local machine.
+
+**Can I control sampling steps and CFG scale?**
+Yes. In any generation tab (Generate, Shots, Camera Director), expand **Advanced Settings** and use the **Steps & CFG** sliders. Set them to any value to override the workflow's defaults, or leave them at "auto" (0) to use the original workflow settings. These are passed through `extra_params` and injected into the sampler node at runtime — works for both image and video generation.
+
+**The Settings panel has collapsible sections — how do they work?**
+Each section (ComfyUI Server, Cloud API Keys, Models, LoRAs, Custom Workflows) is an independent collapsible card. Click the header to expand or collapse. Badges show item counts (e.g. "3 LoRAs", "2 connected") so you can see what's configured at a glance. The ComfyUI Server section is open by default since it's the first thing you need to configure.
+
 ---
 
 ## 🎬 Project History
@@ -662,8 +672,11 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 ## 🗺️ Roadmap
 
 - [x] LoRA support (upload, select, strength control)
-- [x] Settings panel (API keys, model upload, custom workflows)
+- [x] Settings panel (API keys, model upload, custom workflows, collapsible UI)
 - [x] Custom ComfyUI workflow registration (no-code model addition)
+- [x] Remote/cloud ComfyUI server support (URL + auth token via Settings)
+- [x] Steps & CFG override controls in all generation tabs
+- [x] Long Take mode — keyframe interpolation for continuous shots *(Experimental)*
 - [ ] Inpainting & masking tools
 - [ ] PostgreSQL migration for the Vault
 - [ ] Video timeline preview & scrubbing

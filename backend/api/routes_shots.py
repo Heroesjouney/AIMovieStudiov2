@@ -9,8 +9,10 @@ import json
 import uuid
 import random
 import shutil
+import subprocess
+import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 
 import httpx
@@ -20,6 +22,7 @@ from core.schemas.shot import (
     Shot, ShotCreateRequest, ShotType, ShotStatus,
     ShotAssetRef, GenerationRecipe, ShotFrameGenerateRequest,
     ShotVariationRequest, ShotVideoGenerateRequest, RetentionLevel,
+    LongTakeRequest,
 )
 from core.schemas.camera import (
     CameraParams, CameraMovement, CameraAnglePreset,
@@ -1025,15 +1028,11 @@ def _extract_last_frame(video_path: str, output_path: Path) -> bool:
 
     Returns True on success, False on failure.
     """
-    import subprocess
     # Resolve /assets/... URLs to local paths
-    if video_path.startswith("/assets/"):
-        local = VAULT_DIR / video_path[len("/assets/"):]
-        if not local.exists():
-            return False
-        video_path = str(local)
-    elif not Path(video_path).exists():
+    resolved = _resolve_asset_path(video_path)
+    if not resolved:
         return False
+    video_path = resolved
 
     try:
         result = subprocess.run(
@@ -1091,6 +1090,7 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
     # (only if user didn't explicitly provide one and didn't opt out)
     effective_first_frame = req.first_frame_path
     continuity_warning = None
+    effective_seed = req.seed
     if not effective_first_frame and not req.skip_continuity and shot.get("scene_id"):
         all_shots = _load_shots(req.project_id)
         scene_shots = [s for s in all_shots if s.get("scene_id") == shot.get("scene_id") and s["id"] != req.shot_id]
@@ -1112,8 +1112,27 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
                 continuity_warning = f"Previous shot '{prev_shot.get('name', 'unnamed')}' has a video but last frame was not extracted."
             print(f"[routes_shots] video: continuity warning — {continuity_warning}")
 
+        # --- Seed continuity: carry seed forward from previous shot's video takes ---
+        if effective_seed is None and prev_shots:
+            prev_shots_sorted = sorted(prev_shots, key=lambda s: s.get("sequence_order", 0), reverse=True)
+            for ps in prev_shots_sorted:
+                takes = ps.get("video_takes", [])
+                selected_take = next((t for t in takes if t.get("selected")), takes[0] if takes else None)
+                if selected_take and selected_take.get("seed") is not None:
+                    effective_seed = selected_take["seed"]
+                    print(f"[routes_shots] video: seed continuity — reusing seed {effective_seed} from shot '{ps.get('name')}'")
+                    break
+            # Fallback: establishing shot's image generation recipe seed
+            if effective_seed is None:
+                est_recipe = prev_shots_sorted[-1].get("generation_recipe") or {}
+                est_seed = est_recipe.get("seed") if isinstance(est_recipe, dict) else None
+                if est_seed is not None:
+                    effective_seed = est_seed
+                    print(f"[routes_shots] video: seed continuity — using establishing shot recipe seed {est_seed}")
+
     # Auto-pass establishing frame as reference image for scene identity lock
     effective_ref_images = list(req.reference_image_paths or [])
+    scene_obj = None
     if not req.skip_continuity and shot.get("scene_id"):
         scenes = _load_scenes(req.project_id)
         scene_obj = next((s for s in scenes if s["id"] == shot["scene_id"]), None)
@@ -1135,6 +1154,16 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
     except ValueError:
         mode = VideoGenerationMode.T2V
 
+    # Also pass establishing frame as reference for I2V mode (not just R2V)
+    # so the model has scene/character identity even in I2V generation.
+    if (not req.skip_continuity and shot.get("scene_id")
+            and mode in (VideoGenerationMode.I2V, VideoGenerationMode.IA2V)
+            and scene_obj):
+        est_frame = scene_obj.get("establishing_frame_path")
+        if est_frame and est_frame not in effective_ref_images:
+            effective_ref_images.insert(0, est_frame)
+            print(f"[routes_shots] video: I2V identity lock — adding establishing frame as ref: {est_frame}")
+
     # Build effective prompt (with override support)
     effective_prompt = req.prompt
     if req.prompt_override and req.prompt_override.strip():
@@ -1144,13 +1173,71 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
         # For H3, parse dialogue tags
         effective_prompt = parse_dialogue_tags(req.prompt, shot.get("assets", []))
 
+    # --- Prompt prefix continuity: prepend scene context + character names ---
+    # This ensures all video shots in the same scene share visual identity
+    # (location, time of day, mood, lighting, characters) even if the user's
+    # prompt is brief. Skipped when prompt_override is used or for H3 structured prompts.
+    if not req.prompt_override and shot.get("scene_id") and scene_obj:
+        context_parts = []
+        scene_desc = scene_obj.get("description", "")
+        if scene_desc:
+            context_parts.append(scene_desc)
+        # Time of day
+        tod = scene_obj.get("time_of_day", "")
+        if tod:
+            tod_labels = {
+                "dawn": "dawn light", "morning": "morning light", "day": "daytime",
+                "golden_hour": "golden hour", "dusk": "dusk", "night": "nighttime",
+                "interior": "interior setting",
+            }
+            tod_label = tod_labels.get(tod, tod.replace("_", " "))
+            if tod_label not in effective_prompt.lower():
+                context_parts.append(tod_label)
+        # Mood
+        mood = scene_obj.get("mood", "")
+        if mood and mood != "neutral":
+            mood_labels = {
+                "tense": "tense atmosphere", "joyful": "joyful atmosphere",
+                "melancholic": "melancholic atmosphere", "mysterious": "mysterious atmosphere",
+                "action": "high energy", "romantic": "romantic atmosphere",
+                "horror": "dark horror atmosphere",
+            }
+            mood_label = mood_labels.get(mood, f"{mood} mood")
+            if mood_label not in effective_prompt.lower():
+                context_parts.append(mood_label)
+        # Lighting
+        lighting = scene_obj.get("lighting", "")
+        if lighting and lighting != "natural":
+            lighting_labels = {
+                "low_key": "low-key lighting", "high_key": "high-key lighting",
+                "rembrandt": "Rembrandt lighting", "split": "split lighting",
+                "backlit": "backlit lighting", "practical": "practical lighting",
+                "chiaroscuro": "chiaroscuro lighting", "golden_hour": "golden hour lighting",
+                "blue_hour": "blue hour lighting", "neon": "neon lighting",
+                "moonlight": "moonlight",
+            }
+            light_label = lighting_labels.get(lighting, lighting.replace("_", " "))
+            if light_label not in effective_prompt.lower():
+                context_parts.append(light_label)
+        # Character names from shot assets
+        for a in shot.get("assets", []):
+            role = a.get("asset_type", a.get("role", ""))
+            name = a.get("asset_name", "")
+            if role == "character" and name and name.lower() not in effective_prompt.lower():
+                context_parts.append(f"featuring {name}")
+
+        if context_parts:
+            prefix = ", ".join(context_parts)
+            effective_prompt = f"{prefix}. {effective_prompt}"
+            print(f"[routes_shots] video: prompt prefix continuity — added {len(context_parts)} context elements")
+
     gen_req = VideoGenerationRequest(
         prompt=effective_prompt,
         negative_prompt=req.negative_prompt,
         mode=mode,
         duration_seconds=req.duration_seconds,
         aspect_ratio=ar,
-        seed=req.seed,
+        seed=effective_seed,
         first_frame_path=effective_first_frame,
         last_frame_path=req.last_frame_path,
         reference_image_paths=effective_ref_images,
@@ -1172,7 +1259,7 @@ async def generate_shot_video(req: ShotVideoGenerateRequest):
         "project_id": req.project_id,
         "model_id": req.model_id,
         "take_id": take_id,
-        "request": req.model_dump(),
+        "request": {**req.model_dump(), "seed": effective_seed},
     }
 
     return {
@@ -1340,18 +1427,13 @@ def _splice_video(original_path: str, new_segment_path: str, start_sec: float, e
     Uses ffmpeg to: extract [0, start) from original, concat with new segment,
     concat with [end, duration) from original.
     """
-    import subprocess
     # Resolve /assets/... URLs to local paths
-    if original_path.startswith("/assets/"):
-        orig_local = VAULT_DIR / original_path[len("/assets/"):]
-        if not orig_local.exists():
-            return False
-        original_path = str(orig_local)
-    if new_segment_path.startswith("/assets/"):
-        new_local = VAULT_DIR / new_segment_path[len("/assets/"):]
-        if not new_local.exists():
-            return False
-        new_segment_path = str(new_local)
+    original_path = _resolve_asset_path(original_path)
+    if not original_path:
+        return False
+    new_segment_path = _resolve_asset_path(new_segment_path)
+    if not new_segment_path:
+        return False
 
     temp_dir = output_path.parent / f"retake_temp_{output_path.stem}"
     temp_dir.mkdir(exist_ok=True)
@@ -1394,15 +1476,11 @@ def _splice_video(original_path: str, new_segment_path: str, start_sec: float, e
             capture_output=True, text=True, timeout=120,
         )
 
-        # Cleanup temp
-        import shutil as _shutil
-        _shutil.rmtree(temp_dir, ignore_errors=True)
-
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return result.returncode == 0 and output_path.exists()
     except Exception as e:
         print(f"[routes_shots] retake splice error: {e}")
-        import shutil as _shutil
-        _shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return False
 
 
@@ -1570,3 +1648,409 @@ async def cleanup_stale_video_refs(project_id: str):
 
     _save_shots(project_id, shots)
     return {"status": "ok", "cleaned": cleaned}
+
+
+# =============================================================================
+# Long Take — Keyframe interpolation for continuous shots >15s
+# =============================================================================
+
+def _resolve_asset_path(path: str) -> Optional[str]:
+    """Resolve a /assets/... URL or local path to a filesystem path.
+
+    Returns the local path if it exists, None otherwise.
+    Shared by _concat_videos, _splice_video, and _extract_last_frame.
+    """
+    if path.startswith("/assets/"):
+        local = VAULT_DIR / path[len("/assets/"):]
+        return str(local) if local.exists() else None
+    p = Path(path)
+    return str(p) if p.exists() else None
+
+
+def _concat_videos(segment_paths: List[str], output_path: Path) -> bool:
+    """Concatenate video segments into one using ffmpeg concat demuxer.
+
+    All segments should have the same resolution, fps, and codec.
+    Works with 1+ segments (single segment is just a re-encode/copy).
+    """
+    if len(segment_paths) < 1:
+        return False
+
+    # Single segment: just copy/re-encode
+    if len(segment_paths) == 1:
+        resolved = _resolve_asset_path(segment_paths[0])
+        if not resolved:
+            print(f"[long-take] concat: segment file not found: {segment_paths[0]}")
+            return False
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", resolved,
+             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", str(output_path)],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            print(f"[long-take] single-segment re-encode failed: {result.stderr[-500:]}")
+            return False
+        return output_path.exists()
+
+    temp_dir = output_path.parent / f"concat_temp_{output_path.stem}"
+    temp_dir.mkdir(exist_ok=True)
+
+    try:
+        concat_list = temp_dir / "concat.txt"
+        lines = []
+        for sp in segment_paths:
+            resolved = _resolve_asset_path(sp)
+            if not resolved:
+                print(f"[long-take] concat: segment file not found: {sp}")
+                return False
+            lines.append(f"file '{resolved}'")
+        concat_list.write_text("\n".join(lines))
+
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", str(output_path)],
+            capture_output=True, text=True, timeout=300,
+        )
+
+        if result.returncode != 0:
+            print(f"[long-take] concat failed: {result.stderr[-500:]}")
+            return False
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return output_path.exists()
+    except Exception as e:
+        print(f"[long-take] concat error: {e}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return False
+
+
+# Track long take jobs: job_id -> metadata
+_long_take_jobs: Dict[str, dict] = {}
+
+
+@router.post("/long-take")
+async def generate_long_take(req: LongTakeRequest):
+    """Generate a long take via keyframe interpolation.
+
+    Splits the keyframes into pairs and generates a FLF2V segment for each pair.
+    Each segment uses keyframe[i] as first_frame and keyframe[i+1] as last_frame.
+    After all segments complete, they are stitched together with ffmpeg.
+
+    Returns a job_id that can be polled via /long-take/status/{job_id}.
+    """
+    driver = get_video_driver(req.model_id)
+    if not driver:
+        raise HTTPException(status_code=400, detail=f"Unknown video model: {req.model_id}")
+
+    # Check model supports first+last frame (FLF2V)
+    caps = driver.get_info()
+    if "first_last_frame" not in (caps.supported_features or []):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model {req.model_id} does not support first+last frame interpolation. Use LTX 2.3 or similar."
+        )
+
+    # Validate segment duration against model's max
+    if req.segment_duration > caps.max_duration_seconds:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Segment duration {req.segment_duration}s exceeds model {req.model_id} max of {caps.max_duration_seconds}s"
+        )
+
+    shot = _find_shot(req.project_id, req.shot_id)
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    # Normalize keyframe arrays to the same length
+    n_keyframes = max(len(req.keyframe_paths), len(req.keyframe_prompts))
+    kf_paths = list(req.keyframe_paths) + [""] * (n_keyframes - len(req.keyframe_paths))
+    kf_prompts = list(req.keyframe_prompts) + [""] * (n_keyframes - len(req.keyframe_prompts))
+
+    # For keyframes without an image, generate one via T2I from the keyframe prompt + global prompt
+    resolved_paths = []
+    for i in range(n_keyframes):
+        if kf_paths[i]:
+            resolved_paths.append(kf_paths[i])
+        else:
+            # Prompt-only keyframe: generate an image from global prompt + keyframe prompt
+            kf_prompt = kf_prompts[i].strip()
+            gen_prompt = f"{req.prompt}. {kf_prompt}" if kf_prompt else req.prompt
+            print(f"[long-take] generating T2I image for keyframe {i}: {gen_prompt[:80]}...")
+            try:
+                image_driver = get_image_driver("flux2")
+                if not image_driver:
+                    image_driver = get_image_driver("qwen_image")
+                if image_driver:
+                    from core.drivers.base import ImageGenerationRequest as ImgReq
+                    # Map aspect ratio to width/height
+                    ar_map = {
+                        "16:9": (1024, 576), "9:16": (576, 1024),
+                        "1:1": (768, 768), "4:3": (1024, 768),
+                        "3:4": (768, 1024), "21:9": (1024, 440),
+                    }
+                    w, h = ar_map.get(req.aspect_ratio, (1024, 576))
+                    img_req = ImgReq(
+                        prompt=gen_prompt,
+                        negative_prompt=req.negative_prompt,
+                        width=w,
+                        height=h,
+                        seed=(req.seed or int(time.time())) % (2**32) + i,
+                    )
+                    img_resp = await image_driver.generate(img_req)
+                    if img_resp.image_paths:
+                        resolved_paths.append(img_resp.image_paths[0])
+                    else:
+                        raise HTTPException(status_code=500, detail=f"Failed to generate image for keyframe {i}")
+                else:
+                    raise HTTPException(status_code=500, detail="No image driver available to generate keyframe images for prompt-only keyframes")
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to generate image for keyframe {i}: {e}")
+
+    # Build segment list: pairs of (first_frame, last_frame) with per-segment prompt
+    # Segment i (KF[i] → KF[i+1]) uses the global prompt + keyframe_prompts[i+1]
+    segments = []
+    for i in range(n_keyframes - 1):
+        # Per-keyframe prompt: what happens by KF[i+1] (the end of this segment)
+        kf_prompt = (kf_prompts[i + 1] or "").strip() if i + 1 < len(kf_prompts) else ""
+        # Combine: global prompt provides scene context, keyframe prompt adds per-segment action
+        if kf_prompt:
+            seg_prompt = f"{req.prompt}. {kf_prompt}"
+        else:
+            seg_prompt = req.prompt
+        segments.append({
+            "index": i,
+            "first_frame": resolved_paths[i],
+            "last_frame": resolved_paths[i + 1],
+            "prompt": seg_prompt,
+        })
+
+    total_duration = len(segments) * req.segment_duration
+    print(f"[long-take] starting: {len(segments)} segments × {req.segment_duration}s = {total_duration}s total")
+
+    # Use a fixed seed for all segments if provided, otherwise derive one
+    base_seed = req.seed if req.seed is not None else int(time.time()) % (2**32)
+
+    # Parse aspect ratio
+    try:
+        ar = AspectRatio(req.aspect_ratio)
+    except ValueError:
+        ar = AspectRatio.LANDSCAPE_16_9
+
+    job_id = str(uuid.uuid4())[:12]
+    take_id = str(uuid.uuid4())[:8]
+
+    _long_take_jobs[job_id] = {
+        "shot_id": req.shot_id,
+        "project_id": req.project_id,
+        "model_id": req.model_id,
+        "take_id": take_id,
+        "segments": segments,
+        "segment_duration": req.segment_duration,
+        "total_duration": total_duration,
+        "prompt": req.prompt,
+        "negative_prompt": req.negative_prompt,
+        "aspect_ratio": ar,
+        "camera_movement": req.camera_movement,
+        "extra_params": req.extra_params,
+        "base_seed": base_seed,
+        "current_segment": 0,
+        "segment_job_ids": [],  # ComfyUI job IDs for each segment
+        "segment_video_urls": [],  # Completed video URLs per segment
+        "status": "generating",
+        "error": None,
+    }
+
+    # Start generating the first segment
+    await _start_next_segment(job_id)
+
+    return {
+        "job_id": job_id,
+        "take_id": take_id,
+        "shot_id": req.shot_id,
+        "total_segments": len(segments),
+        "total_duration": total_duration,
+        "status": "generating",
+    }
+
+
+async def _start_next_segment(long_take_job_id: str):
+    """Start generating the next segment in a long take chain."""
+    job = _long_take_jobs.get(long_take_job_id)
+    if not job:
+        return
+
+    seg_idx = job["current_segment"]
+    segments = job["segments"]
+    if seg_idx >= len(segments):
+        return  # All segments started; caller handles stitching
+
+    seg = segments[seg_idx]
+    driver = get_video_driver(job["model_id"])
+    if not driver:
+        job["status"] = "failed"
+        job["error"] = f"Driver {job['model_id']} not found"
+        return
+
+    # Build the video generation request for this segment
+    gen_req = VideoGenerationRequest(
+        prompt=seg.get("prompt", job["prompt"]),
+        negative_prompt=job["negative_prompt"],
+        mode=VideoGenerationMode.I2V,
+        duration_seconds=job["segment_duration"],
+        aspect_ratio=job["aspect_ratio"],
+        seed=job["base_seed"] + seg_idx,  # Increment seed per segment for variety while staying consistent
+        first_frame_path=seg["first_frame"],
+        last_frame_path=seg["last_frame"],
+        camera_movement=job["camera_movement"],
+        extra_params=job["extra_params"],
+    )
+
+    print(f"[long-take] generating segment {seg_idx + 1}/{len(segments)} (seed={gen_req.seed})")
+    response = await driver.generate(gen_req)
+
+    if response.status == GenerationStatus.FAILED:
+        job["status"] = "failed"
+        job["error"] = f"Segment {seg_idx + 1} failed: {response.error_message}"
+        return
+
+    # Track the ComfyUI job ID for this segment
+    job["segment_job_ids"].append(response.job_id)
+
+
+@router.get("/long-take/status/{job_id}")
+async def check_long_take_status(job_id: str):
+    """Poll the status of a long take generation.
+
+    Checks the current segment's ComfyUI job. When it completes, starts the next
+    segment. When all segments are done, stitches them with ffmpeg and stores
+    the result as a single take on the shot.
+    """
+    job = _long_take_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Long take job not found")
+
+    if job["status"] == "failed":
+        return {"status": "failed", "error": job["error"], "progress": {"current": job["current_segment"], "total": len(job["segments"])}}
+
+    if job["status"] == "completed":
+        return {
+            "status": "completed",
+            "video_url": job.get("final_video_url"),
+            "take_id": job["take_id"],
+            "shot_id": job["shot_id"],
+            "progress": {"current": len(job["segments"]), "total": len(job["segments"])},
+        }
+
+    if job["status"] == "stitching":
+        return {"status": "stitching", "progress": {"current": len(job["segments"]), "total": len(job["segments"])}}
+
+    # Check current segment
+    seg_idx = job["current_segment"]
+    segment_job_ids = job["segment_job_ids"]
+    if seg_idx >= len(segment_job_ids):
+        return {"status": "generating", "progress": {"current": seg_idx, "total": len(job["segments"])}}
+
+    driver = get_video_driver(job["model_id"])
+    if not driver:
+        job["status"] = "failed"
+        job["error"] = f"Driver {job['model_id']} not found"
+        return {"status": "failed", "error": job["error"]}
+
+    seg_job_id = segment_job_ids[seg_idx]
+    response = await driver.check_status(seg_job_id)
+
+    if response.status == GenerationStatus.COMPLETED and response.video_url:
+        # Download this segment to vault
+        project_id = job["project_id"]
+        shot_id = job["shot_id"]
+        shot_folder = _shot_dir(project_id, shot_id)
+
+        local_path = await _download_video_to_vault(
+            project_id, shot_id, response.video_url, f"lt_seg_{seg_idx}"
+        )
+        job["segment_video_urls"].append(local_path)
+        print(f"[long-take] segment {seg_idx + 1} complete: {local_path}")
+
+        # Move to next segment
+        job["current_segment"] = seg_idx + 1
+        await _start_next_segment(job_id)
+
+        # If all segments done, stitch
+        if job["current_segment"] >= len(job["segments"]):
+            job["status"] = "stitching"
+            print(f"[long-take] all segments done, stitching {len(job['segment_video_urls'])} segments")
+
+            take_id = job["take_id"]
+            final_path = shot_folder / f"take_{take_id}_longtake.mp4"
+            segment_urls = job["segment_video_urls"]
+
+            stitch_ok = _concat_videos(segment_urls, final_path)
+            if stitch_ok:
+                final_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_longtake.mp4"
+                job["final_video_url"] = final_url
+                job["status"] = "completed"
+                print(f"[long-take] stitched final video: {final_url}")
+
+                # Store as a take on the shot
+                shots = _load_shots(project_id)
+                shot = next((s for s in shots if s["id"] == shot_id), None)
+                if shot:
+                    takes = shot.get("video_takes", [])
+                    new_take = {
+                        "id": take_id,
+                        "path": final_url,
+                        "seed": job["base_seed"],
+                        "prompt": job["prompt"],
+                        "negative_prompt": job["negative_prompt"],
+                        "model_id": job["model_id"],
+                        "camera_movement": job["camera_movement"],
+                        "mode": "long_take",
+                        "segment_count": len(segment_urls),
+                        "total_duration": job["total_duration"],
+                        "segment_prompts": [s["prompt"] for s in job["segments"]],
+                        "keyframe_paths": [s["first_frame"] for s in job["segments"]] + [job["segments"][-1]["last_frame"]],
+                        "created_at": datetime.utcnow().isoformat(),
+                        "selected": len(takes) == 0,
+                    }
+                    takes.append(new_take)
+                    shot["video_takes"] = takes
+
+                    if len(takes) == 1:
+                        shot["video_clip_path"] = final_url
+                        shot["status"] = ShotStatus.VIDEO_GENERATED.value
+
+                    # Extract last frame for continuity chain
+                    last_frame_path = shot_folder / "last_frame.png"
+                    if _extract_last_frame(final_url, last_frame_path):
+                        shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+
+                    shot["updated_at"] = datetime.utcnow().isoformat()
+                    _save_shots(project_id, shots)
+            else:
+                job["status"] = "failed"
+                job["error"] = "ffmpeg stitching failed"
+
+    elif response.status == GenerationStatus.FAILED:
+        job["status"] = "failed"
+        job["error"] = f"Segment {seg_idx + 1} generation failed: {response.error_message}"
+
+    result = {
+        "status": job["status"],
+        "progress": {
+            "current": min(job["current_segment"] + 1, len(job["segments"])),
+            "total": len(job["segments"]),
+        },
+        "error": job.get("error"),
+    }
+
+    # Clean up completed/failed jobs from memory after returning status
+    if job["status"] in ("completed", "failed"):
+        _long_take_jobs.pop(job_id, None)
+
+    return result
