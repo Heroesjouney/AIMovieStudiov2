@@ -107,21 +107,35 @@ export function ShotComposer({ projectId }: { projectId: string }) {
 
   const handleRegenerate = async (shot: ShotResponse) => {
     setRegeneratingId(shot.id);
-    const prompt = shot.generation_recipe?.prompt || shot.description || shot.name;
-    const recipeWidth = shot.generation_recipe?.params?.width || 1344;
-    const recipeHeight = shot.generation_recipe?.params?.height || 768;
-    const recipeSeed = shot.generation_recipe?.seed;
-    const recipeNegative = shot.generation_recipe?.resolved_negative_prompt;
-    const recipeDenoise = shot.generation_recipe?.denoise;
-    const recipeCfg = shot.generation_recipe?.params?.cfg;
-    const recipeSteps = shot.generation_recipe?.params?.steps;
+    const recipe = shot.generation_recipe;
+    const prompt = recipe?.resolved_prompt || shot.description || shot.name;
+    const recipeWidth = recipe?.params?.width || 1344;
+    const recipeHeight = recipe?.params?.height || 768;
+    const recipeSeed = recipe?.seed;
+    const recipeNegative = recipe?.resolved_negative_prompt;
+    const recipeDenoise = recipe?.denoise;
+    const recipeCfg = recipe?.params?.cfg;
+    const recipeSteps = recipe?.params?.steps;
+    const recipeHAngle = recipe?.params?.horizontal_angle;
+    const recipeVAngle = recipe?.params?.vertical_angle;
+    const recipeZoom = recipe?.params?.zoom;
+    const recipePreset = recipe?.params?.composition_preset;
+    const recipeRefPaths = recipe?.reference_paths;
+    const recipeLoras = recipe?.params?.loras;
 
     try {
+      const extraParams: Record<string, any> = {};
+      if (recipeLoras && recipeLoras.length > 0) extraParams.loras = recipeLoras;
+
       const resp = await generateShotFrame(
         shot.id, prompt, selectedImageDriver,
         recipeNegative || undefined,
         recipeWidth, recipeHeight,
-        recipeSeed, undefined, recipeDenoise, recipeCfg, recipeSteps,
+        recipeSeed,
+        (recipeRefPaths && recipeRefPaths.length > 0) ? recipeRefPaths : undefined,
+        recipeDenoise, recipeCfg, recipeSteps,
+        recipeHAngle, recipeVAngle, recipeZoom, recipePreset,
+        Object.keys(extraParams).length > 0 ? extraParams : undefined,
       );
       if (resp.status === "failed") { setRegeneratingId(null); return; }
 
@@ -132,7 +146,6 @@ export function ShotComposer({ projectId }: { projectId: string }) {
           await updateShot(projectId, shot.id, {
             frame_image_path: framePath,
             status: "frame_generated",
-            generation_recipe: { prompt, model_id: selectedImageDriver, params: { width: recipeWidth, height: recipeHeight }, seed: recipeSeed, timestamp: new Date().toISOString() },
           });
           setRegeneratingId(null);
           await refresh();
@@ -143,6 +156,11 @@ export function ShotComposer({ projectId }: { projectId: string }) {
       setRegeneratingId(null);
     }
   };
+
+  // Reset regeneratingId if the poll errors out
+  useEffect(() => {
+    if (regenPoll.error) setRegeneratingId(null);
+  }, [regenPoll.error]);
 
   // --- Drag and drop ---
   const handleDragStart = (e: React.DragEvent, shotId: string) => {

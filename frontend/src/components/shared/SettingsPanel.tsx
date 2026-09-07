@@ -7,11 +7,15 @@ import {
   fetchModels, uploadModel,
   fetchLoras, uploadLora,
   listWorkflows, registerWorkflow, deleteWorkflow,
-  type ApiKeyInfo, type CustomWorkflow, type LoRAInfo, type ComfyConfig,
+  analyzeWorkflow, uploadModelToSubdir,
+  checkWorkflowModels,
+  getDrivers,
+  type ApiKeyInfo, type CustomWorkflow, type LoRAInfo, type ComfyConfig, type WorkflowModelRef, type ModelCheckResult,
 } from "@/lib/api";
+import { useStudioStore } from "@/lib/store";
 import {
   X, Key, Upload, Loader2, Check, ExternalLink, Trash2,
-  Plus, Box, ChevronDown, Settings, FileJson, Layers, Server,
+  Plus, Box, ChevronDown, Settings, FileJson, Layers, Server, AlertCircle,
 } from "lucide-react";
 
 interface SettingsPanelProps {
@@ -102,6 +106,25 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [wfMsg, setWfMsg] = useState<string | null>(null);
   const [wfError, setWfError] = useState<string | null>(null);
   const wfFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Workflow model analysis
+  const [requiredModels, setRequiredModels] = useState<WorkflowModelRef[]>([]);
+  const [analyzingModels, setAnalyzingModels] = useState(false);
+  const [modelCheckResults, setModelCheckResults] = useState<ModelCheckResult[]>([]);
+  const [uploadingModelIdx, setUploadingModelIdx] = useState<number | null>(null);
+  const [modelUploadMsgs, setModelUploadMsgs] = useState<Record<number, string>>({});
+  const modelUploadRefs = useRef<Record<number, HTMLInputElement | null>>({});
+
+  const { setDrivers } = useStudioStore();
+
+  const refreshDrivers = useCallback(async () => {
+    try {
+      const drivers = await getDrivers();
+      setDrivers(drivers.image, drivers.video, drivers.audio);
+    } catch {
+      // Silent fail — not critical
+    }
+  }, [setDrivers]);
 
   const loadKeys = useCallback(async () => {
     setLoadingKeys(true);
@@ -229,12 +252,15 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         throw new Error("Invalid JSON — please paste a valid ComfyUI workflow (API format)");
       }
       await registerWorkflow(wfId.trim(), wfName.trim(), wfCategory, parsed);
-      setWfMsg(`Workflow '${wfName}' registered! Refresh the page to see it in model dropdowns.`);
+      setWfMsg(`Workflow '${wfName}' registered! Drivers updated.`);
       setShowWorkflowForm(false);
       setWfName("");
       setWfId("");
       setWfJson("");
+      setRequiredModels([]);
+      setModelCheckResults([]);
       await loadWorkflows();
+      await refreshDrivers();
     } catch (err) {
       setWfError(err instanceof Error ? err.message : "Failed to register workflow");
     } finally {
@@ -246,8 +272,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     setWfError(null);
     try {
       await deleteWorkflow(driverId);
-      setWfMsg(`Workflow '${driverId}' removed.`);
+      setWfMsg(`Workflow '${driverId}' removed. Drivers updated.`);
       await loadWorkflows();
+      await refreshDrivers();
     } catch (err) {
       setWfError(err instanceof Error ? err.message : "Failed to delete workflow");
     }
@@ -261,6 +288,60 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       if (!wfId) setWfId(file.name.replace(/\.json$/i, "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase());
     };
     reader.readAsText(file);
+  };
+
+  // Auto-analyze workflow JSON when it changes (debounced)
+  useEffect(() => {
+    if (!wfJson.trim()) {
+      setRequiredModels([]);
+      setModelCheckResults([]);
+      return;
+    }
+    let parsed: Record<string, any>;
+    try {
+      parsed = JSON.parse(wfJson);
+    } catch {
+      return; // Not valid JSON yet — skip analysis
+    }
+    const timer = setTimeout(async () => {
+      setAnalyzingModels(true);
+      try {
+        const result = await analyzeWorkflow(parsed);
+        setRequiredModels(result.models);
+        // Check which models already exist in ComfyUI
+        if (result.models.length > 0) {
+          try {
+            const checkResult = await checkWorkflowModels(result.models);
+            setModelCheckResults(checkResult.results);
+          } catch {
+            setModelCheckResults([]);
+          }
+        } else {
+          setModelCheckResults([]);
+        }
+      } catch {
+        setRequiredModels([]);
+        setModelCheckResults([]);
+      } finally {
+        setAnalyzingModels(false);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [wfJson]);
+
+  const handleUploadRequiredModel = async (idx: number, file: File) => {
+    const model = requiredModels[idx];
+    if (!model) return;
+    setUploadingModelIdx(idx);
+    setModelUploadMsgs((prev) => ({ ...prev, [idx]: "" }));
+    try {
+      await uploadModelToSubdir(model.subdirectory, file);
+      setModelUploadMsgs((prev) => ({ ...prev, [idx]: `Uploaded ${file.name}` }));
+    } catch (err) {
+      setModelUploadMsgs((prev) => ({ ...prev, [idx]: `Failed: ${err instanceof Error ? err.message : "Upload error"}` }));
+    } finally {
+      setUploadingModelIdx(null);
+    }
   };
 
   const handleUploadLora = async (file: File) => {
@@ -721,6 +802,81 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     className="w-full h-32 bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-[10px] font-mono focus:border-studio-accent focus:outline-none resize-y"
                   />
                 </div>
+
+                {/* Required Models */}
+                {analyzingModels && (
+                  <div className="flex items-center gap-2 text-[10px] text-studio-muted">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Analyzing workflow for required models...
+                  </div>
+                )}
+                {!analyzingModels && requiredModels.length > 0 && (
+                  <div>
+                    <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3 text-studio-accent" />
+                      Required Models ({requiredModels.length})
+                    </label>
+                    <p className="text-[10px] text-studio-muted mb-2">
+                      These models are referenced in the workflow. Models already in ComfyUI are marked as found. Upload the missing ones before using this driver.
+                    </p>
+                    <div className="space-y-1.5">
+                      {requiredModels.map((model, idx) => {
+                        const checkResult = modelCheckResults[idx];
+                        const found = checkResult?.found;
+                        return (
+                          <div key={`${model.subdirectory}-${model.filename}-${idx}`} className={`flex items-center gap-2 p-2 rounded-lg border ${found ? "bg-green-500/5 border-green-500/20" : "bg-studio-panel border-studio-border"}`}>
+                            <Box className={`w-3 h-3 shrink-0 ${found ? "text-green-500" : "text-studio-accent/60"}`} />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[10px] font-medium truncate">{model.filename}</div>
+                              <div className="text-[9px] text-studio-muted">{model.label} · {model.subdirectory}/</div>
+                            </div>
+                            {found && (
+                              <span className="flex items-center gap-1 text-[9px] text-green-500 shrink-0">
+                                <Check className="w-2.5 h-2.5" />
+                                In ComfyUI
+                              </span>
+                            )}
+                            {modelUploadMsgs[idx] && (
+                              <span className={`text-[9px] shrink-0 ${modelUploadMsgs[idx].startsWith("Failed") ? "text-studio-danger" : "text-green-500"}`}>
+                                {modelUploadMsgs[idx]}
+                              </span>
+                            )}
+                            {!found && (
+                              <>
+                                <button
+                                  onClick={() => modelUploadRefs.current[idx]?.click()}
+                                  disabled={uploadingModelIdx !== null}
+                                  className="flex items-center gap-1 px-2 py-1 bg-studio-bg border border-studio-border hover:border-studio-accent/50 text-studio-muted hover:text-studio-text text-[9px] rounded-lg transition-all disabled:opacity-40 shrink-0"
+                                >
+                                  {uploadingModelIdx === idx ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Upload className="w-2.5 h-2.5" />}
+                                  Upload
+                                </button>
+                                <input
+                                  ref={(el) => { modelUploadRefs.current[idx] = el; }}
+                                  type="file"
+                                  accept=".safetensors,.pt,.pth,.ckpt,.gguf,.bin"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) handleUploadRequiredModel(idx, file);
+                                    if (e.target) e.target.value = "";
+                                  }}
+                                />
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {!analyzingModels && wfJson.trim() && requiredModels.length === 0 && (
+                  <p className="text-[10px] text-studio-muted flex items-center gap-1">
+                    <Check className="w-3 h-3 text-green-500" />
+                    No model references found in workflow JSON.
+                  </p>
+                )}
+
                 <div className="flex gap-2">
                   <button
                     onClick={handleRegisterWorkflow}
@@ -731,7 +887,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     Register Workflow
                   </button>
                   <button
-                    onClick={() => { setShowWorkflowForm(false); setWfName(""); setWfId(""); setWfJson(""); setWfError(null); }}
+                    onClick={() => { setShowWorkflowForm(false); setWfName(""); setWfId(""); setWfJson(""); setWfError(null); setRequiredModels([]); setModelCheckResults([]); setModelUploadMsgs({}); }}
                     className="px-3 py-1.5 bg-studio-panel border border-studio-border text-studio-muted text-xs rounded-lg hover:text-studio-text transition-colors"
                   >
                     Cancel

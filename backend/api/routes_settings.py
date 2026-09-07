@@ -293,3 +293,200 @@ async def delete_workflow(driver_id: str):
 
     print(f"[Workflows] Deleted custom workflow '{driver_id}'")
     return {"status": "ok", "driver_id": driver_id}
+
+
+# =============================================================================
+# Workflow Model Analysis
+# =============================================================================
+
+# Maps ComfyUI node class_type → (input field name, model subdirectory, label)
+MODEL_NODE_MAP = {
+    "CheckpointLoaderSimple": ("ckpt_name", "checkpoints", "Checkpoint"),
+    "CheckpointLoader": ("ckpt_name", "checkpoints", "Checkpoint"),
+    "UNETLoader": ("unet_name", "unet", "UNet/Diffusion Model"),
+    "LoraLoader": ("lora_name", "loras", "LoRA"),
+    "LoraLoaderModelOnly": ("lora_name", "loras", "LoRA"),
+    "VAELoader": ("vae_name", "vae", "VAE"),
+    "CLIPLoader": ("clip_name", "clip", "CLIP/Text Encoder"),
+    "CLIPLoaderGGUF": ("clip_name", "clip", "CLIP/Text Encoder"),
+    "ControlNetLoader": ("control_net_name", "controlnet", "ControlNet"),
+    "DiffControlNetLoader": ("control_net_name", "controlnet", "ControlNet"),
+    "UpscaleModelLoader": ("model_name", "upscale_models", "Upscale Model"),
+    "GLIGENLoader": ("gligen_name", "gligen", "GLIGEN Model"),
+    "HypernetworkLoader": ("hypernetwork_name", "hypernetworks", "Hypernetwork"),
+    "StyleModelLoader": ("style_model_name", "style_models", "Style Model"),
+    "UnetLoaderGGUF": ("unet_name", "unet", "UNet (GGUF)"),
+    "LoraLoaderGGUF": ("lora_name", "loras", "LoRA (GGUF)"),
+}
+
+
+class AnalyzeWorkflowRequest(BaseModel):
+    workflow_json: dict
+
+
+@router.post("/workflows/analyze")
+async def analyze_workflow(req: AnalyzeWorkflowRequest):
+    """Analyze a ComfyUI workflow JSON (API format) and extract required models.
+
+    Returns a list of model references with their types, filenames, and target directories.
+    """
+    workflow = req.workflow_json
+    if not isinstance(workflow, dict):
+        raise HTTPException(status_code=400, detail="Workflow JSON must be an object")
+
+    # ComfyUI API format: { "node_id": { "class_type": "...", "inputs": {...} } }
+    # Or wrapped: { "workflow": { "nodes": [...] } } (UI format — not API format)
+    models = []
+    seen = set()
+
+    if "nodes" in workflow and isinstance(workflow["nodes"], list):
+        # UI format — extract from nodes array
+        for node in workflow["nodes"]:
+            class_type = node.get("class_type", node.get("type", ""))
+            widgets = node.get("widgets_values", [])
+            if class_type in MODEL_NODE_MAP:
+                field_name, subdir, label = MODEL_NODE_MAP[class_type]
+                # In UI format, widget values are positional — try to find the model name
+                # This is less reliable, but we can check if any widget value looks like a model file
+                for wv in widgets:
+                    if isinstance(wv, str) and any(wv.endswith(ext) for ext in
+                        (".safetensors", ".pt", ".pth", ".ckpt", ".gguf", ".bin")):
+                        key = (subdir, wv)
+                        if key not in seen:
+                            seen.add(key)
+                            models.append({
+                                "node_type": class_type,
+                                "field": field_name,
+                                "filename": wv,
+                                "subdirectory": subdir,
+                                "label": label,
+                            })
+                        break
+    else:
+        # API format — the standard
+        for node_id, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            class_type = node.get("class_type", "")
+            inputs = node.get("inputs", {})
+            if class_type in MODEL_NODE_MAP:
+                field_name, subdir, label = MODEL_NODE_MAP[class_type]
+                filename = inputs.get(field_name)
+                if filename and isinstance(filename, str):
+                    key = (subdir, filename)
+                    if key not in seen:
+                        seen.add(key)
+                        models.append({
+                            "node_type": class_type,
+                            "field": field_name,
+                            "filename": filename,
+                            "subdirectory": subdir,
+                            "label": label,
+                        })
+
+    return {"models": models}
+
+
+# Maps node class_type → the ComfyUI object_info endpoint to query for available models
+# Same as MODEL_NODE_MAP but used for checking existence
+NODE_TO_OBJECT_INFO = {
+    "CheckpointLoaderSimple": "CheckpointLoaderSimple",
+    "CheckpointLoader": "CheckpointLoaderSimple",
+    "UNETLoader": "UNETLoader",
+    "UnetLoaderGGUF": "UnetLoaderGGUF",
+    "LoraLoader": "LoraLoader",
+    "LoraLoaderModelOnly": "LoraLoader",
+    "LoraLoaderGGUF": "LoraLoader",
+    "VAELoader": "VAELoader",
+    "CLIPLoader": "CLIPLoader",
+    "CLIPLoaderGGUF": "CLIPLoaderGGUF",
+    "ControlNetLoader": "ControlNetLoader",
+    "DiffControlNetLoader": "ControlNetLoader",
+    "UpscaleModelLoader": "UpscaleModelLoader",
+    "GLIGENLoader": "GLIGENLoader",
+    "HypernetworkLoader": "HypernetworkLoader",
+    "StyleModelLoader": "StyleModelLoader",
+}
+
+
+class CheckModelsRequest(BaseModel):
+    models: List[dict]  # List of model refs from analyze endpoint
+
+
+@router.post("/workflows/check-models")
+async def check_workflow_models(req: CheckModelsRequest):
+    """Check which required models already exist in ComfyUI.
+
+    Queries ComfyUI's object_info API for each node type and compares
+    the available model names against the required filenames.
+
+    Returns a list with found: true/false for each model.
+    """
+    import aiohttp
+
+    comfy_url = os.getenv("COMFY_URL", "http://127.0.0.1:8188")
+    auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
+
+    # Group models by node_type to batch queries
+    # Many models may share the same node type (e.g., multiple LoRAs)
+    node_types_needed = set()
+    for model in req.models:
+        nt = model.get("node_type", "")
+        if nt in NODE_TO_OBJECT_INFO:
+            node_types_needed.add(NODE_TO_OBJECT_INFO[nt])
+
+    # Query ComfyUI for each node type's available models
+    # Key: (node_type, field_name) → set of available filenames
+    available_map: Dict[str, set] = {}
+    headers = {}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            for node_type in node_types_needed:
+                try:
+                    async with session.get(
+                        f"{comfy_url}/object_info/{node_type}",
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        node_info = data.get(node_type, {})
+                        input_spec = node_info.get("input", {})
+                        # Check all possible field names in this node's inputs
+                        for field_name in ("ckpt_name", "unet_name", "lora_name",
+                                           "vae_name", "clip_name", "control_net_name",
+                                           "model_name", "gligen_name",
+                                           "hypernetwork_name", "style_model_name"):
+                            field_input = input_spec.get(field_name, {})
+                            if isinstance(field_input, dict):
+                                filenames = field_input.get("values", [])
+                            elif isinstance(field_input, list):
+                                filenames = field_input
+                            else:
+                                continue
+                            key = f"{node_type}:{field_name}"
+                            available_map[key] = set(filenames)
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[Workflows] Failed to query ComfyUI object_info: {e}")
+
+    # Check each required model against available models
+    results = []
+    for model in req.models:
+        node_type = model.get("node_type", "")
+        field = model.get("field", "")
+        filename = model.get("filename", "")
+        comfy_node = NODE_TO_OBJECT_INFO.get(node_type, node_type)
+        key = f"{comfy_node}:{field}"
+        available = available_map.get(key, set())
+        results.append({
+            "filename": filename,
+            "subdirectory": model.get("subdirectory", ""),
+            "found": filename in available,
+        })
+
+    return {"results": results}

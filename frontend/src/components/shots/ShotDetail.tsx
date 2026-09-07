@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
   type ShotResponse, updateShot, generateShotFrame, checkShotFrameStatus,
@@ -32,8 +32,8 @@ interface Props {
 export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Props) {
   const { imageDrivers, selectedImageDriver, assets } = useStudioStore();
 
-  const [prompt, setPrompt] = useState("");
-  const [negativePrompt, setNegativePrompt] = useState("");
+  const [prompt, setPrompt] = useState(shot.generation_recipe?.resolved_prompt || shot.description || "");
+  const [negativePrompt, setNegativePrompt] = useState(shot.generation_recipe?.resolved_negative_prompt || "");
   const [showAssetPicker, setShowAssetPicker] = useState(false);
   const [linkedImagePaths, setLinkedImagePaths] = useState<string[]>([]);
   const [showImageLinker, setShowImageLinker] = useState(false);
@@ -47,6 +47,12 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
   // Steps & CFG overrides
   const [userSteps, setUserSteps] = useState<number | null>(null);
   const [userCfg, setUserCfg] = useState<number | null>(null);
+
+  // Sync prompt when navigating between shots
+  useEffect(() => {
+    setPrompt(shot.generation_recipe?.resolved_prompt || shot.description || "");
+    setNegativePrompt(shot.generation_recipe?.resolved_negative_prompt || "");
+  }, [shot.id]);
 
   const availableAssets = assets.filter((a) => a.primary_image);
 
@@ -109,7 +115,6 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
           await updateShot(projectId, shot.id, {
             frame_image_path: st.image_urls?.[0] || "",
             status: "frame_generated",
-            generation_recipe: { prompt, negative_prompt: negativePrompt, model_id: selectedImageDriver, params: { width: genWidth, height: genHeight }, timestamp: new Date().toISOString() },
           });
           await onRefresh();
         },
@@ -120,12 +125,14 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
     }
   };
 
-  // Ctrl+Enter to generate
+  // Ctrl+Enter to generate — use ref to avoid stale closure
+  const generateRef = useRef(handleGenerateFrame);
+  generateRef.current = handleGenerateFrame;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !poll.isRunning && prompt.trim()) {
         e.preventDefault();
-        handleGenerateFrame();
+        generateRef.current();
       }
     };
     window.addEventListener("keydown", handler);

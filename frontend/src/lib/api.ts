@@ -318,6 +318,68 @@ export async function deleteWorkflow(driverId: string): Promise<{ status: string
   return resp.json();
 }
 
+// Workflow Model Analysis
+export interface WorkflowModelRef {
+  node_type: string;
+  field: string;
+  filename: string;
+  subdirectory: string;
+  label: string;
+}
+
+export async function analyzeWorkflow(
+  workflowJson: Record<string, any>,
+): Promise<{ models: WorkflowModelRef[] }> {
+  const resp = await fetch(`${API_BASE}/settings/workflows/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workflow_json: workflowJson }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Analysis failed" }));
+    throw new Error(err.detail || "Failed to analyze workflow");
+  }
+  return resp.json();
+}
+
+export interface ModelCheckResult {
+  filename: string;
+  subdirectory: string;
+  found: boolean;
+}
+
+export async function checkWorkflowModels(
+  models: WorkflowModelRef[],
+): Promise<{ results: ModelCheckResult[] }> {
+  const resp = await fetch(`${API_BASE}/settings/workflows/check-models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ models }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Check failed" }));
+    throw new Error(err.detail || "Failed to check models");
+  }
+  return resp.json();
+}
+
+export async function uploadModelToSubdir(
+  subdirectory: string,
+  file: File,
+): Promise<{ name: string; size_bytes: number; path: string; subdirectory: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const resp = await fetch(
+    `${API_BASE}/generate/models/upload-to?subdirectory=${encodeURIComponent(subdirectory)}`,
+    { method: "POST", body: formData },
+  );
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(err.detail || "Failed to upload model");
+  }
+  return resp.json();
+}
+
 // Assets
 export async function fetchAssets(projectId: string, type?: string): Promise<AssetResponse[]> {
   const url = type
@@ -809,6 +871,7 @@ export async function retakeVideo(
   prompt: string,
   modelId: string,
   seed?: number,
+  extraParams?: Record<string, any>,
 ): Promise<ShotVideoResponse> {
   const params = new URLSearchParams({
     project_id: projectId,
@@ -819,6 +882,9 @@ export async function retakeVideo(
     model_id: modelId,
   });
   if (seed !== undefined) params.set("seed", String(seed));
+  if (extraParams && Object.keys(extraParams).length > 0) {
+    params.set("extra_params", JSON.stringify(extraParams));
+  }
   const resp = await fetch(`${API_BASE}/shots/retake?${params}`, { method: "POST" });
   return resp.json();
 }

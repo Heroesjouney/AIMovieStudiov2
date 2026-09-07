@@ -17,6 +17,7 @@ import { ShotTypeLibrary } from "./ShotTypeLibrary";
 import { AssetPicker } from "../shared/AssetPicker";
 import { ShotFrameLinker } from "../shared/ShotFrameLinker";
 import { ModelSelector } from "../shared/ModelSelector";
+import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
 import { useGenerationPolling } from "@/lib/useGenerationPolling";
 import {
   wouldCrossLine, suggestReverse,
@@ -93,6 +94,7 @@ export function ShotCreatePanel({
   const [advDenoise, setAdvDenoise] = useState("");
   const [advCfg, setAdvCfg] = useState("");
   const [advSteps, setAdvSteps] = useState("");
+  const [loras, setLoras] = useState<LoRASelection[]>([]);
 
   const poll = useGenerationPolling();
 
@@ -132,6 +134,9 @@ export function ShotCreatePanel({
 
       const aspectData = ASPECT_RATIOS.find((a) => a.value === aspectRatio) || ASPECT_RATIOS[0];
 
+      const extraParams: Record<string, any> = {};
+      if (loras.length > 0) extraParams.loras = loras;
+
       const resp = await generateShotFrame(
         shot.id, fullPrompt, selectedImageDriver,
         advNegativePrompt || undefined,
@@ -145,6 +150,7 @@ export function ShotCreatePanel({
         wasFirstShot ? 0 : camVertical,
         wasFirstShot ? 1.0 : camZoom,
         wasFirstShot ? undefined : (selectedPresetId || undefined),
+        Object.keys(extraParams).length > 0 ? extraParams : undefined,
       );
 
       if (resp.status === "failed") {
@@ -178,12 +184,14 @@ export function ShotCreatePanel({
     }
   };
 
-  // Ctrl+Enter to generate
+  // Ctrl+Enter to generate — use ref to avoid stale closure
+  const createRef = useRef(handleCreateAndGenerate);
+  createRef.current = handleCreateAndGenerate;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !poll.isRunning && (newPrompt.trim() || !isFirstShotInScene)) {
         e.preventDefault();
-        handleCreateAndGenerate();
+        createRef.current();
       }
     };
     window.addEventListener("keydown", handler);
@@ -471,6 +479,17 @@ export function ShotCreatePanel({
           <p className="text-[9px] text-studio-muted">
             Denoise: 1.0 = new composition, 0.75 = light edit, 0.5 = minimal changes. CFG default 1 (Lightning LoRA). Steps default 4.
           </p>
+
+          {/* LoRAs */}
+          {imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_loras && (
+            <div className="mt-3">
+              <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
+                <Layers className="w-3 h-3" />
+                LoRAs
+              </label>
+              <LoRASelector selected={loras} onChange={setLoras} compact />
+            </div>
+          )}
         </div>
       )}
 

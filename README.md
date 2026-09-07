@@ -89,9 +89,10 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - **📸 Multi-Angle & Variations** - Generate alternate camera angles, prompt variations, and retake failed shots.
 - **🎞️ Long Take Mode** *(Experimental)* - Chain keyframe interpolation across multiple segments to generate continuous shots longer than a single clip. Define keyframes by image, prompt, or both. The backend generates missing images via T2I, interpolates between keyframe pairs using first-last-frame-to-video (FLF2V), and stitches segments with ffmpeg. Only available for models that support first+last frame (e.g. LTX Video 2.3, Wan Video).
 - **🔀 Shot Management** - Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
-- **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders.
+- **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders. Available in all 5 generation surfaces: Generate tab, Shot tab, Camera tab, Shot Create panel, and Retake panel.
 - **⚙️ Settings Panel** - A built-in settings panel (gear icon in header) for managing cloud API keys, uploading models to ComfyUI, and registering custom workflows — no code changes or `.env` editing required.
-- **🔧 Custom Workflows** - Build workflows in ComfyUI, export as JSON, and upload them through the Settings panel. Custom workflows appear as new models in all dropdowns with full LoRA support.
+- **🔧 Custom Workflows** - Build workflows in ComfyUI, export as JSON, and upload them through the Settings panel. Custom workflows appear as new models in all dropdowns with full LoRA support. Driver dropdowns auto-refresh after registering or deleting workflows — no page reload needed.
+- **🔍 Workflow Model Analysis** - When uploading a custom workflow, the app automatically analyzes the JSON and lists all required models (checkpoints, LoRAs, VAEs, CLIP, UNet, ControlNet, etc.). Each model is checked against your ComfyUI instance — models already present show a green "In ComfyUI" badge, and missing models can be uploaded directly to the correct subdirectory from the same UI.
 
 ---
 
@@ -330,11 +331,12 @@ Once the app is running in your browser:
 7. **Reorder & duplicate** - Drag shot cards to reorder them. Use the duplicate button to experiment with different prompts.
 8. **Generate video** - Switch to the Camera Director tab to turn frames into video clips (text-to-video or image-to-video with camera movement).
 9. **Assemble & export** - Arrange shots on the timeline, add dialogue and audio, then export to XML for your editing software.
-10. **Apply LoRAs** - In any generation tab (Generate, Shots, Camera Director), expand **Advanced Settings** to add LoRAs with adjustable strength sliders. Upload new LoRAs directly from the UI.
+10. **Apply LoRAs** - In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand **Advanced Settings** to add LoRAs with adjustable strength sliders. Upload new LoRAs directly from the UI. LoRAs are preserved when regenerating shots.
 11. **Manage settings** - Click the **gear icon** (⚙) in the header to open the Settings panel where you can:
     - Link cloud API keys (Fal.ai, Replicate)
     - Upload model files to ComfyUI
-    - Register custom ComfyUI workflows
+    - Register custom ComfyUI workflows (with automatic model analysis and missing-model upload)
+    - Driver dropdowns auto-refresh after workflow changes — no page reload needed
 
 ---
 
@@ -344,12 +346,13 @@ AI Movie Studio 2 includes built-in LoRA (Low-Rank Adaptation) support for all l
 
 ### Using LoRAs
 
-1. In any generation tab (Generate, Shots, Camera Director), expand **Advanced Settings**
+1. In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand **Advanced Settings**
 2. The **LoRAs** section appears when a local ComfyUI driver is selected
 3. Click **Add LoRA** to open a searchable dropdown of all LoRAs in ComfyUI's `models/loras/` directory
 4. Select one or more LoRAs — each gets a strength slider (0–2, default 0.8)
 5. Click the **upload icon** (⬆) to upload a new `.safetensors` LoRA file directly to ComfyUI
 6. The LoRA list refreshes automatically after upload
+7. LoRAs are preserved when regenerating shots (stored in the generation recipe)
 
 ### How It Works
 
@@ -411,8 +414,10 @@ You can add new AI models without writing any code. Build a workflow in ComfyUI,
    - **Driver ID** — Internal ID, auto-generated from filename (e.g. `my_custom_flux`)
    - **Category** — Image or Video
    - **Workflow JSON** — Paste the JSON or click **Load from file** to upload the exported `.json`
-6. Click **Register Workflow**
-7. **Refresh the page** — The new model appears in all model dropdowns
+6. **Review required models** — The app automatically analyzes the workflow JSON and lists all required models:
+   - Models already in ComfyUI show a green **In ComfyUI** badge
+   - Missing models show an **Upload** button — upload directly to the correct subdirectory (checkpoints, loras, vae, clip, unet, controlnet, etc.)
+7. Click **Register Workflow** — The new model appears in all model dropdowns immediately (no page refresh needed)
 
 ### What Happens Behind the Scenes
 
@@ -433,6 +438,9 @@ You can add new AI models without writing any code. Build a workflow in ComfyUI,
 - `GET /api/settings/workflows` — List custom workflows
 - `POST /api/settings/workflows` — Register a new workflow
 - `DELETE /api/settings/workflows/{driver_id}` — Delete a workflow
+- `POST /api/settings/workflows/analyze` — Analyze workflow JSON for required models
+- `POST /api/settings/workflows/check-models` — Check which required models exist in ComfyUI
+- `POST /api/generate/models/upload-to` — Upload a model to a specific ComfyUI subdirectory
 
 ---
 
@@ -644,10 +652,10 @@ All projects, scenes, shots, and assets are stored locally in `backend/assets/` 
 The software itself is AGPLv3 licensed. For commercial use without open-sourcing your code, see the [Licensing](#-licensing--commercial-use) section. AI-generated content is subject to the terms of whichever model you use - check your provider's usage rights.
 
 **How do I add a new AI model?**
-Two ways: (1) Build a workflow in ComfyUI, export as API JSON, and register it via the Settings panel (gear icon in header) — no code needed. (2) Add a new Driver class in `backend/core/drivers/` for more complex integrations. See [Custom Workflows](#-custom-comfyui-workflows) for details.
+Two ways: (1) Build a workflow in ComfyUI, export as API JSON, and register it via the Settings panel (gear icon in header) — no code needed. The app automatically analyzes the workflow JSON and tells you which models are required and whether they're already in ComfyUI. Missing models can be uploaded directly from the same UI. (2) Add a new Driver class in `backend/core/drivers/` for more complex integrations. See [Custom Workflows](#-custom-comfyui-workflows) for details.
 
 **How do I add LoRAs?**
-In any generation tab, expand Advanced Settings and use the LoRA selector. You can upload `.safetensors` LoRA files directly from the UI — they're saved to ComfyUI's `models/loras/` directory. See [LoRA Support](#-lora-support) for details.
+In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand Advanced Settings and use the LoRA selector. You can upload `.safetensors` LoRA files directly from the UI — they're saved to ComfyUI's `models/loras/` directory. LoRAs are preserved when regenerating shots. See [LoRA Support](#-lora-support) for details.
 
 **How do I set API keys without editing .env?**
 Click the gear icon (⚙) in the header to open the Settings panel. You can add, update, and remove Fal.ai and Replicate API keys from there. Keys are stored in `backend/assets/settings.json` and loaded at backend startup.
@@ -671,9 +679,11 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 
 ## 🗺️ Roadmap
 
-- [x] LoRA support (upload, select, strength control)
+- [x] LoRA support (upload, select, strength control) — available in all 5 generation surfaces
 - [x] Settings panel (API keys, model upload, custom workflows, collapsible UI)
 - [x] Custom ComfyUI workflow registration (no-code model addition)
+- [x] Workflow model analysis — auto-detect required models and check against ComfyUI
+- [x] Auto-refresh driver dropdowns after workflow register/delete
 - [x] Remote/cloud ComfyUI server support (URL + auth token via Settings)
 - [x] Steps & CFG override controls in all generation tabs
 - [x] Long Take mode — keyframe interpolation for continuous shots *(Experimental)*

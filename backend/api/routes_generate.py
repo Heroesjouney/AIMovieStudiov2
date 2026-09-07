@@ -181,6 +181,63 @@ async def upload_model(file: UploadFile = File(...)):
     return {"name": filename, "size_bytes": len(content), "path": str(dest)}
 
 
+@router.post("/models/upload-to")
+async def upload_model_to_subdir(subdirectory: str, file: UploadFile = File(...)):
+    """Upload a model file to a specific ComfyUI models subdirectory.
+
+    Supports: checkpoints, loras, vae, clip, unet, controlnet, upscale_models,
+    gligen, hypernetworks, style_models, etc.
+    """
+    ALLOWED_SUBDIRS = {
+        "checkpoints", "loras", "vae", "clip", "unet", "controlnet",
+        "upscale_models", "gligen", "hypernetworks", "style_models",
+        "diffusion_models", "text_encoders",
+    }
+    if subdirectory not in ALLOWED_SUBDIRS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid subdirectory '{subdirectory}'. Allowed: {sorted(ALLOWED_SUBDIRS)}",
+        )
+
+    # Resolve the models base directory
+    models_base = (
+        os.getenv("COMFY_MODELS_DIR")
+        or (os.path.join(os.getenv("COMFY_DIR", ""), "models") if os.getenv("COMFY_DIR") else None)
+        or os.path.join(os.getcwd(), "ComfyUI", "models")
+    )
+
+    target_dir = Path(models_base) / subdirectory
+    if not target_dir.exists():
+        # Try to create it
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=f"ComfyUI models directory not found: {target_dir}. Set COMFY_MODELS_DIR or COMFY_DIR env var.",
+            )
+
+    filename = file.filename or "uploaded.safetensors"
+    if not filename.lower().endswith((".safetensors", ".pt", ".pth", ".ckpt", ".gguf", ".bin")):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .safetensors, .pt, .pth, .ckpt, .gguf, or .bin files are allowed.",
+        )
+
+    dest = target_dir / filename
+    if dest.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A file named '{filename}' already exists in {subdirectory}/.",
+        )
+
+    content = await file.read()
+    dest.write_bytes(content)
+    print(f"[Models] Uploaded '{filename}' ({len(content)} bytes) to {dest}")
+
+    return {"name": filename, "size_bytes": len(content), "path": str(dest), "subdirectory": subdirectory}
+
+
 class GenerateImageRequest(BaseModel):
     prompt: str
     model_id: str = "qwen_image"

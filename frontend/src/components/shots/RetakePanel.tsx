@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useStudioStore } from "@/lib/store";
 import {
   type ShotResponse,
   retakeVideo, checkShotVideoStatus,
 } from "@/lib/api";
+import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
 import {
-  RotateCcw, Loader2, ChevronDown, ChevronRight,
+  RotateCcw, Loader2, ChevronDown, ChevronRight, Layers,
 } from "lucide-react";
 import { useGenerationPolling } from "@/lib/useGenerationPolling";
 
@@ -17,21 +19,28 @@ interface RetakePanelProps {
 }
 
 export function RetakePanel({ shot, projectId, onRefresh }: RetakePanelProps) {
+  const { selectedVideoDriver, videoDrivers } = useStudioStore();
   const [show, setShow] = useState(false);
   const [retakeStart, setRetakeStart] = useState(0);
   const [retakeEnd, setRetakeEnd] = useState(2);
   const [retakePrompt, setRetakePrompt] = useState("");
+  const [loras, setLoras] = useState<LoRASelection[]>([]);
   const poll = useGenerationPolling();
+
+  const selectedTake = (shot.video_takes || []).find((t) => t.selected);
+  const retakeModel = selectedTake?.model_id || selectedVideoDriver;
 
   const handleRetake = async () => {
     if (!retakePrompt.trim() || !shot.video_clip_path) return;
     try {
-      const resp = await retakeVideo(projectId, shot.id, retakeStart, retakeEnd, retakePrompt, "minimax_h3");
+      const extraParams: Record<string, any> = {};
+      if (loras.length > 0) extraParams.loras = loras;
+      const resp = await retakeVideo(projectId, shot.id, retakeStart, retakeEnd, retakePrompt, retakeModel, undefined, Object.keys(extraParams).length > 0 ? extraParams : undefined);
       if (resp.status === "failed") { poll.setError(resp.error_message || "Retake failed"); return; }
       const jobId = resp.job_id;
 
       poll.startPolling(
-        () => checkShotVideoStatus(jobId, "minimax_h3"),
+        () => checkShotVideoStatus(jobId, retakeModel),
         async () => { setShow(false); await onRefresh(); },
         { intervalMs: 3000 }
       );
@@ -67,6 +76,15 @@ export function RetakePanel({ shot, projectId, onRefresh }: RetakePanelProps) {
           <textarea value={retakePrompt} onChange={(e) => setRetakePrompt(e.target.value)} rows={2}
             className="w-full bg-studio-bg border border-studio-border rounded-lg p-1.5 text-[10px] focus:border-studio-accent focus:outline-none resize-none"
             placeholder="Describe what should happen in the retake segment..." />
+          {videoDrivers.find((d) => d.driver_id === retakeModel)?.supports_loras && (
+            <div>
+              <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1">
+                <Layers className="w-3 h-3" />
+                LoRAs
+              </label>
+              <LoRASelector selected={loras} onChange={setLoras} compact />
+            </div>
+          )}
           <button onClick={handleRetake} disabled={poll.isRunning || !retakePrompt.trim()}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-[10px] font-medium rounded-lg transition-all">
             {poll.isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}

@@ -646,6 +646,8 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
                 "vertical_angle": req.vertical_angle,
                 "zoom": req.zoom,
                 "prompt_override": req.prompt_override,
+                "composition_preset": req.composition_preset,
+                "loras": extra_params.get("loras", []),
             },
             reference_paths=ref_paths,
             denoise=denoise,
@@ -1493,6 +1495,7 @@ async def generate_retake(
     prompt: str,
     model_id: str = "minimax_h3",
     seed: Optional[int] = None,
+    extra_params: Optional[str] = None,
 ):
     """Regenerate a portion of a shot's video and splice it back.
 
@@ -1541,6 +1544,14 @@ async def generate_retake(
 
     duration = end_seconds - start_seconds
 
+    # Parse extra_params (e.g. loras)
+    parsed_extra: dict = {}
+    if extra_params:
+        try:
+            parsed_extra = json.loads(extra_params)
+        except (json.JSONDecodeError, TypeError):
+            parsed_extra = {}
+
     try:
         ar = AspectRatio("16:9")
     except ValueError:
@@ -1554,6 +1565,7 @@ async def generate_retake(
         seed=seed,
         first_frame_path=anchor_start_url,
         last_frame_path=anchor_end_url,
+        extra_params=parsed_extra,
     )
 
     response = await driver.generate(gen_req)
