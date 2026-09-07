@@ -1,0 +1,23 @@
+# Generated projects, uploaded media and settings.json (which holds API keys).
+# Keeping this out of the build context means no key ever lands in an image layer.
+assets/
+
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Stray sample renders at the repo root
+/*.png
+/*.jpg
+/*.jpeg
+/*.mp4
+
+.DS_Store
+Thumbs.db
