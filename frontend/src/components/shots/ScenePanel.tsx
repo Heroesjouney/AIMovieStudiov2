@@ -5,7 +5,7 @@ import { useStudioStore } from "@/lib/store";
 import {
   fetchScenes, createScene, updateScene, deleteScene,
   addSceneReferenceAsset, removeSceneReferenceAsset,
-  type SceneResponse,
+  fetchShots, type SceneResponse,
 } from "@/lib/api";
 import { Plus, Trash2, Film, Sun, Moon, Sunrise, Sunset, Building2, X, Layers, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
@@ -37,12 +37,14 @@ const LIGHTINGS = [
 ];
 
 export function ScenePanel({ projectId }: { projectId: string }) {
-  const { scenes, setScenes, selectedSceneId, setSelectedSceneId } = useStudioStore();
+  const { scenes, setScenes, selectedSceneId, setSelectedSceneId, setShots } = useStudioStore();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [dragOverRecipe, setDragOverRecipe] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState(false);
 
   const refresh = async () => {
     const data = await fetchScenes(projectId);
@@ -60,11 +62,29 @@ export function ScenePanel({ projectId }: { projectId: string }) {
     await refresh();
   };
 
-  const handleDelete = async (sceneId: string) => {
-    if (!confirm("Delete this scene and unbind its shots?")) return;
+  const handleDeleteClick = (sceneId: string) => {
+    setDeleteConfirm(sceneId);
+    setDeleteArmed(false);
+  };
+
+  const handleDeleteConfirm = async (sceneId: string) => {
+    if (!deleteArmed) {
+      setDeleteArmed(true);
+      return;
+    }
     await deleteScene(projectId, sceneId);
+    setDeleteConfirm(null);
+    setDeleteArmed(false);
     if (selectedSceneId === sceneId) setSelectedSceneId(null);
     await refresh();
+    // Refresh shots so the storyboard grid removes deleted shots
+    const updatedShots = await fetchShots(projectId);
+    setShots(updatedShots);
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteConfirm(null);
+    setDeleteArmed(false);
   };
 
   const selectedScene = scenes.find((s) => s.id === selectedSceneId);
@@ -163,13 +183,45 @@ export function ScenePanel({ projectId }: { projectId: string }) {
                     )}
                   </div>
                   <button
-                    onClick={(e) => { e.stopPropagation(); handleDelete(scene.id); }}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteClick(scene.id); }}
                     className="opacity-0 group-hover:opacity-100 p-1 rounded-lg hover:bg-studio-danger/20 text-studio-danger transition-all"
                   >
                     <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
               </div>
+
+              {deleteConfirm === scene.id && (
+                <div className="mt-1 p-3 bg-studio-danger/10 border border-studio-danger/30 rounded-xl animate-fade-in space-y-2">
+                  <div className="flex items-start gap-2">
+                    <Trash2 className="w-4 h-4 text-studio-danger shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-[11px] font-semibold text-studio-danger">Delete "{scene.name}"?</p>
+                      <p className="text-[10px] text-studio-muted mt-0.5 leading-relaxed">
+                        This will permanently delete the scene, all its shots, storyboard frames, and video files. This cannot be undone.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleDeleteConfirm(scene.id)}
+                      className={`flex-1 px-2 py-1.5 text-[10px] font-medium rounded-lg transition-all ${
+                        deleteArmed
+                          ? "bg-studio-danger text-white hover:bg-red-600"
+                          : "bg-studio-danger/20 text-studio-danger hover:bg-studio-danger/30 border border-studio-danger/40"
+                      }`}
+                    >
+                      {deleteArmed ? "Click again to confirm deletion" : "Delete scene & all shots"}
+                    </button>
+                    <button
+                      onClick={handleDeleteCancel}
+                      className="px-2 py-1.5 text-[10px] font-medium rounded-lg bg-studio-panel hover:bg-studio-panelHover text-studio-muted border border-studio-border transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {isSelected && (
                 <div className="mt-1 ml-2 p-3 bg-studio-panel rounded-xl border border-studio-border/50 animate-fade-in space-y-3">

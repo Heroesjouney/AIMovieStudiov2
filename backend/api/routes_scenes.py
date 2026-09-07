@@ -39,6 +39,11 @@ def _save_scenes(project_id: str, scenes: List[dict]):
         json.dump(scenes, f, indent=2, default=str)
 
 
+def _save_shots_file(project_id: str, shots: List[dict]):
+    with open(_project_dir(project_id) / "shots.json", "w") as f:
+        json.dump(shots, f, indent=2, default=str)
+
+
 @router.get("/{project_id}")
 async def list_scenes(project_id: str):
     return _load_scenes(project_id)
@@ -92,10 +97,36 @@ async def update_scene(project_id: str, scene_id: str, updates: dict):
 @router.delete("/{project_id}/{scene_id}")
 async def delete_scene(project_id: str, scene_id: str):
     scenes = _load_scenes(project_id)
-    filtered = [s for s in scenes if s["id"] != scene_id]
-    if len(filtered) == len(scenes):
+    scene = next((s for s in scenes if s["id"] == scene_id), None)
+    if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")
+    filtered = [s for s in scenes if s["id"] != scene_id]
     _save_scenes(project_id, filtered)
+
+    # Delete all shots belonging to this scene + their files on disk
+    import shutil
+    shots_path = _project_dir(project_id) / "shots.json"
+    if shots_path.exists():
+        with open(shots_path, "r") as f:
+            all_shots = json.load(f)
+        scene_shots = [s for s in all_shots if s.get("scene_id") == scene_id]
+        remaining_shots = [s for s in all_shots if s.get("scene_id") != scene_id]
+        _save_shots_file(project_id, remaining_shots)
+
+        # Delete each shot's folder (frame images, video takes, angle images, etc.)
+        shots_dir = _project_dir(project_id) / "shots"
+        for shot in scene_shots:
+            shot_id = shot["id"]
+            shot_folder = shots_dir / shot_id
+            if shot_folder.exists() and shot_folder.is_dir():
+                try:
+                    shutil.rmtree(shot_folder)
+                    print(f"[scenes] deleted shot folder: {shot_folder}")
+                except Exception as e:
+                    print(f"[scenes] failed to delete shot folder {shot_folder}: {e}")
+
+        print(f"[scenes] deleted {len(scene_shots)} shot(s) from scene '{scene.get('name', scene_id)}'")
+
     return {"status": "deleted", "id": scene_id}
 
 
