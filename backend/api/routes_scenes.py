@@ -49,6 +49,12 @@ async def list_scenes(project_id: str):
     return _load_scenes(project_id)
 
 
+# Registered at both "" and "/" so FastAPI never issues its slash-redirect.
+# That redirect returns an absolute Location built from the host the backend
+# was called on (http://localhost:8001/...). The browser is told to follow it
+# directly, bypassing the Next.js proxy, which only resolves when the browser
+# happens to be on the same machine as the backend.
+@router.post("", include_in_schema=False)
 @router.post("/")
 async def create_scene(req: SceneCreateRequest):
     scene_id = str(uuid.uuid4())
