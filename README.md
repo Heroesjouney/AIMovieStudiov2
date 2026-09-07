@@ -55,6 +55,7 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - [The Story](#-the-story)
 - [Features](#-features)
 - [Quick Start](#-quick-start-5-minutes)
+- [Docker (One Command)](#-docker-one-command)
 - [How to Use](#-how-to-use)
 - [LoRA Support](#-lora-support)
 - [Settings & Configuration](#-settings--configuration)
@@ -200,6 +201,8 @@ AI-MovieStudio2/
 │   │       └── cinematicPresets.ts    # Shot type & camera preset definitions
 │   ├── next.config.mjs      # API proxy config
 │   └── package.json
+├── docker-compose.yml        # Docker Compose setup (backend + frontend)
+├── DOCKER.md                 # Docker setup & troubleshooting guide
 └── README.md
 ```
 
@@ -213,6 +216,8 @@ You'll need these installed before setting up the project:
 - **[Node.js 18+](https://nodejs.org/)** with `npm`
 - **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** running locally (for AI image/video generation)
 - **GPU** with CUDA support (recommended for local generation - cloud models work without one)
+
+> 💡 **Prefer Docker?** You can skip all manual installs and run the entire stack with `docker compose up --build`. See [Docker (One Command)](#-docker-one-command) below. You only need [Docker Desktop](https://www.docker.com/products/docker-desktop/) + ComfyUI running on your host.
 
 ### Hardware Recommendations
 
@@ -237,18 +242,19 @@ cd backend
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the `backend/` directory:
+Create a `.env` file in the `backend/` directory (or copy `.env.example`):
 
 ```env
-# Required for local generation
-COMFY_URL=http://127.0.0.1:8188
+# ComfyUI URL — defaults to http://127.0.0.1:8188, so you can leave this commented out
+# unless your ComfyUI listens on a different address/port
+# COMFY_URL=http://127.0.0.1:8188
 
 # Optional - only needed if using cloud AI models
 FAL_KEY=your_fal_api_key
 REPLICATE_API_TOKEN=your_replicate_token
 ```
 
-> 💡 Don't have API keys? You can skip the cloud lines and use local ComfyUI only.
+> 💡 Don't have API keys? You can skip the cloud lines and use local ComfyUI only. You can also add API keys later via the Settings panel (gear icon in header).
 
 ### Step 2 - Install the Frontend
 
@@ -293,6 +299,26 @@ npm run dev
 ```
 
 Open **http://localhost:3000** in your browser. You're ready to go! 🎬
+
+---
+
+## 🐳 Docker (One Command)
+
+Prefer containers? Skip the manual setup above and run the entire stack with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Then open http://localhost:3000. That's it.
+
+**Notes:**
+- ComfyUI runs on your host (not in a container) — make sure it's running on port 8188. The backend container reaches it at `host.docker.internal:8188`.
+- Your project data persists via bind mounts (`backend/assets/`, `settings.json`, `workflows/`) — `docker compose down` won't lose anything.
+- Both services bind to `127.0.0.1` only for privacy.
+- API keys and `.env` are excluded from the build context via `.dockerignore`.
+
+See [DOCKER.md](DOCKER.md) for details, troubleshooting, and configuration.
 
 ---
 
@@ -499,7 +525,7 @@ All configuration is done through a single `.env` file in the `backend/` directo
 
 | Variable | Required? | Default | Description |
 | -------- | --------- | ------- | ----------- |
-| `COMFY_URL` | **Yes** (local) | `http://127.0.0.1:8188` | URL of your local ComfyUI instance |
+| `COMFY_URL` | No (has default) | `http://127.0.0.1:8188` | URL of your local ComfyUI instance. Under Docker Compose, defaults to `host.docker.internal:8188`. |
 | `COMFY_OUTPUT_DIR` | No | *(auto-detect)* | Path to ComfyUI's output folder (for reading saved text/metadata) |
 | `COMFY_DIR` | No | - | Path to your ComfyUI installation. Used for LoRA/model uploads (resolves `models/loras/` and `models/checkpoints/`) |
 | `COMFY_LORAS_DIR` | No | - | Direct path to ComfyUI's LoRAs directory (overrides `COMFY_DIR`/`COMFY_MODELS_DIR` for LoRA uploads) |

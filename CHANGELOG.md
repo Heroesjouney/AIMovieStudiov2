@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Docker Compose Setup
+- **One-command stack** — `docker compose up --build` starts both backend and frontend containers
+- **Backend Dockerfile** — Python image with `build-essential` for future dependencies without prebuilt wheels
+- **Frontend Dockerfile** — Node image with `NEXT_IGNORE_BUILD_ERRORS=1` for pragmatic container builds
+- **Bind mounts for data persistence** — `backend/assets/`, `settings.json`, and `workflows/` persist across container rebuilds
+- **Privacy-first networking** — Both services bind to `127.0.0.1` only; `.dockerignore` excludes `.env` and `assets/` from build context
+- **ComfyUI on host** — Backend container reaches ComfyUI at `host.docker.internal:8188` (no container GPU setup needed)
+- **CI workflow** — `docker-build.yml` builds both images and runs a compose smoke test on every push/PR
+- **DOCKER.md** — Dedicated documentation for Docker setup, troubleshooting, and configuration
+- **`.env.example` fix** — Commented out `COMFY_URL` and `COMFY_OUTPUT_DIR` defaults that would break under Docker (pointed to container loopback instead of host)
+- **GitHub issue templates** — Bug report and feature request templates tailored to the project (generation setup, backend logs, environment fields)
+
 #### Workflow Model Analysis & Upload
 - **Workflow analysis endpoint** (`POST /api/settings/workflows/analyze`) — Parses ComfyUI workflow JSON (both API and UI format) and extracts all required model references (checkpoints, LoRAs, VAEs, CLIP, UNet, ControlNet, upscale models, etc.) with their node types, filenames, and target subdirectories
 - **Model existence check endpoint** (`POST /api/settings/workflows/check-models`) — Queries ComfyUI's `/object_info` API for each node type and compares available model filenames against the required ones, returning found/missing status per model
@@ -85,9 +97,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`RetakePanel.tsx`** — Added `LoRASelector` import, `loras` state, and passes `extraParams.loras` to `retakeVideo()`
 - **`SettingsPanel.tsx`** — Added `refreshDrivers` callback, workflow model analysis state, and required models UI with upload buttons; auto-refreshes driver dropdowns after workflow register/delete
 - **`api.ts`** — Added `analyzeWorkflow()`, `checkWorkflowModels()`, `uploadModelToSubdir()` functions; `retakeVideo()` now accepts `extraParams`; added `WorkflowModelRef` and `ModelCheckResult` types
+- **`routes_scenes.py`** — `delete_scene` now deletes all shots belonging to the scene from `shots.json` and removes their folders from disk (frame images, video takes, angle images)
+- **`ScenePanel.tsx`** — Replaced `confirm()` dialog with two-step inline confirmation for scene deletion; refreshes shots in Zustand store after deletion
 
 ### Fixed
 - **`supports_loras` not appearing in API response** — Root cause: `list_image_drivers()` and `list_video_drivers()` in `__init__.py` construct `DriverInfo` objects directly rather than calling `driver.get_info()`. Fixed by adding `supports_loras=True` to the hardcoded `DriverInfo` entries in `__init__.py`
+- **Scene deletion leaving orphaned shots** — `delete_scene` only removed the scene from `scenes.json` but left all its shots, storyboard frames, and video files on disk. Fixed by also filtering `shots.json` and deleting each shot's folder from disk
 
 ---
 
