@@ -155,6 +155,12 @@ async def list_shots(project_id: str, scene_id: Optional[str] = None):
     return shots
 
 
+# Registered at both "" and "/" so FastAPI never issues its slash-redirect.
+# That redirect returns an absolute Location built from the host the backend
+# was called on (http://localhost:8001/...). The browser is told to follow it
+# directly, bypassing the Next.js proxy, which only resolves when the browser
+# happens to be on the same machine as the backend.
+@router.post("", include_in_schema=False)
 @router.post("/")
 async def create_shot(req: ShotCreateRequest):
     shot_id = str(uuid.uuid4())

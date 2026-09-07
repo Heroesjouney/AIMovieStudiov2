@@ -78,6 +78,12 @@ def _count_shots(project_dir: Path) -> int:
     return 0
 
 
+# Registered at both "" and "/" so FastAPI never issues its slash-redirect.
+# That redirect returns an absolute Location built from the host the backend
+# was called on (http://localhost:8001/...). The browser is told to follow it
+# directly, bypassing the Next.js proxy, which only resolves when the browser
+# happens to be on the same machine as the backend.
+@router.get("", response_model=List[ProjectResponse], include_in_schema=False)
 @router.get("/", response_model=List[ProjectResponse])
 async def list_projects():
     """List all projects in the Vault."""
@@ -104,6 +110,12 @@ async def list_projects():
     return projects
 
 
+# Registered at both "" and "/" so FastAPI never issues its slash-redirect.
+# That redirect returns an absolute Location built from the host the backend
+# was called on (http://localhost:8001/...). The browser is told to follow it
+# directly, bypassing the Next.js proxy, which only resolves when the browser
+# happens to be on the same machine as the backend.
+@router.post("", response_model=ProjectResponse, include_in_schema=False)
 @router.post("/", response_model=ProjectResponse)
 async def create_project(body: ProjectCreate):
     """Create a new project directory in the Vault."""
