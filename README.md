@@ -651,6 +651,8 @@ class ImageDriver(ABC):
 **Frontend can't reach API**
 - Backend must be on port 8001 (configured in `next.config.mjs`).
 - Check http://localhost:8001/health responds.
+- If running the backend on a different machine (headless server, LAN), set `BACKEND_URL` in the frontend environment to point to the backend's IP. The Next.js proxy handles routing — no direct browser-to-backend calls needed.
+- Collection endpoint slash-redirects have been fixed (thanks to [@edasque](https://github.com/edasque)) — `/api/projects` and `/api/projects/` both resolve without redirect.
 
 **3D camera widget not appearing / WebGL error**
 - The 3D widget requires a WebGL context. If it fails, a slider-based fallback is shown automatically.

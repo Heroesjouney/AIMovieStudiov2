@@ -103,6 +103,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - **`supports_loras` not appearing in API response** — Root cause: `list_image_drivers()` and `list_video_drivers()` in `__init__.py` construct `DriverInfo` objects directly rather than calling `driver.get_info()`. Fixed by adding `supports_loras=True` to the hardcoded `DriverInfo` entries in `__init__.py`
 - **Scene deletion leaving orphaned shots** — `delete_scene` only removed the scene from `scenes.json` but left all its shots, storyboard frames, and video files on disk. Fixed by also filtering `shots.json` and deleting each shot's folder from disk
+- **Non-localhost API access broken by FastAPI slash-redirect** — Collection endpoints (`/api/projects`, `/api/scenes`, `/api/shots`, `/api/assets`) registered only at `"/"`, causing FastAPI to issue a `307` redirect with an absolute `Location` header pointing to `localhost:8001`. When the browser is on a different machine than the backend, the browser follows the redirect directly and bypasses the Next.js proxy, hitting `localhost:8001` on the client's own machine. Fixed by registering affected endpoints at both `""` and `"/"` with `include_in_schema=False` on duplicates to keep `/docs` clean. *(Contributed by [@edasque](https://github.com/edasque) — PR #3)*
 
 ---
 
