@@ -761,6 +761,7 @@ export interface LongTakeStatusResponse {
   video_url?: string;
   take_id?: string;
   shot_id?: string;
+  t2i_progress?: { current: number; total: number };
 }
 
 export async function generateLongTake(req: LongTakeRequest): Promise<LongTakeResponse> {

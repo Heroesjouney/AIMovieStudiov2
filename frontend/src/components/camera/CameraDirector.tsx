@@ -11,7 +11,6 @@ import {
   listVideoAssets,
   listImageAssets,
   getAssetThumbnailUrl,
-  updateShot,
   createShot,
   fetchShots,
   generateLongTake,
@@ -22,10 +21,11 @@ import {
   type ImageAssetItem,
   type AssetResponse,
   type VideoTake,
+  type DriverInfo,
 } from "@/lib/api";
 import {
   Camera, Loader2, Film, Video, Mic, Image as ImageIcon,
-  Plus, Send, Check, X, AlertCircle, Sparkles, Play,
+  Plus, Send, Check, X, AlertCircle, Play,
   Type, Layers, Wand2, Trash2, RotateCcw, Dices,
   ChevronDown, Settings, Clock, Route,
 } from "lucide-react";
@@ -144,7 +144,7 @@ const MODE_TABS: { id: GenMode; label: string; icon: any; desc: string }[] = [
   { id: "r2v", label: "Reference", icon: Layers, desc: "Use reference images, video, or audio" },
 ];
 
-// Model capability matrix
+// Model capability matrix — derived from backend DriverInfo.supported_features
 interface ModelCaps {
   supportsFirstFrame: boolean;
   supportsLastFrame: boolean;
@@ -161,17 +161,44 @@ interface ModelCaps {
   maxDuration: number;
 }
 
-function getModelCaps(driverId: string): ModelCaps {
-  const caps: Record<string, ModelCaps> = {
-    fal_seedance: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
-    fal_seedance_2: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
-    fal_seedance_2_5: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
-    fal_minimax_h3: { supportsFirstFrame: true, supportsLastFrame: false, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: false, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 6 },
-    ltx_video_2_3: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: true, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: true, supportsPromptEnhance: true, supportsNegativePrompt: false, maxDuration: 10 },
-    wan_video: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: false, supportsReferenceVideo: false, supportsReferenceAudio: false, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: false, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: true, maxDuration: 10 },
-    minimax_h3: { supportsFirstFrame: true, supportsLastFrame: true, supportsReferenceImages: true, supportsReferenceVideo: true, supportsReferenceAudio: true, supportsCameraControl: true, supportsT2V: true, supportsI2V: true, supportsR2V: true, supportsIA2V: false, supportsPromptEnhance: false, supportsNegativePrompt: false, maxDuration: 15 },
+// Fallback caps for drivers not yet in the backend response
+const DEFAULT_CAPS: ModelCaps = {
+  supportsFirstFrame: false,
+  supportsLastFrame: false,
+  supportsReferenceImages: false,
+  supportsReferenceVideo: false,
+  supportsReferenceAudio: false,
+  supportsCameraControl: false,
+  supportsT2V: true,
+  supportsI2V: false,
+  supportsR2V: false,
+  supportsIA2V: false,
+  supportsPromptEnhance: false,
+  supportsNegativePrompt: false,
+  maxDuration: 10,
+};
+
+function getModelCaps(driverId: string, drivers: DriverInfo[]): ModelCaps {
+  const driver = drivers.find((d) => d.driver_id === driverId);
+  if (!driver) return DEFAULT_CAPS;
+  const features = driver.supported_features || [];
+  const has = (f: string) => features.includes(f);
+  return {
+    supportsFirstFrame: has("image_to_video") || has("first_last_frame"),
+    supportsLastFrame: has("first_last_frame"),
+    supportsReferenceImages: has("reference_to_video") && (driver.max_reference_images ?? 0) > 0,
+    supportsReferenceVideo: has("motion_lock"),
+    // Audio slot needed for both R2V (audio_lock) and IA2V (image_audio_to_video)
+    supportsReferenceAudio: has("audio_lock") || has("image_audio_to_video"),
+    supportsCameraControl: has("camera_control"),
+    supportsT2V: has("text_to_video"),
+    supportsI2V: has("image_to_video"),
+    supportsR2V: has("reference_to_video"),
+    supportsIA2V: has("image_audio_to_video"),
+    supportsPromptEnhance: has("prompt_enhance"),
+    supportsNegativePrompt: has("negative_prompt"),
+    maxDuration: driver.max_duration_seconds ?? 10,
   };
-  return caps[driverId] || caps.ltx_video_2_3;
 }
 
 // =============================================================================
@@ -261,7 +288,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     () => shots.find((s) => s.id === selectedShotId),
     [shots, selectedShotId]
   );
-  const caps = getModelCaps(selectedModelId);
+  const caps = getModelCaps(selectedModelId, videoDrivers);
 
   // Storyboard frames for reference picking — same scene when shot selected, all frames otherwise
   // Exclude hidden (scratch/freestyle) shots from pickers
@@ -314,10 +341,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       setRefAudioPath(null);
     } else if (newMode === "i2v") {
       // Clear T2V-only dropdowns since reference image dictates look
-      setArtStyle("");
-      setFraming("");
-      setLens("");
-      setLighting("");
+      // (unless Long Take is active — style dropdowns are shared with global prompt)
+      if (!longTakeMode) {
+        setArtStyle("");
+        setFraming("");
+        setLens("");
+        setLighting("");
+      }
       setRefImagePaths([]);
       setRefVideoPath(null);
       setRefAudioPath(null);
@@ -328,10 +358,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       }
     } else if (newMode === "r2v") {
       // Clear T2V-only dropdowns since reference image dictates look
-      setArtStyle("");
-      setFraming("");
-      setLens("");
-      setLighting("");
+      // (unless Long Take is active — style dropdowns are shared with global prompt)
+      if (!longTakeMode) {
+        setArtStyle("");
+        setFraming("");
+        setLens("");
+        setLighting("");
+      }
       // Auto-fill first reference image from selected shot's storyboard frame
       const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
       if (shotFrame) {
@@ -340,10 +373,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       }
     } else if (newMode === "ia2v") {
       // Clear T2V-only dropdowns since reference image dictates look
-      setArtStyle("");
-      setFraming("");
-      setLens("");
-      setLighting("");
+      // (unless Long Take is active — style dropdowns are shared with global prompt)
+      if (!longTakeMode) {
+        setArtStyle("");
+        setFraming("");
+        setLens("");
+        setLighting("");
+      }
       // IA2V: needs first frame + audio clip
       setLastFramePath(null);
       setRefImagePaths([]);
@@ -418,10 +454,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       .finally(() => setUploadedImagesLoading(false));
   }, [activePicker, projectId]);
 
-  // Cleanup polling on unmount
+  // Cleanup polling and elapsed timer on unmount
   useEffect(() => {
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
+      if (elapsedRef.current) window.clearInterval(elapsedRef.current);
     };
   }, []);
 
@@ -507,6 +544,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setKeyframePrompts([]);
     setSegmentDuration(5);
     setLongTakeProgress(null);
+    // Clear cached picker data so it re-fetches on next open
+    loadedPickersRef.current.clear();
   };
 
   const handleLongTakeGenerate = async (effectiveShotId: string) => {
@@ -583,12 +622,51 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setGenerating(false);
             setLongTakeProgress(null);
 
-            await fetchShots(projectId);
-            setFreestyleResult({
-              videoUrl: st.video_url,
-              prompt: prompt.trim(),
-              shotId: effectiveShotId,
-            });
+            // Refresh store so takes gallery updates
+            try {
+              const fresh = await fetchShots(projectId);
+              useStudioStore.getState().setShots(fresh);
+            } catch (e) {
+              console.error("Failed to refetch shots after long take:", e);
+            }
+
+            // Show freestyle result only for freestyle shots;
+            // shot-bound takes appear in the takes gallery after store refresh
+            if (!selectedShot) {
+              const resultPrompt = prompt.trim() ||
+                keyframePrompts.filter((p) => p.trim()).join(" → ") ||
+                "Long Take";
+              setFreestyleResult({
+                videoUrl: st.video_url,
+                prompt: resultPrompt,
+                shotId: effectiveShotId,
+              });
+            }
+          } else if (st.status === "partial_failure" && st.video_url) {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setError(`⚠️ Partial failure: ${st.error}. Completed ${st.progress.current} of ${st.progress.total} segments.`);
+            setStatus("Long take completed with partial failure.");
+            stopElapsedTimer();
+            setGenerating(false);
+            setLongTakeProgress(null);
+
+            try {
+              const fresh = await fetchShots(projectId);
+              useStudioStore.getState().setShots(fresh);
+            } catch (e) {
+              console.error("Failed to refetch shots after partial long take:", e);
+            }
+            if (!selectedShot) {
+              const resultPrompt = prompt.trim() ||
+                keyframePrompts.filter((p) => p.trim()).join(" → ") ||
+                "Long Take (partial)";
+              setFreestyleResult({
+                videoUrl: st.video_url,
+                prompt: resultPrompt,
+                shotId: effectiveShotId,
+              });
+            }
           } else if (st.status === "failed") {
             if (pollRef.current) window.clearInterval(pollRef.current);
             pollRef.current = null;
@@ -598,12 +676,17 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setLongTakeProgress(null);
           } else if (st.status === "stitching") {
             setStatus("Stitching segments...");
+          } else if (st.status === "preparing") {
+            const t2i = st.t2i_progress;
+            setStatus(t2i
+              ? `Generating keyframe images... (${t2i.current}/${t2i.total})`
+              : "Preparing keyframe images...");
           } else {
             setStatus(`Generating segment ${st.progress.current}/${st.progress.total}...`);
           }
         } catch (e) {
           pollErrors++;
-          if (pollErrors > 10) {
+          if (pollErrors >= 5) {
             if (pollRef.current) {
               window.clearInterval(pollRef.current);
               pollRef.current = null;
@@ -630,26 +713,31 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         elapsedRef.current = null;
       }
     };
-    if (!prompt.trim()) {
+    // In Long Take mode, global prompt is optional if keyframe prompts exist
+    const hasKeyframePrompts = keyframePaths.some((_, i) => (keyframePrompts[i] || "").trim());
+    if (!prompt.trim() && !(longTakeMode && hasKeyframePrompts)) {
       setError("Prompt is required");
       return;
     }
 
-    if (mode === "i2v" && !firstFramePath) {
-      setError("I2V mode requires a first frame");
-      return;
-    }
-    if (mode === "ia2v" && !firstFramePath) {
-      setError("IA2V mode requires a first frame image");
-      return;
-    }
-    if (mode === "ia2v" && !refAudioPath) {
-      setError("IA2V mode requires an audio clip for lip-sync");
-      return;
-    }
-    if (mode === "r2v" && refImagePaths.length === 0) {
-      setError("R2V mode requires at least one reference image");
-      return;
+    // Skip mode-specific ref validation in Long Take mode (keyframes replace refs)
+    if (!longTakeMode) {
+      if (mode === "i2v" && !firstFramePath) {
+        setError("I2V mode requires a first frame");
+        return;
+      }
+      if (mode === "ia2v" && !firstFramePath) {
+        setError("IA2V mode requires a first frame image");
+        return;
+      }
+      if (mode === "ia2v" && !refAudioPath) {
+        setError("IA2V mode requires an audio clip for lip-sync");
+        return;
+      }
+      if (mode === "r2v" && refImagePaths.length === 0) {
+        setError("R2V mode requires at least one reference image");
+        return;
+      }
     }
 
     setGenerating(true);
@@ -821,7 +909,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Ctrl+Enter to generate
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !generating && prompt.trim()) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !generating && (prompt.trim() || (longTakeMode && keyframePaths.some((_, i) => (keyframePrompts[i] || "").trim())))) {
         e.preventDefault();
         handleGenerate();
       }
@@ -829,7 +917,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [generating, prompt]);
+  }, [generating, prompt, longTakeMode, keyframePaths, keyframePrompts]);
 
   const handleSelectTake = async (takeId: string) => {
     if (!selectedShot) return;
@@ -1034,8 +1122,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           </div>
         </div>
 
-        {/* ===== Reference Slots (mode-dependent) ===== */}
-        {mode !== "t2v" && (
+        {/* ===== Reference Slots (mode-dependent, hidden in Long Take mode) ===== */}
+        {mode !== "t2v" && !longTakeMode && (
           <div className="mb-3 space-y-1.5">
             <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5 block">
               {mode === "i2v" ? "Frames" : mode === "ia2v" ? "Image + Audio" : "References"}
@@ -1226,9 +1314,9 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             rows={6}
             className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-2 text-xs text-studio-text focus:outline-none focus:border-studio-accent resize-y min-h-[120px]"
           />
-          {/* Cinematic dropdowns — T2V shows all, I2V/R2V/IA2V only show Composition + Camera Movement */}
+          {/* Cinematic dropdowns — T2V and Long Take show all; I2V/R2V/IA2V only show Composition + Camera Movement */}
           <div className="flex flex-wrap gap-2 mt-2">
-            {mode === "t2v" && (
+            {(mode === "t2v" || longTakeMode) && (
               <select
                 value={artStyle}
                 onChange={(e) => setArtStyle(e.target.value)}
@@ -1237,7 +1325,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 {STYLE_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
               </select>
             )}
-            {mode === "t2v" && (
+            {(mode === "t2v" || longTakeMode) && (
               <select
                 value={framing}
                 onChange={(e) => setFraming(e.target.value)}
@@ -1246,7 +1334,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 {FRAMING_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
               </select>
             )}
-            {mode === "t2v" && (
+            {(mode === "t2v" || longTakeMode) && (
               <select
                 value={lens}
                 onChange={(e) => setLens(e.target.value)}
@@ -1255,7 +1343,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 {LENS_OPTIONS.map((opt) => <option key={opt.label} value={opt.value}>{opt.label}</option>)}
               </select>
             )}
-            {mode === "t2v" && (
+            {(mode === "t2v" || longTakeMode) && (
               <select
                 value={lighting}
                 onChange={(e) => setLighting(e.target.value)}
@@ -1588,8 +1676,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 </div>
               </div>
 
-              {/* Continuity Toggle */}
-              {(mode === "t2v" || mode === "i2v") && (
+              {/* Continuity Toggle — hidden in Long Take mode (keyframes provide visual continuity) */}
+              {(mode === "t2v" || mode === "i2v") && !longTakeMode && (
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -1629,7 +1717,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         <div className="flex gap-2">
           <button
             onClick={handleGenerate}
-            disabled={generating || !prompt.trim() || (longTakeMode && keyframePaths.filter((kp, i) => kp || (keyframePrompts[i] || "").trim()).length < 2)}
+            disabled={generating || (!prompt.trim() && !(longTakeMode && keyframePaths.some((_, i) => (keyframePrompts[i] || "").trim()))) || (longTakeMode && keyframePaths.filter((kp, i) => kp || (keyframePrompts[i] || "").trim()).length < 2)}
             className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs rounded-lg font-medium transition-all hover:scale-[1.01] shadow-md shadow-studio-accent/20"
           >
             {generating ? (
@@ -1820,10 +1908,10 @@ function getMediaDuration(url: string): Promise<number | null> {
   return new Promise((resolve) => {
     const video = document.createElement("video");
     video.preload = "metadata";
-    video.onloadedmetadata = () => resolve(video.duration);
-    video.onerror = () => resolve(null);
+    const timeoutId = setTimeout(() => resolve(null), 8000);
+    video.onloadedmetadata = () => { clearTimeout(timeoutId); resolve(video.duration); };
+    video.onerror = () => { clearTimeout(timeoutId); resolve(null); };
     video.src = url;
-    setTimeout(() => resolve(null), 8000);
   });
 }
 

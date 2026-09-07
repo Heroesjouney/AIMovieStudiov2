@@ -1770,73 +1770,38 @@ async def generate_long_take(req: LongTakeRequest):
     kf_paths = list(req.keyframe_paths) + [""] * (n_keyframes - len(req.keyframe_paths))
     kf_prompts = list(req.keyframe_prompts) + [""] * (n_keyframes - len(req.keyframe_prompts))
 
-    # For keyframes without an image, generate one via T2I from the keyframe prompt + global prompt
-    resolved_paths = []
-    for i in range(n_keyframes):
-        if kf_paths[i]:
-            resolved_paths.append(kf_paths[i])
-        else:
-            # Prompt-only keyframe: generate an image from global prompt + keyframe prompt
-            kf_prompt = kf_prompts[i].strip()
-            gen_prompt = f"{req.prompt}. {kf_prompt}" if kf_prompt else req.prompt
-            print(f"[long-take] generating T2I image for keyframe {i}: {gen_prompt[:80]}...")
-            try:
-                image_driver = get_image_driver("flux2")
-                if not image_driver:
-                    image_driver = get_image_driver("qwen_image")
-                if image_driver:
-                    from core.drivers.base import ImageGenerationRequest as ImgReq
-                    # Map aspect ratio to width/height
-                    ar_map = {
-                        "16:9": (1024, 576), "9:16": (576, 1024),
-                        "1:1": (768, 768), "4:3": (1024, 768),
-                        "3:4": (768, 1024), "21:9": (1024, 440),
-                    }
-                    w, h = ar_map.get(req.aspect_ratio, (1024, 576))
-                    img_req = ImgReq(
-                        prompt=gen_prompt,
-                        negative_prompt=req.negative_prompt,
-                        width=w,
-                        height=h,
-                        seed=(req.seed or int(time.time())) % (2**32) + i,
-                    )
-                    img_resp = await image_driver.generate(img_req)
-                    if img_resp.image_paths:
-                        resolved_paths.append(img_resp.image_paths[0])
-                    else:
-                        raise HTTPException(status_code=500, detail=f"Failed to generate image for keyframe {i}")
-                else:
-                    raise HTTPException(status_code=500, detail="No image driver available to generate keyframe images for prompt-only keyframes")
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Failed to generate image for keyframe {i}: {e}")
+    # Identify which keyframes need T2I generation (no image path)
+    t2i_needed = [i for i in range(n_keyframes) if not kf_paths[i]]
+    if t2i_needed:
+        # Check that an image driver is available before starting the job
+        image_driver = get_image_driver("flux2") or get_image_driver("qwen_image")
+        if not image_driver:
+            raise HTTPException(status_code=500, detail="No image driver available to generate keyframe images for prompt-only keyframes")
 
-    # Build segment list: pairs of (first_frame, last_frame) with per-segment prompt
-    # Segment i (KF[i] → KF[i+1]) uses the global prompt + keyframe_prompts[i+1]
+    # Build segment prompts now (don't need resolved paths yet for prompts)
     segments = []
     for i in range(n_keyframes - 1):
-        # Per-keyframe prompt: what happens by KF[i+1] (the end of this segment)
         kf_prompt = (kf_prompts[i + 1] or "").strip() if i + 1 < len(kf_prompts) else ""
-        # Combine: global prompt provides scene context, keyframe prompt adds per-segment action
-        if kf_prompt:
+        if kf_prompt and req.prompt.strip():
             seg_prompt = f"{req.prompt}. {kf_prompt}"
+        elif kf_prompt:
+            seg_prompt = kf_prompt
         else:
             seg_prompt = req.prompt
         segments.append({
             "index": i,
-            "first_frame": resolved_paths[i],
-            "last_frame": resolved_paths[i + 1],
+            "first_frame": "",  # Will be filled after T2I
+            "last_frame": "",   # Will be filled after T2I
             "prompt": seg_prompt,
         })
 
     total_duration = len(segments) * req.segment_duration
     print(f"[long-take] starting: {len(segments)} segments × {req.segment_duration}s = {total_duration}s total")
+    if t2i_needed:
+        print(f"[long-take] {len(t2i_needed)} keyframes need T2I generation: {t2i_needed}")
 
-    # Use a fixed seed for all segments if provided, otherwise derive one
     base_seed = req.seed if req.seed is not None else int(time.time()) % (2**32)
 
-    # Parse aspect ratio
     try:
         ar = AspectRatio(req.aspect_ratio)
     except ValueError:
@@ -1860,14 +1825,27 @@ async def generate_long_take(req: LongTakeRequest):
         "extra_params": req.extra_params,
         "base_seed": base_seed,
         "current_segment": 0,
-        "segment_job_ids": [],  # ComfyUI job IDs for each segment
-        "segment_video_urls": [],  # Completed video URLs per segment
-        "status": "generating",
+        "segment_job_ids": [],
+        "segment_video_urls": [],
+        "segment_retries": {},
+        "status": "preparing" if t2i_needed else "generating",
         "error": None,
+        # T2I state
+        "t2i_needed": t2i_needed,
+        "t2i_current_idx": 0,
+        "t2i_job_id": None,
+        "t2i_resolved_paths": {str(i): kf_paths[i] for i in range(n_keyframes) if kf_paths[i]},
+        "t2i_kf_prompts": kf_prompts,
+        "t2i_aspect_ratio": req.aspect_ratio,
+        "t2i_seed": base_seed,
     }
 
-    # Start generating the first segment
-    await _start_next_segment(job_id)
+    # If no T2I needed, resolve paths and start first segment immediately
+    if not t2i_needed:
+        for i, seg in enumerate(segments):
+            seg["first_frame"] = kf_paths[i]
+            seg["last_frame"] = kf_paths[i + 1]
+        await _start_next_segment(job_id)
 
     return {
         "job_id": job_id,
@@ -1923,6 +1901,72 @@ async def _start_next_segment(long_take_job_id: str):
     job["segment_job_ids"].append(response.job_id)
 
 
+def _save_partial_long_take(job: dict, seg_idx: int) -> None:
+    """Stitch completed segments and store as a partial take on the shot.
+
+    Called when a segment fails permanently after retry and we have
+    at least one completed segment to save.
+    """
+    completed = job["segment_video_urls"]
+    project_id = job["project_id"]
+    shot_id = job["shot_id"]
+    shot_folder = _shot_dir(project_id, shot_id)
+    take_id = job["take_id"]
+    final_path = shot_folder / f"take_{take_id}_longtake.mp4"
+
+    if len(completed) >= 2:
+        stitch_ok = _concat_videos(completed, final_path)
+    else:
+        import shutil as _shutil
+        single_local = _resolve_asset_path(completed[0])
+        if single_local and Path(single_local).exists():
+            _shutil.copy2(single_local, final_path)
+            stitch_ok = True
+        else:
+            stitch_ok = False
+
+    if stitch_ok:
+        final_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_longtake.mp4"
+        job["final_video_url"] = final_url
+        print(f"[long-take] saved partial take: {len(completed)} segments → {final_url}")
+
+        shots = _load_shots(project_id)
+        shot = next((s for s in shots if s["id"] == shot_id), None)
+        if shot:
+            takes = shot.get("video_takes", [])
+            new_take = {
+                "id": take_id,
+                "path": final_url,
+                "seed": job["base_seed"],
+                "prompt": job["prompt"],
+                "negative_prompt": job["negative_prompt"],
+                "model_id": job["model_id"],
+                "camera_movement": job["camera_movement"],
+                "mode": "long_take",
+                "segment_count": len(completed),
+                "total_segments": len(job["segments"]),
+                "total_duration": len(completed) * job["segment_duration"],
+                "partial": True,
+                "segment_prompts": [s["prompt"] for s in job["segments"][:len(completed)]],
+                "keyframe_paths": [s["first_frame"] for s in job["segments"][:len(completed)]] + [job["segments"][len(completed) - 1]["last_frame"]],
+                "created_at": datetime.utcnow().isoformat(),
+                "selected": len(takes) == 0,
+            }
+            takes.append(new_take)
+            shot["video_takes"] = takes
+            if len(takes) == 1:
+                shot["video_clip_path"] = final_url
+                shot["status"] = ShotStatus.VIDEO_GENERATED.value
+            last_frame_path = shot_folder / "last_frame.png"
+            if _extract_last_frame(final_url, last_frame_path):
+                shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+            shot["updated_at"] = datetime.utcnow().isoformat()
+            _save_shots(project_id, shots)
+    else:
+        job["status"] = "failed"
+        job["error"] = f"Segment {seg_idx + 1} failed after retry and stitching partial result also failed."
+
+
 @router.get("/long-take/status/{job_id}")
 async def check_long_take_status(job_id: str):
     """Poll the status of a long take generation.
@@ -1949,6 +1993,80 @@ async def check_long_take_status(job_id: str):
 
     if job["status"] == "stitching":
         return {"status": "stitching", "progress": {"current": len(job["segments"]), "total": len(job["segments"])}}
+
+    # Handle T2I preparation phase (prompt-only keyframes)
+    if job["status"] == "preparing":
+        t2i_needed = job.get("t2i_needed", [])
+        t2i_idx = job.get("t2i_current_idx", 0)
+
+        if t2i_idx >= len(t2i_needed):
+            # All T2I done — resolve segment paths and start video generation
+            resolved = job.get("t2i_resolved_paths", {})
+            for i, seg in enumerate(job["segments"]):
+                seg["first_frame"] = resolved.get(str(i), "")
+                seg["last_frame"] = resolved.get(str(i + 1), "")
+            job["status"] = "generating"
+            await _start_next_segment(job_id)
+            return {"status": "generating", "progress": {"current": 0, "total": len(job["segments"])}}
+
+        # Generate T2I for the current keyframe
+        kf_idx = t2i_needed[t2i_idx]
+        kf_prompts = job.get("t2i_kf_prompts", [])
+        kf_prompt = (kf_prompts[kf_idx] if kf_idx < len(kf_prompts) else "").strip()
+        global_prompt = job["prompt"].strip()
+
+        if kf_prompt and global_prompt:
+            gen_prompt = f"{global_prompt}. {kf_prompt}"
+        elif kf_prompt:
+            gen_prompt = kf_prompt
+        else:
+            gen_prompt = global_prompt
+
+        print(f"[long-take] generating T2I image for keyframe {kf_idx}: {gen_prompt[:80]}...")
+
+        try:
+            image_driver = get_image_driver("flux2") or get_image_driver("qwen_image")
+            if not image_driver:
+                job["status"] = "failed"
+                job["error"] = "No image driver available for T2I keyframe generation"
+                return {"status": "failed", "error": job["error"], "progress": {"current": 0, "total": len(job["segments"])}}
+
+            from core.drivers.base import ImageGenerationRequest as ImgReq
+            ar_map = {
+                "16:9": (1024, 576), "9:16": (576, 1024),
+                "1:1": (768, 768), "4:3": (1024, 768),
+                "3:4": (768, 1024), "21:9": (1024, 440),
+            }
+            w, h = ar_map.get(job.get("t2i_aspect_ratio", "16:9"), (1024, 576))
+            img_req = ImgReq(
+                prompt=gen_prompt,
+                negative_prompt=job.get("negative_prompt"),
+                width=w, height=h,
+                seed=(job.get("t2i_seed") or int(time.time())) % (2**32) + kf_idx,
+            )
+            img_resp = await image_driver.generate(img_req)
+            if img_resp.image_paths:
+                resolved = job.get("t2i_resolved_paths", {})
+                resolved[str(kf_idx)] = img_resp.image_paths[0]
+                job["t2i_resolved_paths"] = resolved
+                print(f"[long-take] T2I keyframe {kf_idx} generated: {img_resp.image_paths[0]}")
+            else:
+                job["status"] = "failed"
+                job["error"] = f"Failed to generate T2I image for keyframe {kf_idx}"
+                return {"status": "failed", "error": job["error"], "progress": {"current": 0, "total": len(job["segments"])}}
+        except Exception as e:
+            job["status"] = "failed"
+            job["error"] = f"T2I generation error for keyframe {kf_idx}: {e}"
+            return {"status": "failed", "error": job["error"], "progress": {"current": 0, "total": len(job["segments"])}}
+
+        # Move to next T2I keyframe
+        job["t2i_current_idx"] = t2i_idx + 1
+        t2i_progress = t2i_idx + 1
+        return {
+            "status": "preparing",
+            "progress": {"current": 0, "total": len(job["segments"])},
+            "t2i_progress": {"current": t2i_progress, "total": len(t2i_needed)},
+        }
 
     # Check current segment
     seg_idx = job["current_segment"]
@@ -2037,8 +2155,40 @@ async def check_long_take_status(job_id: str):
                 job["error"] = "ffmpeg stitching failed"
 
     elif response.status == GenerationStatus.FAILED:
-        job["status"] = "failed"
-        job["error"] = f"Segment {seg_idx + 1} generation failed: {response.error_message}"
+        seg_idx = job["current_segment"]
+        retries = job.get("segment_retries", {})
+        retry_count = retries.get(str(seg_idx), 0)
+
+        if retry_count < 1:
+            # Retry this segment once with a new seed
+            retries[str(seg_idx)] = retry_count + 1
+            job["segment_retries"] = retries
+            print(f"[long-take] segment {seg_idx + 1} failed, retrying (attempt {retry_count + 1})...")
+            # Remove the failed job ID and restart this segment
+            if seg_idx < len(job["segment_job_ids"]):
+                job["segment_job_ids"].pop()
+            await _start_next_segment(job_id)
+            # If _start_next_segment failed synchronously, try partial recovery
+            if job["status"] == "failed":
+                completed = job["segment_video_urls"]
+                if len(completed) >= 1:
+                    retry_err = job.get("error", "unknown error")
+                    job["status"] = "partial_failure"
+                    job["error"] = f"Segment {seg_idx + 1} failed after retry: {retry_err}. {len(completed)} of {len(job['segments'])} segments completed."
+                    print(f"[long-take] segment {seg_idx + 1} failed permanently. Saving {len(completed)} partial segments.")
+                    _save_partial_long_take(job, seg_idx)
+                # else: no completed segments, keep "failed" status
+        else:
+            # Already retried — check if we have any completed segments to save as partial
+            completed = job["segment_video_urls"]
+            if len(completed) >= 1:
+                job["status"] = "partial_failure"
+                job["error"] = f"Segment {seg_idx + 1} failed after retry. {len(completed)} of {len(job['segments'])} segments completed."
+                print(f"[long-take] segment {seg_idx + 1} failed permanently. Saving {len(completed)} partial segments.")
+                _save_partial_long_take(job, seg_idx)
+            else:
+                job["status"] = "failed"
+                job["error"] = f"Segment {seg_idx + 1} generation failed: {response.error_message}"
 
     result = {
         "status": job["status"],
@@ -2049,8 +2199,14 @@ async def check_long_take_status(job_id: str):
         "error": job.get("error"),
     }
 
-    # Clean up completed/failed jobs from memory after returning status
-    if job["status"] in ("completed", "failed"):
+    # Include video_url for partial_failure so frontend can show the result
+    if job["status"] == "partial_failure" and job.get("final_video_url"):
+        result["video_url"] = job["final_video_url"]
+        result["take_id"] = job["take_id"]
+        result["shot_id"] = job["shot_id"]
+
+    # Clean up completed/failed/partial_failure jobs from memory after returning status
+    if job["status"] in ("completed", "failed", "partial_failure"):
         _long_take_jobs.pop(job_id, None)
 
     return result
