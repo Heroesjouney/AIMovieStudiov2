@@ -2783,7 +2783,16 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                     <Download className="w-3.5 h-3.5" /> Download
                   </a>
                 )}
-                {renderError && <span className="text-[10px] text-red-400 max-w-[200px] truncate" title={renderError}>{renderError}</span>}
+                {renderError && (
+                  <span
+                    className="text-[10px] text-red-400 max-w-[400px] truncate cursor-help"
+                    title={renderError}
+                    onClick={() => { try { navigator.clipboard.writeText(renderError); } catch {} }}
+                  >
+                    {renderError.slice(0, 100)}
+                    {renderError.length > 100 ? "… (click to copy)" : ""}
+                  </span>
+                )}
               </div>
             </div>
 

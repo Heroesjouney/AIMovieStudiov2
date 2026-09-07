@@ -71,6 +71,11 @@ def _resolve_source_url(source_url: str) -> Optional[Path]:
         return None
     # Remove query params
     clean = source_url.split("?")[0]
+    # Strip protocol+host if present (e.g. http://localhost:3000/assets/...)
+    if "://" in clean:
+        from urllib.parse import urlparse
+        parsed = urlparse(clean)
+        clean = parsed.path
     # If it starts with /assets/, map to VAULT_DIR
     if clean.startswith("/assets/"):
         rel = clean[len("/assets/"):]
@@ -90,6 +95,17 @@ def _resolve_source_url(source_url: str) -> Optional[Path]:
     return None
 
 
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".svg", ".ico"}
+
+
+def _is_image_clip(clip: dict) -> bool:
+    """Check if a clip references an image file rather than a video."""
+    if clip.get("sourceType") == "asset_image":
+        return True
+    url = (clip.get("sourceUrl") or "").split("?")[0].lower()
+    return any(url.endswith(ext) for ext in _IMAGE_EXTENSIONS)
+
+
 def _get_clip_duration(clip: dict) -> float:
     """Get clip duration in seconds."""
     trim_in = clip.get("trimInSeconds", 0) or 0
@@ -107,31 +123,43 @@ def _build_ffmpeg_command(
     height: int = 1080,
     fps: int = 24,
 ) -> List[str]:
-    """Build ffmpeg command to concatenate video clips and mix audio."""
+    """Build ffmpeg command to concatenate video/image clips and mix audio."""
     cmd = ["ffmpeg", "-y"]
 
     # Collect all input files
     input_args = []
-    video_inputs = []
-    audio_inputs = []
+    video_inputs = []  # list of input stream indices
+    audio_inputs = []  # list of input stream indices
+    input_index = 0
 
     for clip in clips:
         path = _resolve_source_url(clip.get("sourceUrl", ""))
         if not path:
+            print(f"[render] WARNING: could not resolve sourceUrl: {clip.get('sourceUrl', '')}")
             continue
-        trim_in = clip.get("trimInSeconds", 0) or 0
         duration = _get_clip_duration(clip)
-        input_args.extend(["-ss", str(trim_in), "-t", str(duration), "-i", str(path)])
-        video_inputs.append(len(video_inputs))
+        is_image = _is_image_clip(clip)
+
+        if is_image:
+            # For images: loop the image for the clip duration, no seek
+            input_args.extend(["-loop", "1", "-t", str(duration), "-i", str(path)])
+        else:
+            # For videos: seek to trim-in point and limit duration
+            trim_in = clip.get("trimInSeconds", 0) or 0
+            input_args.extend(["-ss", str(trim_in), "-t", str(duration), "-i", str(path)])
+        video_inputs.append(input_index)
+        input_index += 1
 
     for clip in audio_clips:
         path = _resolve_source_url(clip.get("sourceUrl", ""))
         if not path:
+            print(f"[render] WARNING: could not resolve audio sourceUrl: {clip.get('sourceUrl', '')}")
             continue
         trim_in = clip.get("trimInSeconds", 0) or 0
         duration = _get_clip_duration(clip)
         input_args.extend(["-ss", str(trim_in), "-t", str(duration), "-i", str(path)])
-        audio_inputs.append(len(video_inputs) + len(audio_inputs))
+        audio_inputs.append(input_index)
+        input_index += 1
 
     if not video_inputs and not audio_inputs:
         return []
@@ -161,7 +189,8 @@ def _build_ffmpeg_command(
             mix_inputs = "".join(audio_streams)
             filters.append(f"{mix_inputs}amix=inputs={len(audio_streams)}:duration=longest[aout]")
         else:
-            filters.append(f"{audio_streams[0]}acopy[aout]")
+            # Single audio stream — just relabel
+            filters.append(f"{audio_streams[0]}anull[aout]")
 
     filter_complex = ";".join(filters)
 
@@ -185,7 +214,7 @@ def _build_ffmpeg_command(
     return cmd
 
 
-async def _run_render_job(job_id: str, project_id: str, timeline: dict):
+async def _run_render_job(job_id: str, project_id: str, timeline: dict, preset: str = "source"):
     """Background task to render timeline to MP4."""
     job = _render_jobs[job_id]
     try:
@@ -210,6 +239,14 @@ async def _run_render_job(job_id: str, project_id: str, timeline: dict):
         height = fmt.get("height", 1080)
         fps = timeline.get("fps", 24)
 
+        # Apply preset resolution overrides
+        if preset == "720p":
+            width, height = 1280, 720
+        elif preset == "1080p":
+            width, height = 1920, 1080
+        elif preset == "4k":
+            width, height = 3840, 2160
+
         output_dir = VAULT_DIR / project_id / "renders"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"render_{job_id}.mp4"
@@ -218,36 +255,44 @@ async def _run_render_job(job_id: str, project_id: str, timeline: dict):
 
         if not cmd:
             job["status"] = "failed"
-            job["error_message"] = "No valid video or audio clips found in timeline"
+            job["error_message"] = "No valid video or audio clips found in timeline. Check that clip sourceUrl paths resolve to local files."
             job["updated_at"] = datetime.utcnow().isoformat()
             return
 
         job["command"] = " ".join(cmd)
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
+        print(f"[render] starting ffmpeg for job {job_id}: {len(video_clips)} video clips, {len(audio_clips)} audio clips, {width}x{height}")
+        print(f"[render] command: {' '.join(cmd[:10])}...")
 
-        if process.returncode == 0:
+        import subprocess as _subprocess
+        def _run_ffmpeg():
+            return _subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+        result = await asyncio.to_thread(_run_ffmpeg)
+
+        if result.returncode == 0:
             job["status"] = "completed"
             job["video_url"] = f"/assets/{project_id}/renders/render_{job_id}.mp4"
             job["file_size"] = output_path.stat().st_size
+            print(f"[render] job {job_id} completed: {output_path}")
         else:
+            error_text = result.stderr[-2000:] if result.stderr else "Unknown ffmpeg error"
             job["status"] = "failed"
-            job["error_message"] = stderr.decode()[-2000:] if stderr else "Unknown ffmpeg error"
+            job["error_message"] = error_text
+            print(f"[render] job {job_id} FAILED (exit {result.returncode}): {error_text[-500:]}")
 
         job["updated_at"] = datetime.utcnow().isoformat()
 
     except Exception as e:
+        import traceback
         job["status"] = "failed"
-        job["error_message"] = str(e)
+        job["error_message"] = f"{type(e).__name__}: {e}"
         job["updated_at"] = datetime.utcnow().isoformat()
+        print(f"[render] job {job_id} exception: {type(e).__name__}: {e}")
+        traceback.print_exc()
 
 
 @router.post("/{project_id}/render")
-async def render_timeline(project_id: str, background_tasks: BackgroundTasks):
+async def render_timeline(project_id: str, background_tasks: BackgroundTasks, preset: str = "source"):
     """Start a background render job to export the timeline as MP4."""
     tl_path = _timeline_path(project_id)
     if not tl_path.exists():
@@ -274,7 +319,7 @@ async def render_timeline(project_id: str, background_tasks: BackgroundTasks):
         "updated_at": now,
     }
 
-    background_tasks.add_task(_run_render_job, job_id, project_id, timeline)
+    background_tasks.add_task(_run_render_job, job_id, project_id, timeline, preset)
 
     return _render_jobs[job_id]
 
