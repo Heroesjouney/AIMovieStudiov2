@@ -712,22 +712,44 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 
 ---
 
-## 🗺️ Roadmap
+## 🛣️ Roadmap
 
-- [x] LoRA support (upload, select, strength control) — available in all 5 generation surfaces
-- [x] Settings panel (API keys, model upload, custom workflows, collapsible UI)
-- [x] Custom ComfyUI workflow registration (no-code model addition)
-- [x] Workflow model analysis — auto-detect required models and check against ComfyUI
-- [x] Auto-refresh driver dropdowns after workflow register/delete
-- [x] Remote/cloud ComfyUI server support (URL + auth token via Settings)
-- [x] Steps & CFG override controls in all generation tabs
-- [x] Long Take mode — keyframe interpolation for continuous shots *(Experimental)*
-- [ ] Inpainting & masking tools
-- [ ] PostgreSQL migration for the Vault
-- [ ] Video timeline preview & scrubbing
-- [ ] Voice cloning / lip-sync pipeline
-- [x] Cloud-only mode (no local ComfyUI required — set API keys via Settings panel)
-- [ ] Multi-user project sharing
+### 🟢 Phase 1: Core Systems & Engine
+- [x] **LoRA Support** — Upload, select, and strength control across all generation surfaces
+- [x] **Settings Panel** — API key management, model uploads, custom workflows, and collapsible UI
+- [x] **Custom Workflow Registration** — No-code ComfyUI model and pipeline integration
+- [x] **Workflow Model Analysis** — Auto-detect required models and verify local ComfyUI availability
+- [x] **Dynamic Driver Sync** — Auto-refresh driver dropdowns after workflow changes
+- [x] **Remote ComfyUI Engine** — Connect to remote or cloud ComfyUI instances via URL and auth token
+- [x] **Sampling Overrides** — Step and CFG controls across all generation tabs
+- [x] **Long Take Mode** — Keyframe interpolation for continuous shot generation *(Experimental)*
+- [x] **Cloud-Only Execution** — Full execution support without local ComfyUI via API keys
+- [x] **Screenplay Ingestion** — Automatic scene parsing and shot-list extraction
+- [x] **Video Timeline Preview & Scrubbing** — Multi-track video and audio timeline playback
+
+---
+
+### 🎬 Phase 2: Directorial & Spatial Control (Promptless Workflows)
+- [ ] **3D Viewport Camera Trajectories** — Map R3F camera paths (Dolly, Arc, Crane) to camera matrix conditionings (CameraCtrl/IC-LoRA)
+- [ ] **View Frustum Actor Auto-Injection** — Detect 3D actors in the camera cone and automatically inject their LoRAs/IP-Adapters into ComfyUI
+- [ ] **A/B Continuity Wipe & Onion-Skinning** — Overlay adjacent shot frames with split-screen wipes to verify scale, positioning, and eyelines
+- [ ] **Director’s Inpainting & Retake Canvas** — Draw spatial masks directly on frames to re-roll expressions, props, or background regions
+
+---
+
+### 🎥 Phase 3: Camera Department & Digital Optics
+- [ ] **Digital Optical Filter Passes** — Shader and ComfyUI post-passes for glass diffusion (*Black Pro-Mist*, *Glimmerglass*, *Hollywood Black Magic*)
+- [ ] **Exposure & Focus Monitoring** — Toggleable False Color heatmaps for skin-tone exposure and real-time Focus Peaking overlays
+- [ ] **Physical Optics & Sensor Profiles** — Super 35, Full Frame, Anamorphic squeeze factor emulation, and physical Shutter Angle controls ($180^\circ$, $90^\circ$, $45^\circ$)
+- [ ] **3D Stage Light Rigging** — Place 3D key, rim, and fill light gizmos to automatically generate ControlNet light conditioning passes
+
+---
+
+### 🎞️ Phase 4: Post-Production, Timeline & Infrastructure
+- [ ] **Lip-Sync & Voice Performance Pipeline** — Audio-driven facial alignment using Fish Speech TTS and voice cloning clips
+- [ ] **OpenTimelineIO (OTIO) & FCPXML Export** — Direct timeline exports to DaVinci Resolve, Premiere Pro, and Final Cut Pro with embedded camera metadata
+- [ ] **Clapper Slate & Circle Take Rating** — Automated production metadata slating (`SCENE 04 - SHOT B - TAKE 03`) with director rating tags
+- [ ] **PostgreSQL Vault Migration** — Upgrade local asset vault storage for multi-user project sharing and team workflows
 
 ---
 
