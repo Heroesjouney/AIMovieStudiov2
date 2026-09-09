@@ -139,6 +139,10 @@ export function ShotComposer({ projectId }: { projectId: string }) {
       );
       if (resp.status === "failed") { setRegeneratingId(null); return; }
 
+      useStudioStore.getState().addActiveFrameJob({
+        job_id: resp.job_id, model_id: selectedImageDriver, shot_id: shot.id, on_complete: "refresh_composer",
+      });
+
       regenPoll.startPolling(
         () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
         async (st) => {
@@ -150,7 +154,7 @@ export function ShotComposer({ projectId }: { projectId: string }) {
           setRegeneratingId(null);
           await refresh();
         },
-        { intervalMs: 3000 }
+        { intervalMs: 3000, jobId: resp.job_id }
       );
     } catch (err) {
       setRegeneratingId(null);

@@ -85,11 +85,12 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
   - **Audio:** Fish Speech for TTS and voice cloning
 - **🖼️ Multi-Reference Generation** - Feed the AI multiple character/scene reference images to maintain visual consistency.
 - **🎞️ Timeline & Export** - Assemble shots into a timeline, add audio, and export to XML for editing in Premiere, DaVinci, etc.
-- **⚡ Live Status** - Watch generation progress in real-time with elapsed timers.
+- **⚡ Live Status** - Watch generation progress in real-time with elapsed timers. Jobs persist across tab switches — switch away and come back to find completed generations updated in the storyboard.
 - **🎛️ Shot Composition Tools** - Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
 - **📸 Multi-Angle & Variations** - Generate alternate camera angles, prompt variations, and retake failed shots.
 - **🎞️ Long Take Mode** *(Experimental)* - Chain keyframe interpolation across multiple segments to generate continuous shots longer than a single clip. Define keyframes by image, prompt, or both. The backend generates missing images via T2I, interpolates between keyframe pairs using first-last-frame-to-video (FLF2V), and stitches segments with ffmpeg. Only available for models that support first+last frame (e.g. LTX Video 2.3, Wan Video).
 - **🔀 Shot Management** - Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
+- **📄 Screenplay Import** - Import Fountain (`.fountain`, `.txt`, `.spmd`) or Final Draft (`.fdx`) screenplays. The parser creates scenes with time-of-day, mood, and lighting inferred from the script, and stores the shot breakdown as a screenplay-formatted reference in each scene's recipe. Copy dialogue/action directly into new shots as you build the storyboard — the establish-then-continue workflow stays intact. Bulk-delete an entire imported screenplay with one action.
 - **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders. Available in all 5 generation surfaces: Generate tab, Shot tab, Camera tab, Shot Create panel, and Retake panel.
 - **⚙️ Settings Panel** - A built-in settings panel (gear icon in header) for managing cloud API keys, uploading models to ComfyUI, and registering custom workflows — no code changes or `.env` editing required.
 - **🔧 Custom Workflows** - Build workflows in ComfyUI, export as JSON, and upload them through the Settings panel. Custom workflows appear as new models in all dropdowns with full LoRA support. Driver dropdowns auto-refresh after registering or deleting workflows — no page reload needed.
@@ -130,6 +131,7 @@ AI-MovieStudio2/
 │   │   ├── routes_generate.py   # Image/video gen + LoRA/model upload endpoints
 │   │   ├── routes_projects.py
 │   │   ├── routes_render.py
+│   │   ├── routes_screenplay.py  # Fountain + Final Draft (.fdx) import
 │   │   ├── routes_scenes.py
 │   │   ├── routes_settings.py   # API key management + custom workflow registration
 │   │   ├── routes_shots.py
@@ -147,6 +149,7 @@ AI-MovieStudio2/
 │   │   │   ├── fish_speech.py
 │   │   │   └── replicate_driver.py
 │   │   ├── logic/           # Business logic (script parsing, continuity)
+│   │   │   └── screenplay_parser.py  # Fountain + Final Draft (.fdx) parser
 │   │   ├── schemas/         # Pydantic models (single source of truth)
 │   │   │   ├── asset.py
 │   │   │   ├── camera.py
@@ -171,7 +174,8 @@ AI-MovieStudio2/
 │   │   ├── components/
 │   │   │   ├── studio/      # 3D stage canvas (R3F) + inspector
 │   │   │   │   ├── GenerationPanel.tsx
-│   │   │   │   └── InspectorPanel.tsx
+│   │   │   │   ├── InspectorPanel.tsx
+│   │   │   │   └── ScreenplayImportModal.tsx  # Fountain + Final Draft import
 │   │   │   ├── shots/       # Storyboard, shot detail & composition
 │   │   │   │   ├── ShotComposer.tsx       # Main storyboard grid + drag-drop
 │   │   │   │   ├── ShotCreatePanel.tsx    # New shot creation UI
@@ -342,6 +346,7 @@ Once the app is running in your browser:
 
 1. **Create a project** - Click "New Project" or select an existing one.
 2. **Build scenes** - In the left sidebar, create scenes and add reference assets (characters, locations, props). These form the "recipe" the AI uses to keep your film consistent.
+   - **Import a screenplay** *(optional)* - Click the **Screenplay** button in the header to import a Fountain (`.fountain`, `.txt`, `.spmd`) or Final Draft (`.fdx`) file. The parser creates scenes with time-of-day, mood, and lighting inferred from the script. Each scene's recipe shows the script breakdown formatted as a screenplay — copy dialogue/action into new shots as you build the storyboard. Use **Delete all** in the Scenes header to remove an entire imported screenplay at once.
 3. **Create shots** - Click "New Shot" within a scene. The first shot is auto-established (wide shot). Subsequent shots open the **3D camera widget** where you can:
    - Drag the camera around the subject in 3D space
    - Use sliders for precise horizontal/vertical angle and zoom

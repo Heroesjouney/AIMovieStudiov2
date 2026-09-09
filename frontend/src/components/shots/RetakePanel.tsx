@@ -39,10 +39,14 @@ export function RetakePanel({ shot, projectId, onRefresh }: RetakePanelProps) {
       if (resp.status === "failed") { poll.setError(resp.error_message || "Retake failed"); return; }
       const jobId = resp.job_id;
 
+      useStudioStore.getState().addActiveFrameJob({
+        job_id: jobId, model_id: retakeModel, shot_id: shot.id, on_complete: null,
+      });
+
       poll.startPolling(
         () => checkShotVideoStatus(jobId, retakeModel),
         async () => { setShow(false); await onRefresh(); },
-        { intervalMs: 3000 }
+        { intervalMs: 3000, jobId }
       );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Retake failed");

@@ -115,7 +115,7 @@ interface DialoguePanelProps {
 }
 
 export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
-  const { bumpAudioLibraryRefresh } = useStudioStore();
+  const { bumpAudioLibraryRefresh, activeAudioJobs, addActiveAudioJob, removeActiveAudioJob } = useStudioStore();
 
   const [audioTab, setAudioTab] = useState<"speech" | "music" | "foley">("speech");
   const [speechClipName, setSpeechClipName] = useState("");
@@ -208,6 +208,20 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
     };
   }, [projectId]);
   
+  // Resume polling for in-progress audio jobs when component mounts
+  useEffect(() => {
+    const jobs = useStudioStore.getState().activeAudioJobs;
+    for (const job of jobs) {
+      if (job.kind === "speech") {
+        setSpeechJob({ jobId: job.job_id, status: "pending", audioUrl: null, videoUrl: null, errorMessage: null });
+      } else if (job.kind === "music") {
+        setMusicJob({ jobId: job.job_id, status: "pending", audioUrl: null, videoUrl: null, errorMessage: null });
+      } else if (job.kind === "foley") {
+        setFoleyJob({ jobId: job.job_id, status: "pending", audioUrl: null, videoUrl: null, errorMessage: null });
+      }
+    }
+  }, []);
+
   // Poll for job status
   useEffect(() => {
     if (!speechJob) return;
@@ -281,18 +295,30 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
   }, [musicJob]);
 
   useEffect(() => {
-    if (!speechJob || speechJob.status !== "completed" || !speechJob.audioUrl) return;
-    if (notifiedCompletedJobsRef.current.has(speechJob.jobId)) return;
-    notifiedCompletedJobsRef.current.add(speechJob.jobId);
-    bumpAudioLibraryRefresh();
-  }, [speechJob, bumpAudioLibraryRefresh]);
+    if (!speechJob) return;
+    if (speechJob.status === "completed" && speechJob.audioUrl) {
+      if (!notifiedCompletedJobsRef.current.has(speechJob.jobId)) {
+        notifiedCompletedJobsRef.current.add(speechJob.jobId);
+        bumpAudioLibraryRefresh();
+      }
+    }
+    if (speechJob.status === "completed" || speechJob.status === "failed") {
+      removeActiveAudioJob(speechJob.jobId);
+    }
+  }, [speechJob, bumpAudioLibraryRefresh, removeActiveAudioJob]);
 
   useEffect(() => {
-    if (!musicJob || musicJob.status !== "completed" || !musicJob.audioUrl) return;
-    if (notifiedCompletedJobsRef.current.has(musicJob.jobId)) return;
-    notifiedCompletedJobsRef.current.add(musicJob.jobId);
-    bumpAudioLibraryRefresh();
-  }, [musicJob, bumpAudioLibraryRefresh]);
+    if (!musicJob) return;
+    if (musicJob.status === "completed" && musicJob.audioUrl) {
+      if (!notifiedCompletedJobsRef.current.has(musicJob.jobId)) {
+        notifiedCompletedJobsRef.current.add(musicJob.jobId);
+        bumpAudioLibraryRefresh();
+      }
+    }
+    if (musicJob.status === "completed" || musicJob.status === "failed") {
+      removeActiveAudioJob(musicJob.jobId);
+    }
+  }, [musicJob, bumpAudioLibraryRefresh, removeActiveAudioJob]);
 
   // Poll foley job status
   useEffect(() => {
@@ -330,11 +356,17 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
   }, [foleyJob]);
 
   useEffect(() => {
-    if (!foleyJob || foleyJob.status !== "completed" || !foleyJob.audioUrl) return;
-    if (notifiedCompletedJobsRef.current.has(foleyJob.jobId)) return;
-    notifiedCompletedJobsRef.current.add(foleyJob.jobId);
-    bumpAudioLibraryRefresh();
-  }, [foleyJob, bumpAudioLibraryRefresh]);
+    if (!foleyJob) return;
+    if (foleyJob.status === "completed" && foleyJob.audioUrl) {
+      if (!notifiedCompletedJobsRef.current.has(foleyJob.jobId)) {
+        notifiedCompletedJobsRef.current.add(foleyJob.jobId);
+        bumpAudioLibraryRefresh();
+      }
+    }
+    if (foleyJob.status === "completed" || foleyJob.status === "failed") {
+      removeActiveAudioJob(foleyJob.jobId);
+    }
+  }, [foleyJob, bumpAudioLibraryRefresh, removeActiveAudioJob]);
 
   useEffect(() => {
     if (!activeAudioUrl) return;
@@ -377,6 +409,7 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
         videoUrl: null,
         errorMessage: null,
       });
+      addActiveAudioJob({ job_id: response.job_id, kind: "speech" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate speech");
     } finally {
@@ -410,6 +443,7 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
         videoUrl: null,
         errorMessage: null,
       });
+      addActiveAudioJob({ job_id: response.job_id, kind: "music" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate music");
     } finally {
@@ -447,6 +481,7 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
         videoUrl: null,
         errorMessage: null,
       });
+      addActiveAudioJob({ job_id: response.job_id, kind: "foley" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate foley");
     } finally {

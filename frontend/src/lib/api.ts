@@ -130,6 +130,18 @@ export interface SceneAssetRef {
   image_path: string | null;
 }
 
+export interface SceneScriptBreakdownShot {
+  scene_index: number;
+  shot_type: string;
+  name: string;
+  description: string;
+  action: string;
+  action_lines?: string[];
+  dialogue: string;
+  dialogue_blocks?: { character: string; parenthetical: string | null; text: string }[];
+  transition: string | null;
+}
+
 export interface SceneResponse {
   id: string;
   project_id: string;
@@ -143,6 +155,9 @@ export interface SceneResponse {
   reference_assets: SceneAssetRef[];
   establishing_frame_path: string | null;
   shot_ids: string[];
+  // Parsed screenplay breakdown (populated by screenplay import; consumed by
+  // generateSceneShots). Absent on scenes not created from a screenplay.
+  script_breakdown?: SceneScriptBreakdownShot[];
   created_at: string;
   updated_at: string;
 }
@@ -940,6 +955,22 @@ export async function deleteScene(projectId: string, sceneId: string): Promise<v
   await fetch(`${API_BASE}/scenes/${projectId}/${sceneId}`, { method: "DELETE" });
 }
 
+export interface DeleteAllScenesResult {
+  status: string;
+  project_id: string;
+  scenes_deleted: number;
+  shots_deleted: number;
+}
+
+export async function deleteAllScenes(projectId: string): Promise<DeleteAllScenesResult> {
+  const resp = await fetch(`${API_BASE}/scenes/${projectId}/all`, { method: "DELETE" });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Delete failed" }));
+    throw new Error(err.detail || "Failed to delete all scenes");
+  }
+  return resp.json();
+}
+
 export async function addSceneReferenceAsset(projectId: string, sceneId: string, asset: SceneAssetRef): Promise<SceneResponse> {
   const resp = await fetch(`${API_BASE}/scenes/${projectId}/${sceneId}/reference-assets`, {
     method: "POST",
@@ -1403,5 +1434,90 @@ export async function getWaveform(projectId: string, filename: string): Promise<
 export async function getVideoThumbnails(projectId: string, filename: string, count: number = 6): Promise<ThumbnailResponse> {
   const resp = await fetch(`${API_BASE}/assets/thumbnails/${projectId}/${encodeURIComponent(filename)}?count=${count}`);
   if (!resp.ok) throw new Error(`Thumbnail fetch failed: ${resp.status}`);
+  return resp.json();
+}
+
+// =============================================================================
+// Screenplay Import (Fountain format)
+// =============================================================================
+
+export interface ScreenplayPreviewScene {
+  name: string;
+  description: string;
+  time_of_day: string;
+  mood: string;
+  lighting: string;
+  int_ext: string;
+  location: string;
+}
+
+export interface ScreenplayPreviewShot {
+  scene_index: number;
+  shot_type: string;
+  name: string;
+  description: string;
+  action: string;
+  dialogue: string;
+  transition: string | null;
+}
+
+export interface ScreenplayPreview {
+  title: string;
+  author: string;
+  scene_count: number;
+  shot_count: number;
+  scenes: ScreenplayPreviewScene[];
+  shots: ScreenplayPreviewShot[];
+}
+
+export interface ScreenplayImportResult {
+  status: string;
+  project_id: string;
+  scenes_created: number;
+  shots_created: number;
+  scene_ids: string[];
+  shot_ids: string[];
+  preview: ScreenplayPreview | null;
+}
+
+export async function previewScreenplay(projectId: string, text: string): Promise<ScreenplayPreview> {
+  const resp = await fetch(`${API_BASE}/screenplay/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, text }),
+  });
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Screenplay preview failed: ${err}`);
+  }
+  return resp.json();
+}
+
+export async function importScreenplay(projectId: string, text: string): Promise<ScreenplayImportResult> {
+  const resp = await fetch(`${API_BASE}/screenplay/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, text, dry_run: false }),
+  });
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Screenplay import failed: ${err}`);
+  }
+  return resp.json();
+}
+
+export async function uploadScreenplay(projectId: string, file: File): Promise<ScreenplayImportResult> {
+  const formData = new FormData();
+  formData.append("project_id", projectId);
+  formData.append("dry_run", "false");
+  formData.append("file", file);
+  const resp = await fetch(`${API_BASE}/screenplay/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => "Unknown error");
+    throw new Error(`Screenplay upload failed: ${err}`);
+  }
   return resp.json();
 }

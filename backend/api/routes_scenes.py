@@ -100,6 +100,49 @@ async def update_scene(project_id: str, scene_id: str, updates: dict):
     raise HTTPException(status_code=404, detail="Scene not found")
 
 
+@router.delete("/{project_id}/all")
+async def delete_all_scenes(project_id: str):
+    """Delete every scene in a project along with all of their shots.
+
+    Used to discard an entire imported screenplay (or any full scene set).
+    Removes scene records, shot records, and each shot's on-disk folder
+    (frames, angle images, video takes, audio). The project itself is kept.
+    """
+    import shutil
+
+    scenes = _load_scenes(project_id)
+    deleted_scene_count = len(scenes)
+
+    shots_path = _project_dir(project_id) / "shots.json"
+    deleted_shot_count = 0
+    if shots_path.exists():
+        with open(shots_path, "r") as f:
+            all_shots = json.load(f)
+        deleted_shot_count = len(all_shots)
+
+        # Delete each shot's folder (frames, video takes, angle images, etc.)
+        shots_dir = _project_dir(project_id) / "shots"
+        for shot in all_shots:
+            shot_folder = shots_dir / shot["id"]
+            if shot_folder.exists() and shot_folder.is_dir():
+                try:
+                    shutil.rmtree(shot_folder)
+                except Exception as e:
+                    print(f"[scenes] failed to delete shot folder {shot_folder}: {e}")
+
+        _save_shots_file(project_id, [])
+
+    _save_scenes(project_id, [])
+    print(f"[scenes] bulk-deleted {deleted_scene_count} scene(s) and {deleted_shot_count} shot(s) from project '{project_id}'")
+
+    return {
+        "status": "deleted_all",
+        "project_id": project_id,
+        "scenes_deleted": deleted_scene_count,
+        "shots_deleted": deleted_shot_count,
+    }
+
+
 @router.delete("/{project_id}/{scene_id}")
 async def delete_scene(project_id: str, scene_id: str):
     scenes = _load_scenes(project_id)

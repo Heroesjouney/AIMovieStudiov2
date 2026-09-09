@@ -51,6 +51,11 @@ export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelPro
       }
 
       const jobId = resp.generation.job_id;
+
+      useStudioStore.getState().addActiveFrameJob({
+        job_id: jobId, model_id: selectedImageDriver, shot_id: resp.shot.id, on_complete: "refresh_shots",
+      });
+
       poll.startPolling(
         () => checkVariationStatus(jobId, selectedImageDriver),
         async (st) => {
@@ -64,7 +69,7 @@ export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelPro
           setVariationPrompt(""); setVariationName("");
           await onRefresh();
         },
-        { intervalMs: 2000 }
+        { intervalMs: 2000, jobId }
       );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Failed");

@@ -211,6 +211,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     scenes, videoDrivers, assets,
     addTimelineClip, addAudioTrack, setTimelineProjectId, timeline,
     setSelectedShotId,
+    activeVideoJob, setActiveVideoJob,
   } = useStudioStore();
 
   // Mode — explicit user selection (default to t2v when no shot selected)
@@ -266,6 +267,20 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Generation elapsed timer
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const elapsedRef = useRef<number | null>(null);
+
+  const stopElapsedTimer = useCallback(() => {
+    if (elapsedRef.current) {
+      window.clearInterval(elapsedRef.current);
+      elapsedRef.current = null;
+    }
+  }, []);
+
+  const startElapsedTimer = useCallback(() => {
+    setElapsedSeconds(0);
+    elapsedRef.current = window.setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
+  }, []);
 
   // Picker state
   const [activePicker, setActivePicker] = useState<string | null>(null);
@@ -462,6 +477,126 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     };
   }, []);
 
+  // Resume polling for an in-progress video job when component mounts
+  // (handles tab switches — the job persists in the global store)
+  useEffect(() => {
+    const job = useStudioStore.getState().activeVideoJob;
+    if (!job) return;
+
+    console.log(`[CameraDirector] resuming poll for video job ${job.job_id} (${job.is_long_take ? "long take" : "regular"})`);
+    setGenerating(true);
+    setStatus("Resuming video status check...");
+    startElapsedTimer();
+
+    let pollErrors = 0;
+    pollRef.current = window.setInterval(async () => {
+      try {
+        if (job.is_long_take) {
+          const st = await checkLongTakeStatus(job.job_id);
+          setLongTakeProgress(st.progress);
+
+          if (st.status === "completed" && st.video_url) {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setStatus("Long take complete!");
+            stopElapsedTimer();
+            setGenerating(false);
+            setActiveVideoJob(null);
+
+            try {
+              const fresh = await fetchShots(projectId);
+              useStudioStore.getState().setShots(fresh);
+            } catch (e) {
+              console.error("Failed to refetch shots after long take:", e);
+            }
+          } else if (st.status === "partial_failure" && st.video_url) {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setError(`Partial failure: ${st.error}. Completed ${st.progress.current} of ${st.progress.total} segments.`);
+            setStatus("Long take completed with partial failure.");
+            stopElapsedTimer();
+            setGenerating(false);
+            setActiveVideoJob(null);
+            try {
+              const fresh = await fetchShots(projectId);
+              useStudioStore.getState().setShots(fresh);
+            } catch (e) { console.error("Failed to refetch shots:", e); }
+          } else if (st.status === "failed") {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setError(st.error || "Long take generation failed");
+            stopElapsedTimer();
+            setGenerating(false);
+            setActiveVideoJob(null);
+          } else {
+            setStatus(`Segment ${st.progress.current}/${st.progress.total}...`);
+          }
+        } else {
+          const st = await checkShotVideoStatus(job.job_id, job.model_id);
+          pollErrors = 0;
+
+          if (st.status === "completed" && st.video_url) {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setStatus("Take generated!");
+            stopElapsedTimer();
+            setGenerating(false);
+            setActiveVideoJob(null);
+
+            if (job.is_freestyle) {
+              let lastFrame: string | undefined;
+              try {
+                const allShots = await fetchShots(projectId);
+                useStudioStore.getState().setShots(allShots);
+                const scratchShot = allShots.find((s: any) => s.id === job.shot_id);
+                lastFrame = scratchShot?.last_frame_path || undefined;
+              } catch (e) {
+                console.error("Failed to fetch scratch shot for last frame:", e);
+              }
+              setFreestyleResult({
+                videoUrl: st.video_url,
+                prompt: "",
+                lastFramePath: lastFrame,
+                shotId: job.shot_id,
+              });
+            } else {
+              try {
+                const fresh = await fetchShots(projectId);
+                useStudioStore.getState().setShots(fresh);
+              } catch (e) {
+                console.error("Failed to refetch shots:", e);
+              }
+            }
+          } else if (st.status === "failed") {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setError(st.error_message || "Generation failed");
+            stopElapsedTimer();
+            setGenerating(false);
+            setActiveVideoJob(null);
+          } else {
+            setStatus(`Status: ${st.status}...`);
+          }
+        }
+      } catch (err) {
+        pollErrors++;
+        console.error("Resume poll error:", err);
+        if (pollErrors >= 5) {
+          if (pollRef.current) window.clearInterval(pollRef.current);
+          pollRef.current = null;
+          setError("Lost connection to backend while polling. The video may still be generating — refresh later.");
+          stopElapsedTimer();
+          setGenerating(false);
+          setActiveVideoJob(null);
+        }
+      }
+    }, 3000);
+
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    };
+  }, []); // Run once on mount
+
   // Camera movement hint for prompt augmentation
   const cameraHint = CAMERA_MOVEMENTS.find((m) => m.id === cameraMovement)?.hint || "";
 
@@ -508,6 +643,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       window.clearInterval(elapsedRef.current);
       elapsedRef.current = null;
     }
+    setActiveVideoJob(null);
     setSelectedShotId(null);
     setMode("t2v");
     setPrompt("");
@@ -549,13 +685,6 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   };
 
   const handleLongTakeGenerate = async (effectiveShotId: string) => {
-    const stopElapsedTimer = () => {
-      if (elapsedRef.current) {
-        window.clearInterval(elapsedRef.current);
-        elapsedRef.current = null;
-      }
-    };
-
     // Filter out blank keyframes (no image AND no prompt)
     const validIndices = keyframePaths
       .map((kp, i) => (kp || (keyframePrompts[i] || "").trim()) ? i : -1)
@@ -606,6 +735,14 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         return;
       }
 
+      setActiveVideoJob({
+        job_id: resp.job_id,
+        model_id: selectedModelId,
+        shot_id: effectiveShotId,
+        is_freestyle: false,
+        is_long_take: true,
+      });
+
       setStatus(`Generating segment 1/${totalSegments}...`);
 
       let pollErrors = 0;
@@ -621,6 +758,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             stopElapsedTimer();
             setGenerating(false);
             setLongTakeProgress(null);
+            setActiveVideoJob(null);
 
             // Refresh store so takes gallery updates
             try {
@@ -650,6 +788,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             stopElapsedTimer();
             setGenerating(false);
             setLongTakeProgress(null);
+            setActiveVideoJob(null);
 
             try {
               const fresh = await fetchShots(projectId);
@@ -674,6 +813,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             stopElapsedTimer();
             setGenerating(false);
             setLongTakeProgress(null);
+            setActiveVideoJob(null);
           } else if (st.status === "stitching") {
             setStatus("Stitching segments...");
           } else if (st.status === "preparing") {
@@ -695,6 +835,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             stopElapsedTimer();
             setGenerating(false);
             setLongTakeProgress(null);
+            setActiveVideoJob(null);
           }
         }
       }, 3000);
@@ -707,12 +848,6 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   };
 
   const handleGenerate = async () => {
-    const stopElapsedTimer = () => {
-      if (elapsedRef.current) {
-        window.clearInterval(elapsedRef.current);
-        elapsedRef.current = null;
-      }
-    };
     // In Long Take mode, global prompt is optional if keyframe prompts exist
     const hasKeyframePrompts = keyframePaths.some((_, i) => (keyframePrompts[i] || "").trim());
     if (!prompt.trim() && !(longTakeMode && hasKeyframePrompts)) {
@@ -753,10 +888,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     }
 
     // Start elapsed timer
-    setElapsedSeconds(0);
-    elapsedRef.current = window.setInterval(() => {
-      setElapsedSeconds((s) => s + 1);
-    }, 1000);
+    startElapsedTimer();
 
     // Auto-create a scratch shot if none selected.
     // If a scene is selected, link the shot to it (visible, with continuity).
@@ -828,6 +960,14 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         setError(resp.continuity_warning);
       }
 
+      setActiveVideoJob({
+        job_id: resp.job_id,
+        model_id: selectedModelId,
+        shot_id: effectiveShotId!,
+        is_freestyle: isFreestyle,
+        is_long_take: false,
+      });
+
       setStatus("Generating video...");
 
       let pollErrors = 0;
@@ -843,6 +983,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setStatus("Take generated!");
             stopElapsedTimer();
             setGenerating(false);
+            setActiveVideoJob(null);
 
             if (isFreestyle) {
               // Freestyle: show result locally, don't touch storyboard
@@ -882,6 +1023,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setError(st.error_message || "Generation failed");
             stopElapsedTimer();
             setGenerating(false);
+            setActiveVideoJob(null);
           } else {
             setStatus(`Status: ${st.status}...`);
           }
@@ -896,6 +1038,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setError("Lost connection to backend while polling. The video may still be generating — refresh later.");
             stopElapsedTimer();
             setGenerating(false);
+            setActiveVideoJob(null);
           }
         }
       }, 3000);

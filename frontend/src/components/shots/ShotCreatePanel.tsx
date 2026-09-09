@@ -158,6 +158,13 @@ export function ShotCreatePanel({
         return;
       }
 
+      useStudioStore.getState().addActiveFrameJob({
+        job_id: resp.job_id,
+        model_id: selectedImageDriver,
+        shot_id: shot.id,
+        on_complete: "refresh_shots",
+      });
+
       poll.startPolling(
         () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
         async (st) => {
@@ -177,7 +184,7 @@ export function ShotCreatePanel({
           await onRefresh();
           onClose();
         },
-        { intervalMs: 3000 }
+        { intervalMs: 3000, jobId: resp.job_id }
       );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Failed");

@@ -10,6 +10,7 @@ import {
   Camera, Loader2, ChevronDown, ChevronRight,
 } from "lucide-react";
 import { useGenerationPolling } from "@/lib/useGenerationPolling";
+import { useStudioStore } from "@/lib/store";
 
 interface MultiAnglePanelProps {
   shot: ShotResponse;
@@ -39,6 +40,10 @@ export function MultiAnglePanel({ shot, projectId, prompt, onRefresh }: MultiAng
         const results: Record<string, string> = {};
         let done = 0;
 
+        useStudioStore.getState().addActiveFrameJob({
+          job_id: resp.job_id || "multi_angle", model_id: "qwen_multiangle", shot_id: shot.id, on_complete: "refresh_shots",
+        });
+
         poll.startPolling(
           async () => {
             for (const sub of subJobs) {
@@ -54,7 +59,7 @@ export function MultiAnglePanel({ shot, projectId, prompt, onRefresh }: MultiAng
             setSelectedAngles([]);
             await onRefresh();
           },
-          { intervalMs: 3000 }
+          { intervalMs: 3000, jobId: resp.job_id || "multi_angle" }
         );
       }
     } catch (err) {

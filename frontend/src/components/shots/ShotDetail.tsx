@@ -109,6 +109,10 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       );
       if (resp.status === "failed") { poll.setError(resp.error_message || "Failed"); return; }
 
+      useStudioStore.getState().addActiveFrameJob({
+        job_id: resp.job_id, model_id: selectedImageDriver, shot_id: shot.id, on_complete: "update_shot",
+      });
+
       poll.startPolling(
         () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
         async (st) => {
@@ -118,7 +122,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
           });
           await onRefresh();
         },
-        { intervalMs: 3000 }
+        { intervalMs: 3000, jobId: resp.job_id }
       );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Failed");
@@ -222,7 +226,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
             {showAssetPicker && (
               <div className="mb-2">
                 <AssetPicker
-                  assets={availableAssets}
+                  assets={availableAssets.map((a) => ({ ...a, primary_image: a.primary_image ?? undefined }))}
                   excludeIds={new Set((shot.assets || []).map((a: any) => a.asset_id))}
                   onSelect={handleBindAsset}
                   onClose={() => setShowAssetPicker(false)}

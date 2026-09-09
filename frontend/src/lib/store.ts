@@ -108,12 +108,40 @@ interface StudioState {
 
   // Rename clip
   renameClip: (trackType: "video" | "audio", clipId: string, name: string) => void;
+
+  // Active video job (persists across tab switches)
+  activeVideoJob: { job_id: string; model_id: string; shot_id: string; is_freestyle: boolean; is_long_take: boolean } | null;
+  setActiveVideoJob: (job: { job_id: string; model_id: string; shot_id: string; is_freestyle: boolean; is_long_take: boolean } | null) => void;
+
+  // Active frame generation jobs (Shot tab — persists across tab switches, supports concurrent jobs)
+  activeFrameJobs: { job_id: string; model_id: string; shot_id: string; on_complete: "refresh_shots" | "update_shot" | "refresh_composer" | null }[];
+  addActiveFrameJob: (job: { job_id: string; model_id: string; shot_id: string; on_complete: "refresh_shots" | "update_shot" | "refresh_composer" | null }) => void;
+  removeActiveFrameJob: (job_id: string) => void;
+
+  // Active image generation job (Generate tab)
+  activeImageJob: { job_id: string; model_id: string } | null;
+  setActiveImageJob: (job: { job_id: string; model_id: string } | null) => void;
+
+  // Active audio jobs (Audio tab — speech, music, foley)
+  activeAudioJobs: { job_id: string; kind: "speech" | "music" | "foley" }[];
+  addActiveAudioJob: (job: { job_id: string; kind: "speech" | "music" | "foley" }) => void;
+  removeActiveAudioJob: (job_id: string) => void;
 }
 
 export const useStudioStore = create<StudioState>((set, get) => ({
   assets: [],
   shots: [],
   scenes: [],
+  activeVideoJob: null,
+  setActiveVideoJob: (job) => set({ activeVideoJob: job }),
+  activeFrameJobs: [],
+  addActiveFrameJob: (job) => set((s) => ({ activeFrameJobs: [...s.activeFrameJobs, job] })),
+  removeActiveFrameJob: (job_id) => set((s) => ({ activeFrameJobs: s.activeFrameJobs.filter((j) => j.job_id !== job_id) })),
+  activeImageJob: null,
+  setActiveImageJob: (job) => set({ activeImageJob: job }),
+  activeAudioJobs: [],
+  addActiveAudioJob: (job) => set((s) => ({ activeAudioJobs: [...s.activeAudioJobs, job] })),
+  removeActiveAudioJob: (job_id) => set((s) => ({ activeAudioJobs: s.activeAudioJobs.filter((j) => j.job_id !== job_id) })),
   imageDrivers: [],
   videoDrivers: [],
   audioDrivers: [],

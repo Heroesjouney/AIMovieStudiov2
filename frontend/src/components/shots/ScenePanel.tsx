@@ -3,11 +3,11 @@
 import { useState, useEffect } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
-  fetchScenes, createScene, updateScene, deleteScene,
+  fetchScenes, createScene, updateScene, deleteScene, deleteAllScenes,
   addSceneReferenceAsset, removeSceneReferenceAsset,
   fetchShots, type SceneResponse,
 } from "@/lib/api";
-import { Plus, Trash2, Film, Sun, Moon, Sunrise, Sunset, Building2, X, Layers, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Plus, Trash2, Film, Sun, Moon, Sunrise, Sunset, Building2, X, Layers, PanelLeftClose, PanelLeftOpen, Clapperboard, Copy, Check } from "lucide-react";
 
 const TIME_OF_DAY_ICONS: Record<string, any> = {
   dawn: Sunrise,
@@ -45,6 +45,10 @@ export function ScenePanel({ projectId }: { projectId: string }) {
   const [collapsed, setCollapsed] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleteArmed, setBulkDeleteArmed] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [copiedShotKey, setCopiedShotKey] = useState<string | null>(null);
 
   const refresh = async () => {
     const data = await fetchScenes(projectId);
@@ -52,6 +56,17 @@ export function ScenePanel({ projectId }: { projectId: string }) {
   };
 
   useEffect(() => { refresh(); }, [projectId]);
+
+  const handleCopyBreakdownShot = async (sceneId: string, shotIdx: number, text: string) => {
+    const key = `${sceneId}:${shotIdx}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedShotKey(key);
+      setTimeout(() => setCopiedShotKey((k) => (k === key ? null : k)), 1500);
+    } catch (err) {
+      console.error("Failed to copy breakdown text:", err);
+    }
+  };
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -87,6 +102,32 @@ export function ScenePanel({ projectId }: { projectId: string }) {
     setDeleteArmed(false);
   };
 
+  const handleBulkDelete = async () => {
+    if (!bulkDeleteArmed) {
+      setBulkDeleteArmed(true);
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      await deleteAllScenes(projectId);
+      setBulkDeleteOpen(false);
+      setBulkDeleteArmed(false);
+      setSelectedSceneId(null);
+      await refresh();
+      // Clear the storyboard
+      setShots([]);
+    } catch (err) {
+      console.error("Failed to delete all scenes:", err);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const handleBulkDeleteCancel = () => {
+    setBulkDeleteOpen(false);
+    setBulkDeleteArmed(false);
+  };
+
   const selectedScene = scenes.find((s) => s.id === selectedSceneId);
   const recipeAssetIds = new Set((selectedScene?.reference_assets || []).map((a) => a.asset_id));
 
@@ -104,13 +145,24 @@ export function ScenePanel({ projectId }: { projectId: string }) {
         )}
         <div className="flex items-center gap-1">
           {!collapsed && (
-            <button
-              onClick={() => setShowCreate(!showCreate)}
-              className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
-              title="New scene"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+            <>
+              <button
+                onClick={() => setShowCreate(!showCreate)}
+                className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
+                title="New scene"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+              {scenes.length > 0 && (
+                <button
+                  onClick={() => { setBulkDeleteOpen(true); setBulkDeleteArmed(false); }}
+                  className="p-1.5 rounded-lg hover:bg-studio-danger/20 text-studio-muted hover:text-studio-danger transition-colors"
+                  title="Delete all scenes (discard entire screenplay)"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+            </>
           )}
           <button
             onClick={() => setCollapsed(!collapsed)}
@@ -131,6 +183,39 @@ export function ScenePanel({ projectId }: { projectId: string }) {
         </div>
       ) : (
         <div className="overflow-y-auto px-3 pb-3" style={{ maxHeight: "calc(100% - 48px)" }}>
+
+      {bulkDeleteOpen && (
+        <div className="mb-3 p-3 bg-studio-danger/10 border border-studio-danger/30 rounded-xl animate-fade-in space-y-2">
+          <div className="flex items-start gap-2">
+            <Trash2 className="w-4 h-4 text-studio-danger shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[11px] font-semibold text-studio-danger">Delete all {scenes.length} scenes?</p>
+              <p className="text-[10px] text-studio-muted mt-0.5 leading-relaxed">
+                This permanently deletes every scene, all shots, storyboard frames, and video files in this project. This cannot be undone.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleBulkDelete}
+              disabled={bulkDeleting}
+              className={`flex-1 px-2 py-1.5 text-[10px] font-medium rounded-lg transition-all disabled:opacity-50 ${
+                bulkDeleteArmed
+                  ? "bg-studio-danger text-white hover:bg-red-600"
+                  : "bg-studio-danger/20 text-studio-danger hover:bg-studio-danger/30 border border-studio-danger/40"
+              }`}
+            >
+              {bulkDeleting ? "Deleting..." : bulkDeleteArmed ? "Click again to confirm deletion" : "Delete all scenes & shots"}
+            </button>
+            <button
+              onClick={handleBulkDeleteCancel}
+              className="px-2 py-1.5 text-[10px] font-medium rounded-lg bg-studio-panel hover:bg-studio-panelHover text-studio-muted border border-studio-border transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {showCreate && (
         <div className="mb-3 p-3 bg-studio-panel rounded-xl border border-studio-border animate-fade-in">
@@ -161,6 +246,7 @@ export function ScenePanel({ projectId }: { projectId: string }) {
         {scenes.map((scene) => {
           const TimeIcon = TIME_OF_DAY_ICONS[scene.time_of_day] || Sun;
           const isSelected = selectedSceneId === scene.id;
+          const breakdownCount = scene.script_breakdown?.length ?? 0;
           return (
             <div key={scene.id}>
               <div
@@ -180,6 +266,12 @@ export function ScenePanel({ projectId }: { projectId: string }) {
                     <p className="text-[10px] text-studio-muted truncate">{scene.mood} · {scene.time_of_day}</p>
                     {scene.defaults?.hero_cast_id && (
                       <p className="text-[10px] text-studio-accent/70 mt-0.5">Hero set</p>
+                    )}
+                    {breakdownCount > 0 && (
+                      <p className="text-[10px] text-studio-muted/70 mt-0.5 flex items-center gap-1">
+                        <Clapperboard className="w-2.5 h-2.5" />
+                        {breakdownCount} script shot{breakdownCount === 1 ? "" : "s"}
+                      </p>
                     )}
                   </div>
                   <button
@@ -339,6 +431,81 @@ export function ScenePanel({ projectId }: { projectId: string }) {
                       ))}
                     </div>
                   </div>
+
+                  {/* Screenplay Breakdown — reference for manually building shots */}
+                  {(scene.script_breakdown?.length ?? 0) > 0 && (
+                    <div>
+                      <label className="text-[10px] text-studio-muted uppercase tracking-wider flex items-center gap-1 mb-1.5">
+                        <Clapperboard className="w-3 h-3" /> Screenplay Breakdown
+                      </label>
+                      <p className="text-[9px] text-studio-muted/60 mb-2 leading-relaxed">
+                        Reference from the imported script. Copy any shot's text into a new shot's description.
+                      </p>
+                      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                        {scene.script_breakdown!.map((bd, bdIdx) => {
+                          const copyKey = `${scene.id}:${bdIdx}`;
+                          const isCopied = copiedShotKey === copyKey;
+                          const blocks = bd.dialogue_blocks ?? [];
+                          const copyText = [
+                            bd.action,
+                            ...blocks.map((b) =>
+                              b.parenthetical
+                                ? `${b.character}\n(${b.parenthetical})\n${b.text}`
+                                : `${b.character}\n${b.text}`
+                            ),
+                            bd.transition,
+                          ].filter(Boolean).join("\n\n") || bd.description || bd.name;
+                          return (
+                            <div key={bdIdx} className="group/bd rounded-lg bg-studio-bg border border-studio-border p-2.5 font-mono">
+                              <div className="flex items-center gap-1.5 mb-1.5">
+                                <span className="text-[8px] px-1 py-0.5 rounded bg-studio-accent/10 text-studio-accent uppercase tracking-wide shrink-0">
+                                  {bd.shot_type.replace(/_/g, " ")}
+                                </span>
+                                <span className="text-[10px] font-bold text-studio-text uppercase tracking-wide truncate flex-1">{bd.name}</span>
+                                <button
+                                  onClick={() => handleCopyBreakdownShot(scene.id, bdIdx, copyText)}
+                                  className="p-0.5 rounded hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors shrink-0"
+                                  title="Copy shot text to clipboard"
+                                >
+                                  {isCopied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                                </button>
+                              </div>
+                              {/* Action — each paragraph on its own line, screenplay spacing */}
+                              {(bd.action_lines?.length ?? 0) > 0 ? (
+                                <div className="space-y-1 mb-1.5">
+                                  {bd.action_lines!.map((line, li) => (
+                                    <p key={li} className="text-[10px] text-studio-text/90 leading-relaxed">{line}</p>
+                                  ))}
+                                </div>
+                              ) : bd.action && (
+                                <p className="text-[10px] text-studio-text/90 leading-relaxed mb-1.5">{bd.action}</p>
+                              )}
+                              {/* Dialogue blocks — screenplay indented format */}
+                              {blocks.length > 0 ? (
+                                <div className="space-y-1.5">
+                                  {blocks.map((b, bi) => (
+                                    <div key={bi}>
+                                      <p className="text-[10px] font-bold text-studio-text uppercase tracking-wide pl-8">{b.character}</p>
+                                      {b.parenthetical && (
+                                        <p className="text-[9px] text-studio-muted italic pl-6 -mt-0.5">({b.parenthetical})</p>
+                                      )}
+                                      <p className="text-[10px] text-studio-text/80 leading-relaxed pl-5 pr-2">{b.text}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : bd.dialogue && (
+                                <p className="text-[10px] text-studio-text/80 leading-relaxed whitespace-pre-line">{bd.dialogue}</p>
+                              )}
+                              {/* Transition — uppercase, right-aligned */}
+                              {bd.transition && (
+                                <p className="text-[10px] font-bold text-studio-text uppercase tracking-wide text-right mt-1.5">{bd.transition}</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

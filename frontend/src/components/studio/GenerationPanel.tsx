@@ -74,6 +74,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
     assets,
     setAssets,
     selectedAssetId,
+    activeImageJob, setActiveImageJob,
   } = useStudioStore();
 
   const [prompt, setPrompt] = useState("");
@@ -107,6 +108,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   // Generation elapsed timer
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const elapsedRef = useRef<number | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Lightbox
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -128,6 +130,62 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
     }
   };
 
+  const startElapsedTimer = () => {
+    setElapsedSeconds(0);
+    stopElapsedTimer();
+    elapsedRef.current = window.setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
+  };
+
+  // Resume polling for an in-progress image job when component mounts
+  useEffect(() => {
+    const job = useStudioStore.getState().activeImageJob;
+    if (!job) return;
+
+    setGenerating(true);
+    setStatus("Resuming image status check...");
+    startElapsedTimer();
+
+    let pollErrors = 0;
+    pollRef.current = setInterval(async () => {
+      try {
+        const statusResp = await checkGenerationStatus(job.job_id, job.model_id);
+        pollErrors = 0;
+        if (statusResp.status === "completed") {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          setResultImages(statusResp.image_urls || []);
+          setStatus("Completed!");
+          stopElapsedTimer();
+          setGenerating(false);
+          setActiveImageJob(null);
+        } else if (statusResp.status === "failed") {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          setError(statusResp.error_message || "Generation failed");
+          stopElapsedTimer();
+          setGenerating(false);
+          setActiveImageJob(null);
+        } else {
+          setStatus(statusResp.status === "in_queue" ? "In queue..." : "Processing...");
+        }
+      } catch (err) {
+        pollErrors++;
+        if (pollErrors >= 5) {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          setError("Lost connection to backend while polling.");
+          stopElapsedTimer();
+          setGenerating(false);
+          setActiveImageJob(null);
+        }
+      }
+    }, 2000);
+
+    return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      stopElapsedTimer();
+    };
+  }, []);
+
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       setError("Please enter a prompt");
@@ -146,10 +204,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
     });
 
     // Start elapsed timer
-    setElapsedSeconds(0);
-    elapsedRef.current = window.setInterval(() => {
-      setElapsedSeconds((s) => s + 1);
-    }, 1000);
+    startElapsedTimer();
 
     try {
       const refPaths = selectedAsset?.primary_image ? [selectedAsset.primary_image] : [];
@@ -181,22 +236,26 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
         return;
       }
 
+      setActiveImageJob({ job_id: response.job_id, model_id: selectedImageDriver });
+
       let genPollErrors = 0;
-      const pollInterval = setInterval(async () => {
+      pollRef.current = setInterval(async () => {
         try {
           const statusResp = await checkGenerationStatus(response.job_id, selectedImageDriver);
           genPollErrors = 0;
           if (statusResp.status === "completed") {
-            clearInterval(pollInterval);
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
             setResultImages(statusResp.image_urls || []);
             setStatus("Completed!");
             stopElapsedTimer();
             setGenerating(false);
+            setActiveImageJob(null);
           } else if (statusResp.status === "failed") {
-            clearInterval(pollInterval);
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
             setError(statusResp.error_message || "Generation failed");
             stopElapsedTimer();
             setGenerating(false);
+            setActiveImageJob(null);
           } else {
             setStatus(statusResp.status === "in_queue" ? "In queue..." : "Processing...");
           }
@@ -204,10 +263,11 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
           genPollErrors++;
           console.warn("[GenerationPanel] poll error:", pollErr);
           if (genPollErrors >= 5) {
-            clearInterval(pollInterval);
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
             setError("Lost connection to backend while polling. The image may still be generating — refresh later.");
             stopElapsedTimer();
             setGenerating(false);
+            setActiveImageJob(null);
           }
         }
       }, 2000);
@@ -231,7 +291,9 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   }, [generating, prompt]);
 
   const handleReset = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     stopElapsedTimer();
+    setActiveImageJob(null);
     setPrompt("");
     setNegativePrompt(DEFAULT_NEG_PROMPT);
     setSeed("");

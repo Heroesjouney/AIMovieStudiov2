@@ -9,11 +9,12 @@ import { ShotComposer } from "@/components/shots/ShotComposer";
 import { InspectorPanel } from "@/components/studio/InspectorPanel";
 import { TimelineEditor } from "@/components/timeline/TimelineEditor";
 import { UserMenu } from "@/components/UserMenu";
-import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles, Video, ChevronDown, ChevronUp, Settings } from "lucide-react";
+import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles, Video, ChevronDown, ChevronUp, Settings, Upload } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { useRouter } from "next/navigation";
 import { SettingsPanel } from "@/components/shared/SettingsPanel";
+import { ScreenplayImportModal } from "@/components/studio/ScreenplayImportModal";
 
 export default function ProjectWorkspacePage() {
   const params = useParams();
@@ -30,6 +31,7 @@ export default function ProjectWorkspacePage() {
   const [loaded, setLoaded] = useState(false);
   const [connected, setConnected] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [showScreenplayImport, setShowScreenplayImport] = useState(false);
   const [assetPanelCollapsed, setAssetPanelCollapsed] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [storyboardCollapsed, setStoryboardCollapsed] = useState(false);
@@ -163,6 +165,18 @@ export default function ProjectWorkspacePage() {
             <Video className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Timeline</span>
             {timelineDockOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+          </button>
+
+          <div className="w-px h-5 bg-studio-border" />
+
+          {/* Screenplay import */}
+          <button
+            onClick={() => setShowScreenplayImport(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-studio-muted hover:text-studio-text hover:bg-studio-panelHover transition-colors"
+            title="Import Fountain screenplay"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Screenplay</span>
           </button>
 
           <div className="w-px h-5 bg-studio-border" />
@@ -348,6 +362,11 @@ export default function ProjectWorkspacePage() {
 
       {/* Settings Modal */}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+
+      {/* Screenplay Import Modal */}
+      {showScreenplayImport && (
+        <ScreenplayImportModal projectId={projectId} onClose={() => setShowScreenplayImport(false)} />
+      )}
     </div>
   );
 }
