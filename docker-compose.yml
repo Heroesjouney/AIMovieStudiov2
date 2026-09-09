@@ -20,7 +20,10 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:8001
     ports:
       - "127.0.0.1:3000:3000"
     environment:

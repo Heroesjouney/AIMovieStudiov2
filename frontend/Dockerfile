@@ -13,6 +13,9 @@ RUN npm ci --include=dev || npm install --include=dev
 
 COPY . .
 
+ARG BACKEND_URL=http://backend:8001
+ENV BACKEND_URL=$BACKEND_URL
+
 # A type or lint error in work-in-progress code should not stop the container from
 # building. Plain `npm run build` outside Docker still type checks as normal.
 ENV NEXT_IGNORE_BUILD_ERRORS=1
