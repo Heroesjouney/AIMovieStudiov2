@@ -7,7 +7,7 @@ import {
   addSceneReferenceAsset, removeSceneReferenceAsset,
   fetchShots, type SceneResponse,
 } from "@/lib/api";
-import { Plus, Trash2, Film, Sun, Moon, Sunrise, Sunset, Building2, X, Layers, PanelLeftClose, PanelLeftOpen, Clapperboard, Copy, Check } from "lucide-react";
+import { Plus, Trash2, Film, Sun, Moon, Sunrise, Sunset, Building2, X, Layers, PanelLeftClose, PanelLeftOpen, Clapperboard, Copy, Check, Maximize2 } from "lucide-react";
 
 const TIME_OF_DAY_ICONS: Record<string, any> = {
   dawn: Sunrise,
@@ -49,6 +49,7 @@ export function ScenePanel({ projectId }: { projectId: string }) {
   const [bulkDeleteArmed, setBulkDeleteArmed] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [copiedShotKey, setCopiedShotKey] = useState<string | null>(null);
+  const [enlargedBreakdown, setEnlargedBreakdown] = useState<string | null>(null);
 
   const refresh = async () => {
     const data = await fetchScenes(projectId);
@@ -56,6 +57,16 @@ export function ScenePanel({ projectId }: { projectId: string }) {
   };
 
   useEffect(() => { refresh(); }, [projectId]);
+
+  // Close enlarged breakdown overlay on Escape
+  useEffect(() => {
+    if (!enlargedBreakdown) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setEnlargedBreakdown(null);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [enlargedBreakdown]);
 
   const handleCopyBreakdownShot = async (sceneId: string, shotIdx: number, text: string) => {
     const key = `${sceneId}:${shotIdx}`;
@@ -435,9 +446,18 @@ export function ScenePanel({ projectId }: { projectId: string }) {
                   {/* Screenplay Breakdown — reference for manually building shots */}
                   {(scene.script_breakdown?.length ?? 0) > 0 && (
                     <div>
-                      <label className="text-[10px] text-studio-muted uppercase tracking-wider flex items-center gap-1 mb-1.5">
-                        <Clapperboard className="w-3 h-3" /> Screenplay Breakdown
-                      </label>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-[10px] text-studio-muted uppercase tracking-wider flex items-center gap-1">
+                          <Clapperboard className="w-3 h-3" /> Screenplay Breakdown
+                        </label>
+                        <button
+                          onClick={() => setEnlargedBreakdown(scene.id)}
+                          className="p-0.5 rounded hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors"
+                          title="Enlarge breakdown for reading"
+                        >
+                          <Maximize2 className="w-3 h-3" />
+                        </button>
+                      </div>
                       <p className="text-[9px] text-studio-muted/60 mb-2 leading-relaxed">
                         Reference from the imported script. Copy any shot's text into a new shot's description.
                       </p>
@@ -523,6 +543,105 @@ export function ScenePanel({ projectId }: { projectId: string }) {
         </div>
         </div>
       )}
+
+      {/* Enlarged Screenplay Breakdown — fullscreen reading overlay */}
+      {enlargedBreakdown && (() => {
+        const scene = scenes.find((s) => s.id === enlargedBreakdown);
+        if (!scene || !scene.script_breakdown?.length) return null;
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+            onClick={() => setEnlargedBreakdown(null)}
+          >
+            <div
+              className="bg-studio-panel border border-studio-border rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between p-4 border-b border-studio-border">
+                <div className="flex items-center gap-2">
+                  <Clapperboard className="w-4 h-4 text-studio-accent" />
+                  <div>
+                    <h3 className="text-sm font-semibold text-studio-text">{scene.name}</h3>
+                    <p className="text-[10px] text-studio-muted">Screenplay Breakdown · {scene.script_breakdown.length} shots</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setEnlargedBreakdown(null)}
+                  className="p-1.5 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-text transition-colors"
+                  title="Close (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {/* Body — larger screenplay-formatted text */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-4 font-mono">
+                {scene.script_breakdown.map((bd, bdIdx) => {
+                  const copyKey = `${scene.id}:${bdIdx}`;
+                  const isCopied = copiedShotKey === copyKey;
+                  const blocks = bd.dialogue_blocks ?? [];
+                  const copyText = [
+                    bd.action,
+                    ...blocks.map((b) =>
+                      b.parenthetical
+                        ? `${b.character}\n(${b.parenthetical})\n${b.text}`
+                        : `${b.character}\n${b.text}`
+                    ),
+                    bd.transition,
+                  ].filter(Boolean).join("\n\n") || bd.description || bd.name;
+                  return (
+                    <div key={bdIdx} className="group/bd rounded-xl bg-studio-bg border border-studio-border p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-studio-accent/10 text-studio-accent uppercase tracking-wide shrink-0">
+                          {bd.shot_type.replace(/_/g, " ")}
+                        </span>
+                        <span className="text-sm font-bold text-studio-text uppercase tracking-wide truncate flex-1">{bd.name}</span>
+                        <button
+                          onClick={() => handleCopyBreakdownShot(scene.id, bdIdx, copyText)}
+                          className="p-1 rounded hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors shrink-0"
+                          title="Copy shot text to clipboard"
+                        >
+                          {isCopied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      {/* Action */}
+                      {(bd.action_lines?.length ?? 0) > 0 ? (
+                        <div className="space-y-2 mb-2">
+                          {bd.action_lines!.map((line, li) => (
+                            <p key={li} className="text-sm text-studio-text/90 leading-relaxed">{line}</p>
+                          ))}
+                        </div>
+                      ) : bd.action && (
+                        <p className="text-sm text-studio-text/90 leading-relaxed mb-2">{bd.action}</p>
+                      )}
+                      {/* Dialogue */}
+                      {blocks.length > 0 ? (
+                        <div className="space-y-3">
+                          {blocks.map((b, bi) => (
+                            <div key={bi}>
+                              <p className="text-sm font-bold text-studio-text uppercase tracking-wide pl-16">{b.character}</p>
+                              {b.parenthetical && (
+                                <p className="text-xs text-studio-muted italic pl-12 -mt-0.5">({b.parenthetical})</p>
+                              )}
+                              <p className="text-sm text-studio-text/80 leading-relaxed pl-10 pr-4">{b.text}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : bd.dialogue && (
+                        <p className="text-sm text-studio-text/80 leading-relaxed whitespace-pre-line">{bd.dialogue}</p>
+                      )}
+                      {/* Transition */}
+                      {bd.transition && (
+                        <p className="text-sm font-bold text-studio-text uppercase tracking-wide text-right mt-3">{bd.transition}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
