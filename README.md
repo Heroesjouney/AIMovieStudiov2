@@ -98,6 +98,8 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - **🔧 Custom Workflows** - Build workflows in ComfyUI, export as JSON, and upload them through the Settings panel. Custom workflows appear as new models in all dropdowns with full LoRA support. Driver dropdowns auto-refresh after registering or deleting workflows — no page reload needed.
 - **🔍 Workflow Model Analysis** - When uploading a custom workflow, the app automatically analyzes the JSON and lists all required models (checkpoints, LoRAs, VAEs, CLIP, UNet, ControlNet, etc.). Each model is checked against your ComfyUI instance — models already present show a green "In ComfyUI" badge, and missing models can be uploaded directly to the correct subdirectory from the same UI.
 
+> 🚀 **Active Development:** We are currently building Phase 2 (3D Camera Trajectories & Promptless Spatial Controls). [Check out the full Roadmap below ↓](#-roadmap)
+
 ---
 
 ## 🏗️ Architecture
