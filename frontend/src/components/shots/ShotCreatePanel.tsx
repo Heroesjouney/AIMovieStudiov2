@@ -5,7 +5,7 @@ import { useStudioStore } from "@/lib/store";
 import {
   fetchShots, createShot, deleteShot, reorderShots,
   generateShotFrame, checkShotFrameStatus, updateShot,
-  fetchScenes,
+  fetchScenes, saveImageFromUrl,
   type ShotResponse,
 } from "@/lib/api";
 import {
@@ -98,7 +98,7 @@ export function ShotCreatePanel({
 
   const poll = useGenerationPolling();
 
-  const availableAssets = assets.filter((a) => a.primary_image && !newShotAssets.some((na) => na.asset_id === a.id));
+  const availableAssets = assets.filter((a) => a.primary_image && !newShotAssets.some((na) => na.asset_id === a.id) && !sceneRecipeAssetIds.has(a.id));
   const extraAssetCount = newShotAssets.filter((a) => !sceneRecipeAssetIds.has(a.asset_id)).length;
   const crossesLine = lastShotAngle !== null && wouldCrossLine(lastShotAngle, camHorizontal);
 
@@ -117,7 +117,15 @@ export function ShotCreatePanel({
       await onRefresh();
 
       if (newShotAssets.length > 0) {
-        await updateShot(projectId, shot.id, { assets: newShotAssets });
+        // Merge extra assets with the auto-bound recipe assets.
+        // createShot already bound the recipe assets; newShotAssets contains
+        // only extras the user picked. Avoid duplicates by asset_id.
+        const existingIds = new Set((shot.assets || []).map((a: any) => a.asset_id));
+        const mergedAssets = [
+          ...(shot.assets || []),
+          ...newShotAssets.filter((a) => !existingIds.has(a.asset_id)),
+        ];
+        await updateShot(projectId, shot.id, { assets: mergedAssets });
       }
 
       const shotTypeData = SHOT_TYPES.find((t) => t.value === effectiveShotType);
@@ -168,7 +176,17 @@ export function ShotCreatePanel({
       poll.startPolling(
         () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
         async (st) => {
-          const framePath = st.image_urls?.[0] || "";
+          const remoteFramePath = st.image_urls?.[0] || "";
+          // Save the generated image to the vault so it appears in the library
+          let framePath = remoteFramePath;
+          if (remoteFramePath) {
+            try {
+              const saved = await saveImageFromUrl(projectId, remoteFramePath);
+              framePath = saved.image_url;
+            } catch (e) {
+              console.error("Failed to save generated image to vault:", e);
+            }
+          }
           await updateShot(projectId, shot.id, {
             frame_image_path: framePath,
             status: "frame_generated",

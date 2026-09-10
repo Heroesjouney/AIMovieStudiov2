@@ -5,9 +5,10 @@ import { useStudioStore } from "@/lib/store";
 import {
   fetchScenes, createScene, updateScene, deleteScene, deleteAllScenes,
   addSceneReferenceAsset, removeSceneReferenceAsset,
+  updateSceneReferenceRetention, syncSceneRecipeToShots,
   fetchShots, type SceneResponse,
 } from "@/lib/api";
-import { Plus, Trash2, Film, Sun, Moon, Sunrise, Sunset, Building2, X, Layers, PanelLeftClose, PanelLeftOpen, Clapperboard, Copy, Check, Maximize2 } from "lucide-react";
+import { Plus, Trash2, Film, Sun, Moon, Sunrise, Sunset, Building2, X, Layers, PanelLeftClose, PanelLeftOpen, Clapperboard, Copy, Check, Maximize2, RefreshCw } from "lucide-react";
 
 const TIME_OF_DAY_ICONS: Record<string, any> = {
   dawn: Sunrise,
@@ -79,6 +80,31 @@ export function ScenePanel({ projectId }: { projectId: string }) {
     }
   };
 
+  const [syncingSceneId, setSyncingSceneId] = useState<string | null>(null);
+
+  const handleRetentionChange = async (sceneId: string, assetId: string, retention: string) => {
+    try {
+      await updateSceneReferenceRetention(projectId, sceneId, assetId, retention);
+      await refresh();
+    } catch (err) {
+      console.error("Failed to update retention:", err);
+    }
+  };
+
+  const handleSyncRecipe = async (sceneId: string) => {
+    setSyncingSceneId(sceneId);
+    try {
+      await syncSceneRecipeToShots(projectId, sceneId);
+      await refresh();
+      const freshShots = await fetchShots(projectId);
+      setShots(freshShots);
+    } catch (err) {
+      console.error("Failed to sync recipe to shots:", err);
+    } finally {
+      setSyncingSceneId(null);
+    }
+  };
+
   const handleCreate = async () => {
     if (!newName.trim()) return;
     await createScene(projectId, newName, newDesc);
@@ -144,8 +170,12 @@ export function ScenePanel({ projectId }: { projectId: string }) {
 
   const handleRemoveRecipeAsset = async (assetId: string) => {
     if (!selectedScene) return;
-    await removeSceneReferenceAsset(projectId, selectedScene.id, assetId);
-    await refresh();
+    try {
+      await removeSceneReferenceAsset(projectId, selectedScene.id, assetId);
+      await refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to remove recipe asset");
+    }
   };
 
   return (
@@ -358,20 +388,51 @@ export function ScenePanel({ projectId }: { projectId: string }) {
                       }`}
                     >
                       {(scene.reference_assets || []).length > 0 ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {(scene.reference_assets || []).map((ref) => (
-                            <div key={ref.asset_id} className="group flex items-center gap-1 px-1.5 py-1 bg-studio-bg rounded-lg border border-studio-border text-[10px]">
-                              {ref.image_path && <img src={ref.image_path} alt="" className="w-5 h-5 rounded object-cover" />}
-                              <span className="truncate max-w-[70px]">{ref.asset_name}</span>
-                              <span className="text-[8px] text-studio-muted capitalize">{ref.asset_type}</span>
-                              <button
-                                onClick={() => handleRemoveRecipeAsset(ref.asset_id)}
-                                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-studio-danger/20 text-studio-danger transition-all"
-                              >
-                                <X className="w-2.5 h-2.5" />
-                              </button>
-                            </div>
-                          ))}
+                        <div className="space-y-1.5">
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {(scene.reference_assets || []).map((ref) => {
+                              const retention = ref.retention || "fully_preserved";
+                              return (
+                                <div key={ref.asset_id} className="group flex flex-col bg-studio-bg rounded-lg border border-studio-border text-[10px] overflow-hidden">
+                                  <div className="flex items-center gap-1 px-1.5 py-1">
+                                    {ref.image_path && <img src={ref.image_path} alt="" className="w-6 h-6 rounded object-cover shrink-0" />}
+                                    <span className="truncate flex-1">{ref.asset_name}</span>
+                                    <span className="text-[8px] text-studio-muted capitalize shrink-0">{ref.asset_type}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 px-1.5 pb-1">
+                                    <select
+                                      value={retention}
+                                      onChange={(e) => handleRetentionChange(scene.id, ref.asset_id, e.target.value)}
+                                      className="text-[9px] px-1.5 py-1 bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors border border-studio-border rounded cursor-pointer focus:outline-none flex-1 min-w-0"
+                                      title="How closely the AI should follow this reference"
+                                    >
+                                      <option value="fully_preserved">Full keep</option>
+                                      <option value="partially_preserved">Partial</option>
+                                      <option value="attribute_transfer">Transfer</option>
+                                      <option value="weak_reference">Weak ref</option>
+                                    </select>
+                                    <button
+                                      onClick={() => handleRemoveRecipeAsset(ref.asset_id)}
+                                      className="p-1 rounded bg-red-500/20 hover:bg-red-500/40 text-red-400 transition-all shrink-0"
+                                      title="Remove from recipe"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {/* Sync to shots button */}
+                          <button
+                            onClick={() => handleSyncRecipe(scene.id)}
+                            disabled={syncingSceneId === scene.id}
+                            className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-medium rounded-lg bg-studio-accent/10 border border-studio-accent/30 text-studio-accent hover:bg-studio-accent/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full justify-center"
+                            title="Update all existing shots in this scene with the current recipe (including retention levels)"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${syncingSceneId === scene.id ? "animate-spin" : ""}`} />
+                            {syncingSceneId === scene.id ? "Syncing..." : "Sync recipe to shots"}
+                          </button>
                         </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center py-3 text-center">

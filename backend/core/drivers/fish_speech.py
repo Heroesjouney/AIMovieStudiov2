@@ -8,6 +8,7 @@ Can run locally via Gradio API or via Replicate cloud.
 """
 
 import asyncio
+import base64
 import os
 import uuid
 import time
@@ -75,8 +76,15 @@ class FishSpeechDriver(AudioDriver):
             "text": request.text,
             "language": request.language,
         }
-        if request.reference_audio_path:
-            input_data["reference_audio"] = request.reference_audio_path
+        if request.reference_audio_path and os.path.exists(request.reference_audio_path):
+            # Replicate needs a public URL or data URI, not a local file path.
+            # Encode the reference audio as a base64 data URI.
+            ext = os.path.splitext(request.reference_audio_path)[1].lower().lstrip(".")
+            mime_map = {"wav": "audio/wav", "mp3": "audio/mpeg", "flac": "audio/flac", "ogg": "audio/ogg"}
+            mime = mime_map.get(ext, "audio/wav")
+            with open(request.reference_audio_path, "rb") as ref_file:
+                encoded = base64.b64encode(ref_file.read()).decode("utf-8")
+            input_data["reference_audio"] = f"data:{mime};base64,{encoded}"
 
         headers = {
             "Authorization": f"Bearer {self._api_token}",

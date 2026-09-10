@@ -8,7 +8,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### Scene Deletion Preserves Videos, Deletes Images
+- **Video preservation on scene/shot deletion** (CRITICAL) — Deleting scenes (single or bulk) previously called `shutil.rmtree(shot_folder)` which destroyed all files in the shot folder, including generated video takes. Now, before deleting a shot folder, the backend moves all video files (`.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`) to `assets/<project>/videos/` so they survive the deletion.
+- **Images are deleted with the shot folder** — frame images (`last_frame.png`, `first_frame.png`, `angle_*.jpg`, retake anchors) are continuity assets tied to the shot and are deleted along with the shot folder. Storyboard card images (`frame_image_path`) are typically remote URLs or in `/assets/generated/` and are not affected.
+- **New helper** `_preserve_videos_from_shot()` in `routes_scenes.py` handles moving videos to the vault's `videos/` directory with collision-safe naming.
+- **Bulk delete** now only deletes the scene list, storyboard cards, and associated images — all generated videos are preserved in the vault.
+
 ### Added
+
+#### Audio System Overhaul
+
+##### ComfyUI Audio Driver
+- **`ComfyAudioDriver`** (`backend/core/drivers/comfy_audio.py`) — New driver supporting ComfyUI audio workflows with async polling, parameter injection, and output download
+- **MiniMax Music 3** workflow (`backend/core/workflows/minimax_music3.json`) — Text-to-music generation with caption, lyrics, duration, seed, steps, and CFG controls
+- **Chatterbox TTS** workflow (`backend/core/workflows/chatterbox_tts.json`) — Text-to-speech with voice cloning via ComfyUI; reference audio uploaded to ComfyUI before generation
+- **HunyuanVideo Foley** workflow (`backend/core/workflows/hunyuan_foley.json`) — Video-to-foley sound effects generation; injects video path, prompt, negative prompt, duration, CFG, steps, and seed into the HunyuanFoleySampler node
+- **Audio workflow category** — `POST /api/settings/workflows` now accepts `"audio"` as a valid category (previously only `"image"` and `"video"`)
+- **Audio model upload** — `POST /api/generate/models/upload-to` now accepts `audio` and `audio_models` subdirectories
+- **Driver registration** — `get_audio_driver()` and `list_audio_drivers()` now include `comfy_audio`, `chatterbox_tts`, and `hunyuan_foley`
+
+##### Audio API Extensions
+- **`AudioGenerationRequest`** extended with `lyrics`, `duration_seconds`, `seed`, `steps`, `cfg`, `clip_name`, `video_path`, `negative_prompt`, and `extra_params` fields
+- **`AudioJobRequest`** extended with `lyrics`, `seed`, `steps`, `cfg`, and `negative_prompt` fields
+- **Async job polling** — `GET /api/audio/status/{job_id}` now polls the driver for ComfyUI jobs (previously only returned the in-memory job state); downloads audio output from ComfyUI when complete
+- **`POST /api/audio/job`** now handles async `PROCESSING` responses from ComfyUI drivers (returns `processing` status instead of incorrectly marking as `completed`)
+- **Foley video path resolution** — `/job` endpoint searches `videos/`, `foley_videos/`, `shots/` subdirectories recursively to find the input video
+
+##### Audio Bug Fixes
+- **Generated audio persistence** (CRITICAL) — `POST /api/audio/job` now downloads remote audio URLs into the vault; previously marked jobs as completed without saving the file, leaving the audio library empty
+- **Reference voice for Fish Speech** (CRITICAL) — Reference voice is now sent for Fish Speech (supports voice cloning), not just Chatterbox TTS
+- **Replicate voice cloning** (CRITICAL) — `FishSpeechDriver._generate_replicate` now base64-encodes reference audio as a data URI instead of passing a local file path (Replicate requires a public URL or data URI)
+- **Waveform endpoint** (MEDIUM) — `GET /api/assets/waveform/{project_id}/{filename}` now searches `audio/<uuid>/` subdirectories recursively; previously only searched the flat `audio/` directory and never found generated/uploaded audio files
+
+##### Audio UI Improvements
+- **Music tab re-enabled** — MiniMax Music 3 (ComfyUI) with prompt builder, duration slider, and optional lyrics textarea
+- **Foley tab re-enabled** — HunyuanVideo Foley (ComfyUI) with video source selector, sound presets, prompt, negative prompt, and duration slider
+- **Chatterbox TTS** option added to the speech engine selector
+- **Reference voice** section now shows for both Fish Speech and Chatterbox TTS
+- **Reference voice helper text** is now engine-specific (mentions ComfyUI for Chatterbox, Fish Speech for Fish Speech)
+- **Error clearing** — Switching audio tabs now clears the error message
+- **Foley duration** is now a UI slider (1–30s) instead of hardcoded to 10s
+- **Engine labels** updated to reflect actual backends (e.g. "MiniMax Music 3 (ComfyUI)", "HunyuanVideo Foley (ComfyUI)")
+
+#### Cloud Audio Drivers
+
+##### Fal Audio Driver (`backend/core/drivers/fal_audio.py`)
+- **`FalAudioDriver`** — New cloud audio driver using the `fal_client` SDK
+- **`fal_music`** — MiniMax Music 3 via Fal (`minimax/music-3` endpoint) for text-to-music with lyrics and duration control
+- **`fal_foley`** — HunyuanVideo Foley via Fal (`fal-ai/hunyuan-video-foley` endpoint) for video-to-foley generation
+- **`fal_elevenlabs`** — ElevenLabs v3 via Fal (`fal-ai/elevenlabs/tts/eleven-v3` endpoint) for high-quality TTS with 20+ pre-built voices and inline emotion tags (`[excited]`, `[whispers]`, `[laughs]`)
+- **`fal_chatterbox_hd`** — Chatterbox HD via Fal (`resemble-ai/chatterboxhd/text-to-speech` endpoint) for 48kHz TTS with zero-shot voice cloning from reference audio
+- **`fal_chatterbox`** — Chatterbox OSS via Fal (`fal-ai/chatterbox/text-to-speech` endpoint) for 24kHz TTS with voice cloning
+- **Reference audio upload** — `FalAudioDriver._upload_reference_audio()` uploads local reference audio to Fal storage via `fal_client.upload_file()` for cloud voice cloning
+- **Engine selector** in Music tab now offers local ComfyUI or cloud Fal
+- **Engine selector** in Foley tab now offers local ComfyUI, cloud Fal, or cloud Replicate
+- **Engine selector** in Speech tab now offers local (Fish Speech, Chatterbox TTS) or cloud (ElevenLabs v3, Chatterbox HD, Chatterbox OSS)
+- **ElevenLabs voice selector** — 20 pre-built voices (Rachel, Aria, Roger, Sarah, etc.) shown when ElevenLabs v3 is selected
+- **Public URL video source** — Foley tab now has a "Public URL" video source option for cloud backends (cloud APIs require a publicly accessible video URL)
+
+##### Replicate Foley Driver (`backend/core/drivers/replicate_foley.py`)
+- **`ReplicateFoleyDriver`** — New cloud foley driver using the Replicate REST API
+- **`replicate_foley`** — HunyuanVideo Foley via Replicate (`tencent/hunyuanvideo-foley` model) for video-to-foley generation
+- Uses `aiohttp` for async API calls with Bearer token auth
+- Polls `/v1/predictions/{id}` for completion
+
+##### Audio API Extensions (Cloud)
+- **`AudioJobRequest`** extended with `input_video_url` field for cloud foley drivers
+- **`AudioGenerationRequest.extra_params["video_url"]`** — Cloud drivers read the public video URL from extra_params
+- **`get_audio_driver()`** and **`list_audio_drivers()`** now include `fal_music`, `fal_foley`, and `replicate_foley`
 
 #### Docker Compose Setup
 - **One-command stack** — `docker compose up --build` starts both backend and frontend containers

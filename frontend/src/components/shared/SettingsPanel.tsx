@@ -771,6 +771,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   >
                     <option value="image">Image</option>
                     <option value="video">Video</option>
+                    <option value="audio">Audio</option>
                   </select>
                 </div>
                 <div>

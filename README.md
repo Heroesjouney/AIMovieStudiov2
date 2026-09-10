@@ -82,7 +82,7 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - **🔌 Works with Any AI Model** - The "Driver System" lets you swap between local ComfyUI and cloud providers (Fal, Replicate) without changing the UI.
   - **Image generation:** 7+ local models, 7+ cloud models
   - **Video generation:** 3 local models, 4 cloud models
-  - **Audio:** Fish Speech for TTS and voice cloning
+  - **Audio:** Fish Speech (TTS + voice cloning), Chatterbox TTS (ComfyUI), MiniMax Music 3 (music), HunyuanVideo Foley (video-to-SFX)
 - **🖼️ Multi-Reference Generation** - Feed the AI multiple character/scene reference images to maintain visual consistency.
 - **🎞️ Timeline & Export** - Assemble shots into a timeline, add audio, and export to XML for editing in Premiere, DaVinci, etc.
 - **⚡ Live Status** - Watch generation progress in real-time with elapsed timers. Jobs persist across tab switches — switch away and come back to find completed generations updated in the storyboard.
@@ -516,11 +516,28 @@ You can add new AI models without writing any code. Build a workflow in ComfyUI,
 
 ## 🔊 Available Audio Models
 
-| Model ID        | Display Name    | Type                          |
-| --------------- | --------------- | ----------------------------- |
-| `fish_speech`   | Fish Speech     | TTS, voice cloning            |
+| Model ID | Display Name | Type | Backend | API Key |
+| -------- | ------------ | ---- | ------- | ------- |
+| `fish_speech` | Fish Speech | TTS, voice cloning | Replicate / local | `REPLICATE_API_TOKEN` |
+| `chatterbox_tts` | Chatterbox TTS | TTS, voice cloning | ComfyUI (local) | — |
+| `fal_elevenlabs` | ElevenLabs v3 | TTS | Fal (cloud) | `FAL_KEY` |
+| `fal_chatterbox_hd` | Chatterbox HD | TTS, voice cloning | Fal (cloud) | `FAL_KEY` |
+| `fal_chatterbox` | Chatterbox OSS | TTS, voice cloning | Fal (cloud) | `FAL_KEY` |
+| `comfy_audio` | MiniMax Music 3 | Music generation | ComfyUI (local) | — |
+| `fal_music` | MiniMax Music 3 | Music generation | Fal (cloud) | `FAL_KEY` |
+| `hunyuan_foley` | HunyuanVideo Foley | Video-to-foley SFX | ComfyUI (local) | — |
+| `fal_foley` | HunyuanVideo Foley | Video-to-foley SFX | Fal (cloud) | `FAL_KEY` |
+| `replicate_foley` | HunyuanVideo Foley | Video-to-foley SFX | Replicate (cloud) | `REPLICATE_API_TOKEN` |
 
-> ⚠️ **Audio is a work in progress.** The TTS and voice cloning pipeline is under active development and may not be fully functional yet.
+### Audio Tab Overview
+
+The Audio inspector tab has three sub-tabs:
+
+- **Speech** — Text-to-speech with optional voice cloning. Local: Fish Speech (Replicate), Chatterbox TTS (ComfyUI). Cloud: ElevenLabs v3 (Fal — 20+ pre-built voices, inline emotion tags), Chatterbox HD (Fal — 48kHz voice cloning), Chatterbox OSS (Fal — 24kHz voice cloning). Upload a reference voice clip to clone a voice (supported by all except ElevenLabs, which uses pre-built voice IDs).
+- **Music** — Text-to-music with optional lyrics. Choose local ComfyUI (MiniMax Music 3) or cloud Fal. Includes a prompt builder (genre, mood, instruments, tempo) and duration control.
+- **Foley** — Video-to-foley sound effects. Choose local ComfyUI (HunyuanVideo Foley) or cloud Fal/Replicate. For local, select a video from your library or upload one. For cloud, provide a public video URL.
+
+> 💡 **Cloud vs Local:** Cloud audio drivers (Fal, Replicate) require no GPU or model downloads — just an API key. Local ComfyUI drivers run on your own GPU with no per-run cost.
 
 ---
 
@@ -553,6 +570,9 @@ Local video models require specific custom nodes installed in ComfyUI. Here's wh
 | **LTX Video 2.3** | [LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) |
 | **Wan Video** | [WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) |
 | **MiniMax H3** | [MiniMax H3 nodes](https://github.com/kijai/ComfyUI-MiniMax) |
+| **MiniMax Music 3** | [MiniMax Music 3 nodes](https://github.com/kijai/ComfyUI-MiniMax) |
+| **Chatterbox TTS** | [Chatterbox ComfyUI custom node](https://github.com/chatterbox-ai/chatterbox-comfyui) |
+| **HunyuanVideo Foley** | [HunyuanVideo-Foley nodes](https://github.com/Tencent-Hunyuan/HunyuanVideo-Foley) + [VHS VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) |
 
 **Image models** (Z-Image, Qwen Image, Flux 2, Krea 2) require their respective custom nodes - check the ComfyUI Manager for the latest installations.
 
@@ -612,6 +632,22 @@ Local models require specific `.safetensors` files downloaded into your ComfyUI 
 > 💡 Model files can be found on [HuggingFace](https://huggingface.co/) or [CivitAI](https://civitai.com/). Search for the exact filename. FP8/INT8 variants are recommended for 12–16 GB VRAM GPUs.
 >
 > ⚠️ **Don't need all models?** Start with just **Z-Image** (fastest image model) and **LTX Video 2.3** (basic T2V/I2V). Add more as you need them. Cloud models (Fal.ai) require zero downloads.
+
+### Audio Models
+
+| Model | Model Files | ComfyUI Folder |
+| ----- | ----------- | -------------- |
+| **Fish Speech** (cloud) | *(no local files — uses Replicate API)* | — |
+| **Fish Speech** (local) | Fish Speech model files | Per [Fish Speech docs](https://github.com/fishaudio/fish-speech) |
+| **MiniMax Music 3** | `minimax_music3_dit_fp16.safetensors` | `models/diffusion_models/` |
+| | `minimax_music3_text_encoder_pruned_int8_convrot.safetensors` | `models/clip/` |
+| | `minimax_music3_dav.safetensors` | `models/vae/` |
+| **Chatterbox TTS** | Chatterbox model files | Per [Chatterbox docs](https://github.com/chatterbox-ai/chatterbox) |
+| **HunyuanVideo Foley** | `hunyuanvideo_foley.safetensors` | `models/diffusion_models/` |
+| | `vae_128d_48k_fp16.safetensors` | `models/vae/` |
+| | `synchformer_state_dict_fp16.safetensors` | `models/clip/` |
+
+> 💡 **Audio model uploads:** You can upload audio model files to ComfyUI via the Settings panel. The generic model upload endpoint supports `audio` and `audio_models` subdirectories in addition to the standard model folders.
 
 ---
 

@@ -1,0 +1,127 @@
+{
+  "40": {
+    "inputs": {
+      "hunyuan_model": [
+        "73",
+        0
+      ],
+      "batch_size": 1,
+      "sampler": "euler",
+      "frame_rate": 24,
+      "negative_prompt": "noisy, harsh, crash, bang",
+      "block_swap_args": [
+        "74",
+        0
+      ],
+      "prompt": "FOLEY_PROMPT_PLACEHOLDER",
+      "cfg_scale": 4.5,
+      "duration": 10,
+      "force_offload": false,
+      "steps": 50,
+      "seed": 55574,
+      "image": [
+        "71",
+        0
+      ],
+      "torch_compile_cfg": [
+        "75",
+        0
+      ],
+      "hunyuan_deps": [
+        "4",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Hunyuan Foley Sampler"
+    },
+    "class_type": "HunyuanFoleySampler"
+  },
+  "17": {
+    "inputs": {
+      "audio_batch": [
+        "40",
+        1
+      ],
+      "index": 1
+    },
+    "_meta": {
+      "title": "Select Audio From Batch"
+    },
+    "class_type": "SelectAudioFromBatch"
+  },
+  "23": {
+    "inputs": {
+      "audio": [
+        "17",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Preview Audio"
+    },
+    "class_type": "PreviewAudio"
+  },
+  "73": {
+    "inputs": {
+      "model_name": "hunyuanvideo_foley.safetensors",
+      "quantization": "auto",
+      "precision": "bf16"
+    },
+    "_meta": {
+      "title": "Hunyuan Model Loader"
+    },
+    "class_type": "HunyuanModelLoader"
+  },
+  "75": {
+    "inputs": {
+      "fullgraph": false,
+      "backend": "inductor",
+      "dynamic": "false",
+      "dynamo_cache_limit": 64,
+      "mode": "default"
+    },
+    "_meta": {
+      "title": "Hunyuan Foley Torch Compile"
+    },
+    "class_type": "HunyuanFoleyTorchCompile"
+  },
+  "4": {
+    "inputs": {
+      "synchformer_name": "synchformer_state_dict_fp16.safetensors",
+      "vae_name": "vae_128d_48k_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Hunyuan Dependencies Loader"
+    },
+    "class_type": "HunyuanDependenciesLoader"
+  },
+  "74": {
+    "inputs": {
+      "block_swap_debug": false,
+      "prefetch_blocks": 1,
+      "use_non_blocking": false,
+      "blocks_to_swap": 30
+    },
+    "_meta": {
+      "title": "Hunyuan Block Swap"
+    },
+    "class_type": "HunyuanBlockSwap"
+  },
+  "71": {
+    "inputs": {
+      "custom_height": 0,
+      "select_every_nth": 1,
+      "video": "INPUT_VIDEO_PLACEHOLDER",
+      "frame_load_cap": 0,
+      "force_rate": 0,
+      "format": "AnimateDiff",
+      "skip_first_frames": 0,
+      "custom_width": 512
+    },
+    "_meta": {
+      "title": "Load Video (VHS)"
+    },
+    "class_type": "VHS_LoadVideoPath"
+  }
+}

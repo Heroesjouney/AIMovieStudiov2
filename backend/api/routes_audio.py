@@ -38,7 +38,15 @@ class AudioJobRequest(BaseModel):
     duration_seconds: Optional[float] = None
     reference_audio_filename: Optional[str] = None
     input_video_filename: Optional[str] = None
+    input_video_url: Optional[str] = None
     use_mock: bool = False
+    # Music generation fields
+    lyrics: Optional[str] = None
+    seed: Optional[int] = None
+    steps: Optional[int] = None
+    cfg: Optional[float] = None
+    # Foley generation fields
+    negative_prompt: Optional[str] = None
 
 
 def _audio_dir(project_id: str) -> Path:
@@ -90,17 +98,75 @@ async def start_audio_job(req: AudioJobRequest):
             job["updated_at"] = datetime.utcnow().isoformat()
             raise HTTPException(status_code=400, detail=f"Unknown audio generator: {req.generator}")
 
+        # Resolve input video path for foley generation
+        video_path = None
+        video_url = req.input_video_url  # Cloud drivers need a public URL
+        if req.input_video_filename:
+            project_dir = VAULT_DIR / req.project_id
+            video_candidates = [
+                project_dir / "videos" / req.input_video_filename,
+                project_dir / "foley_videos" / req.input_video_filename,
+                project_dir / req.input_video_filename,
+            ]
+            # Also search recursively in videos/, shots/, and foley_videos/ subdirectories
+            for subdir in ("videos", "shots", "foley_videos"):
+                search_dir = project_dir / subdir
+                if search_dir.exists():
+                    for sub in search_dir.rglob(req.input_video_filename):
+                        video_candidates.insert(0, sub)
+                        break
+            for vc in video_candidates:
+                if vc.exists():
+                    video_path = str(vc)
+                    break
+
         gen_req = AudioGenerationRequest(
             text=req.text,
             language=req.language,
             voice_id=req.voice_id,
             reference_audio_path=str(_references_dir(req.project_id) / req.reference_audio_filename) if req.reference_audio_filename else None,
+            lyrics=req.lyrics,
+            duration_seconds=req.duration_seconds,
+            seed=req.seed,
+            steps=req.steps,
+            cfg=req.cfg,
+            clip_name=req.clip_name,
+            video_path=video_path,
+            negative_prompt=req.negative_prompt,
         )
+        # Pass video_url via extra_params for cloud drivers
+        if video_url:
+            gen_req.extra_params["video_url"] = video_url
 
         job["status"] = "processing"
         job["updated_at"] = datetime.utcnow().isoformat()
 
         response = await driver.generate_speech(gen_req)
+
+        # Check if the driver returned a processing status (e.g. ComfyUI)
+        # In this case, the job stays in "processing" and is polled via /status
+        response_status = getattr(response, "status", None)
+        response_status_val = response_status.value if response_status else None
+
+        if response_status_val == "failed":
+            job["status"] = "failed"
+            job["error_message"] = getattr(response, "error_message", "Generation failed")
+            job["updated_at"] = datetime.utcnow().isoformat()
+            return {
+                "job_id": job_id,
+                "status": job["status"],
+                "message": job.get("error_message", "Failed"),
+            }
+
+        if response_status_val == "processing":
+            # Async driver (e.g. ComfyUI) — job will be polled via /status/{job_id}
+            job["status"] = "processing"
+            job["updated_at"] = datetime.utcnow().isoformat()
+            return {
+                "job_id": job_id,
+                "status": "processing",
+                "message": "Audio generation started",
+            }
 
         # Save audio to project audio directory
         audio_folder = _audio_dir(req.project_id) / job_id
@@ -111,21 +177,44 @@ async def start_audio_job(req: AudioJobRequest):
         filename = f"{clip_name}{ext}"
         filepath = audio_folder / filename
 
-        # If the driver returned a URL or path, try to download/copy it
-        if hasattr(response, "audio_url") and response.audio_url:
-            job["audio_url"] = f"/assets/{req.project_id}/audio/{job_id}/{filename}"
-            job["status"] = "completed"
-        elif hasattr(response, "audio_path") and response.audio_path:
-            if os.path.exists(response.audio_path):
-                shutil.copy2(response.audio_path, filepath)
+        # If the driver returned a URL or path, download/copy it into the vault
+        remote_audio_url = getattr(response, "audio_url", None)
+        local_audio_path = getattr(response, "audio_path", None)
+
+        if remote_audio_url and remote_audio_url.startswith("http"):
+            # Remote URL — download it into the vault
+            import aiohttp
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(remote_audio_url) as dl_resp:
+                        if dl_resp.status == 200:
+                            with open(filepath, "wb") as f:
+                                f.write(await dl_resp.read())
+                            job["audio_url"] = f"/assets/{req.project_id}/audio/{job_id}/{filename}"
+                            job["status"] = "completed"
+                        else:
+                            job["status"] = "failed"
+                            job["error_message"] = f"Failed to download audio (HTTP {dl_resp.status})"
+            except Exception as dl_err:
+                job["status"] = "failed"
+                job["error_message"] = f"Failed to download audio: {dl_err}"
+        elif remote_audio_url and not remote_audio_url.startswith("http"):
+            # Local URL (e.g. /assets/...) — copy from vault
+            source_path = VAULT_DIR / remote_audio_url.lstrip("/").removeprefix("assets/")
+            if source_path.exists():
+                shutil.copy2(source_path, filepath)
                 job["audio_url"] = f"/assets/{req.project_id}/audio/{job_id}/{filename}"
                 job["status"] = "completed"
             else:
                 job["status"] = "failed"
-                job["error_message"] = "Audio file not found after generation"
+                job["error_message"] = f"Audio file not found at {source_path}"
+        elif local_audio_path and os.path.exists(local_audio_path):
+            shutil.copy2(local_audio_path, filepath)
+            job["audio_url"] = f"/assets/{req.project_id}/audio/{job_id}/{filename}"
+            job["status"] = "completed"
         else:
             job["status"] = "completed"
-            job["audio_url"] = getattr(response, "audio_url", None)
+            job["audio_url"] = remote_audio_url
 
         if req.duration_seconds:
             job["duration_seconds"] = req.duration_seconds
@@ -148,10 +237,62 @@ async def start_audio_job(req: AudioJobRequest):
 
 @router.get("/status/{job_id}")
 async def get_audio_job_status(job_id: str):
-    """Get the status of an audio generation job."""
+    """Get the status of an audio generation job.
+
+    For ComfyUI drivers, this polls the driver for updates when the job
+    is still processing.
+    """
     job = _audio_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Audio job not found")
+
+    # If the job is still processing, poll the driver for updates
+    if job.get("status") == "processing":
+        req_data = job.get("request", {})
+        generator = req_data.get("generator", "fish_speech")
+        driver = get_audio_driver(generator)
+        if driver:
+            try:
+                response = await driver.check_status(job_id)
+                if response.status.value == "completed":
+                    # Download the audio to the vault
+                    remote_url = response.audio_url
+                    if remote_url and remote_url.startswith("http"):
+                        # ComfyUI URL — download to vault
+                        project_id = req_data.get("project_id", "default")
+                        audio_folder = _audio_dir(project_id) / job_id
+                        audio_folder.mkdir(parents=True, exist_ok=True)
+                        clip_name = req_data.get("clip_name") or f"audio_{job_id[:8]}"
+                        filename = f"{clip_name}.mp3"
+                        filepath = audio_folder / filename
+                        import aiohttp as _aiohttp
+                        try:
+                            async with _aiohttp.ClientSession() as session:
+                                async with session.get(remote_url) as dl_resp:
+                                    if dl_resp.status == 200:
+                                        filepath.write_bytes(await dl_resp.read())
+                                        job["audio_url"] = f"/assets/{project_id}/audio/{job_id}/{filename}"
+                                        job["status"] = "completed"
+                                    else:
+                                        job["status"] = "failed"
+                                        job["error_message"] = f"Failed to download audio (HTTP {dl_resp.status})"
+                        except Exception as dl_err:
+                            job["status"] = "failed"
+                            job["error_message"] = f"Failed to download audio: {dl_err}"
+                    elif remote_url:
+                        job["audio_url"] = remote_url
+                        job["status"] = "completed"
+                    else:
+                        job["status"] = "completed"
+                    job["updated_at"] = datetime.utcnow().isoformat()
+                elif response.status.value == "failed":
+                    job["status"] = "failed"
+                    job["error_message"] = response.error_message or "Generation failed"
+                    job["updated_at"] = datetime.utcnow().isoformat()
+                # If still processing, don't update — the next poll will check again
+            except Exception as e:
+                print(f"[routes_audio] status poll error: {e}")
+
     return job
 
 

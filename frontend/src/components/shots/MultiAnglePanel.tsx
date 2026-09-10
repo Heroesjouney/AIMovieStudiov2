@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   type ShotResponse, updateShot,
   generateCameraAngles, checkAnglesStatus,
+  saveImageFromUrl,
   CAMERA_ANGLE_PRESETS,
 } from "@/lib/api";
 import {
@@ -55,7 +56,18 @@ export function MultiAnglePanel({ shot, projectId, prompt, onRefresh }: MultiAng
             return { status: done >= subJobs.length ? "completed" : "processing", image_urls: [] };
           },
           async () => {
-            await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...results } });
+            // Save angle images to vault so they appear in the library
+            const savedResults: Record<string, string> = {};
+            for (const [angle, url] of Object.entries(results)) {
+              try {
+                const saved = await saveImageFromUrl(projectId, url);
+                savedResults[angle] = saved.image_url;
+              } catch (e) {
+                console.error(`Failed to save angle image ${angle}:`, e);
+                savedResults[angle] = url;
+              }
+            }
+            await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...savedResults } });
             setSelectedAngles([]);
             await onRefresh();
           },

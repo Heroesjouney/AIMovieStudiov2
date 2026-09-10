@@ -21,6 +21,7 @@ import {
   uploadFoleyVideo,
   listFoleyVideos,
   FoleyVideo,
+  listVideoAssets,
 } from "@/lib/api";
 import {
   Mic,
@@ -123,13 +124,20 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
   const [foleyClipName, setFoleyClipName] = useState("");
   const [speechText, setSpeechText] = useState("");
   const [musicPrompt, setMusicPrompt] = useState("");
+  const [musicLyrics, setMusicLyrics] = useState("");
+  const [musicBackend, setMusicBackend] = useState<"comfy_audio" | "fal_music">("comfy_audio");
   const [foleyPrompt, setFoleyPrompt] = useState("");
+  const [foleyNegativePrompt, setFoleyNegativePrompt] = useState("");
+  const [foleyDuration, setFoleyDuration] = useState(10);
+  const [foleyBackend, setFoleyBackend] = useState<"hunyuan_foley" | "fal_foley" | "replicate_foley">("hunyuan_foley");
   const [foleyVideoFilename, setFoleyVideoFilename] = useState("");
-  const [foleyVideoSource, setFoleyVideoSource] = useState<"library" | "upload">("library");
+  const [foleyVideoUrl, setFoleyVideoUrl] = useState("");
+  const [foleyVideoSource, setFoleyVideoSource] = useState<"library" | "upload" | "url">("library");
   const [availableVideos, setAvailableVideos] = useState<{ id: string; name: string; video_path: string }[]>([]);
   const [uploadedFoleyVideos, setUploadedFoleyVideos] = useState<FoleyVideo[]>([]);
   const [isUploadingFoleyVideo, setIsUploadingFoleyVideo] = useState(false);
-  const [speechGenerator, setSpeechGenerator] = useState<"fish_speech" | "chatterbox_tts">("chatterbox_tts");
+  const [speechGenerator, setSpeechGenerator] = useState<"fish_speech" | "chatterbox_tts" | "fal_elevenlabs" | "fal_chatterbox_hd" | "fal_chatterbox">("fish_speech");
+  const [elevenLabsVoice, setElevenLabsVoice] = useState("Rachel");
   const [musicDuration, setMusicDuration] = useState(10);
   const [referenceFilename, setReferenceFilename] = useState<string | null>(null);
   const [isUploadingReference, setIsUploadingReference] = useState(false);
@@ -165,21 +173,37 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
     };
   }, [projectId]);
 
-  // Load available videos from shots for foley
+  // Load available videos from shots + vault for foley
   useEffect(() => {
     let cancelled = false;
     const loadVideos = async () => {
       try {
-        const res = await listShots(projectId);
+        const [shotsRes, vaultRes] = await Promise.all([
+          listShots(projectId),
+          listVideoAssets(projectId),
+        ]);
         if (cancelled) return;
-        const videosWithPath = (res as Shot[])
+        const shotVideos = (shotsRes as Shot[])
           .filter((s) => s.video_clip_path)
           .map((s) => ({
             id: s.id,
             name: s.name || `Shot ${s.sequence_order}`,
             video_path: s.video_clip_path!,
           }));
-        setAvailableVideos(videosWithPath);
+        const vaultVideos = (vaultRes.videos || []).map((v) => ({
+          id: `vault_${v.filename}`,
+          name: v.filename,
+          video_path: v.video_url,
+        }));
+        // Deduplicate by filename (shot videos may also appear in vault)
+        const seen = new Set<string>();
+        const all = [...shotVideos, ...vaultVideos].filter((v) => {
+          const fname = v.video_path?.split("/").pop() || v.video_path;
+          if (seen.has(fname)) return false;
+          seen.add(fname);
+          return true;
+        });
+        setAvailableVideos(all);
       } catch (e) {
         console.error("Failed to load videos for foley:", e);
       }
@@ -393,12 +417,16 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
     setError(null);
 
     try {
+      const isCloudTTS = speechGenerator.startsWith("fal_");
+      const needsReference = speechGenerator === "chatterbox_tts" || speechGenerator === "fal_chatterbox_hd" || speechGenerator === "fal_chatterbox" || speechGenerator === "fish_speech";
+
       const response = await startAudioJob({
         project_id: projectId,
         clip_name: speechClipName.trim() || undefined,
         text: speechText,
         generator: speechGenerator,
-        reference_audio_filename: speechGenerator === "chatterbox_tts" ? referenceFilename || undefined : undefined,
+        reference_audio_filename: needsReference ? (referenceFilename || undefined) : undefined,
+        voice_id: speechGenerator === "fal_elevenlabs" ? elevenLabsVoice : undefined,
         use_mock: false,
       });
 
@@ -431,8 +459,9 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
         project_id: projectId,
         clip_name: musicClipName.trim() || undefined,
         text: musicPrompt,
-        generator: "stable_audio_music",
+        generator: musicBackend,
         duration_seconds: musicDuration,
+        lyrics: musicLyrics.trim() || undefined,
         use_mock: false,
       });
 
@@ -456,7 +485,13 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
       setError("Please enter a foley prompt describing the sound effects");
       return;
     }
-    if (!foleyVideoFilename.trim()) {
+    const isCloud = foleyBackend === "fal_foley" || foleyBackend === "replicate_foley";
+    if (isCloud) {
+      if (!foleyVideoUrl.trim()) {
+        setError("Cloud foley engines require a public video URL. Switch to the local ComfyUI engine to use a local video file.");
+        return;
+      }
+    } else if (!foleyVideoFilename.trim()) {
       setError("Please enter the video filename for foley generation");
       return;
     }
@@ -469,8 +504,11 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
         project_id: projectId,
         clip_name: foleyClipName.trim() || undefined,
         text: foleyPrompt,
-        generator: "hunyuan_foley",
-        input_video_filename: foleyVideoFilename.trim(),
+        generator: foleyBackend,
+        input_video_filename: !isCloud ? foleyVideoFilename.trim() : undefined,
+        input_video_url: isCloud ? foleyVideoUrl.trim() : undefined,
+        negative_prompt: foleyNegativePrompt.trim() || undefined,
+        duration_seconds: foleyDuration,
         use_mock: false,
       });
 
@@ -569,9 +607,9 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
   };
 
   const AUDIO_TABS = [
-    { id: "speech" as const, label: "Speech", icon: Mic },
-    { id: "music" as const, label: "Music", icon: Music },
-    { id: "foley" as const, label: "Foley", icon: Waves },
+    { id: "speech" as const, label: "Speech", icon: Mic, enabled: true },
+    { id: "music" as const, label: "Music", icon: Music, enabled: true },
+    { id: "foley" as const, label: "Foley", icon: Waves, enabled: true },
   ];
 
   return (
@@ -587,16 +625,20 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
             return (
               <button
                 key={tab.id}
-                onClick={() => setAudioTab(tab.id)}
+                onClick={() => { if (tab.enabled) { setAudioTab(tab.id); setError(null); } }}
+                disabled={!tab.enabled}
                 className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                  isActive
-                    ? "bg-studio-accent text-white shadow-md shadow-studio-accent/20"
-                    : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+                  !tab.enabled
+                    ? "text-studio-muted/40 cursor-not-allowed"
+                    : isActive
+                      ? "bg-studio-accent text-white shadow-md shadow-studio-accent/20"
+                      : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
                 }`}
               >
                 <Icon className="w-4 h-4" />
                 {tab.label}
-                {hasResult && (
+                {!tab.enabled && <span className="text-[9px] opacity-60">soon</span>}
+                {tab.enabled && hasResult && (
                   <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-white/70" : "bg-green-400"}`} />
                 )}
               </button>
@@ -631,8 +673,15 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
               <div>
                 <label className={label}>Engine</label>
                 <select value={speechGenerator} onChange={(e) => setSpeechGenerator(e.target.value as any)} className={input}>
-                  <option value="chatterbox_tts">Chatterbox TTS</option>
-                  <option value="fish_speech">Fish Speech</option>
+                  <optgroup label="Local">
+                    <option value="fish_speech">Fish Speech (Replicate)</option>
+                    <option value="chatterbox_tts">Chatterbox TTS (ComfyUI)</option>
+                  </optgroup>
+                  <optgroup label="Cloud (Fal.ai)">
+                    <option value="fal_elevenlabs">ElevenLabs v3 (Fal)</option>
+                    <option value="fal_chatterbox_hd">Chatterbox HD (Fal)</option>
+                    <option value="fal_chatterbox">Chatterbox OSS (Fal)</option>
+                  </optgroup>
                 </select>
               </div>
               <div>
@@ -646,8 +695,41 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
               </div>
             </div>
 
-            {/* Reference Voice (chatterbox only) */}
-            {speechGenerator === "chatterbox_tts" && (
+            {/* ElevenLabs Voice Selector */}
+            {speechGenerator === "fal_elevenlabs" && (
+              <div>
+                <label className={label}>Voice</label>
+                <select value={elevenLabsVoice} onChange={(e) => setElevenLabsVoice(e.target.value)} className={input}>
+                  <option value="Rachel">Rachel</option>
+                  <option value="Aria">Aria</option>
+                  <option value="Roger">Roger</option>
+                  <option value="Sarah">Sarah</option>
+                  <option value="Laura">Laura</option>
+                  <option value="Charlie">Charlie</option>
+                  <option value="George">George</option>
+                  <option value="Callum">Callum</option>
+                  <option value="River">River</option>
+                  <option value="Liam">Liam</option>
+                  <option value="Charlotte">Charlotte</option>
+                  <option value="Alice">Alice</option>
+                  <option value="Matilda">Matilda</option>
+                  <option value="Will">Will</option>
+                  <option value="Jessica">Jessica</option>
+                  <option value="Eric">Eric</option>
+                  <option value="Chris">Chris</option>
+                  <option value="Brian">Brian</option>
+                  <option value="Daniel">Daniel</option>
+                  <option value="Lily">Lily</option>
+                  <option value="Bill">Bill</option>
+                </select>
+                <p className="mt-1.5 text-[10px] text-studio-muted/60">
+                  Pre-built ElevenLabs voices. Use inline tags like [excited], [whispers], [laughs] in your text for emotion control.
+                </p>
+              </div>
+            )}
+
+            {/* Reference Voice (Fish Speech + Chatterbox support voice cloning) */}
+            {(speechGenerator === "fish_speech" || speechGenerator === "chatterbox_tts" || speechGenerator === "fal_chatterbox_hd" || speechGenerator === "fal_chatterbox") && (
               <div className="p-4 bg-studio-bg rounded-xl border border-studio-border space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider">Reference Voice</label>
@@ -731,7 +813,13 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
                         {isUploadingReference ? "Uploading..." : "Choose file"}
                       </label>
                     </div>
-                    <p className="mt-1.5 text-[10px] text-studio-muted/60">Staged into ComfyUI input folder</p>
+                    <p className="mt-1.5 text-[10px] text-studio-muted/60">
+                      {speechGenerator === "chatterbox_tts"
+                        ? "Uploaded to ComfyUI for voice cloning"
+                        : speechGenerator === "fish_speech"
+                          ? "Sent to Fish Speech for voice cloning"
+                          : "Uploaded to Fal.ai for voice cloning"}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -781,9 +869,15 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className={label}>Engine</label>
-                <div className="px-3 py-2.5 bg-studio-panel border border-studio-border rounded-lg text-sm text-studio-muted">
-                  Stable Audio
-                </div>
+                <select
+                  value={musicBackend}
+                  onChange={(e) => setMusicBackend(e.target.value as "comfy_audio" | "fal_music")}
+                  className={input}
+                  disabled={isSubmittingMusic || musicJob?.status === "processing"}
+                >
+                  <option value="comfy_audio">MiniMax Music 3 (ComfyUI - Local)</option>
+                  <option value="fal_music">MiniMax Music 3 (Fal - Cloud)</option>
+                </select>
               </div>
               <div>
                 <label className={label}>Clip Name <span className="opacity-50 normal-case">(optional)</span></label>
@@ -865,6 +959,19 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
               />
             </div>
 
+            {/* Lyrics textarea */}
+            <div>
+              <label className={label}>Lyrics <span className="opacity-50 normal-case">(optional)</span></label>
+              <textarea
+                value={musicLyrics}
+                onChange={(e) => setMusicLyrics(e.target.value)}
+                placeholder="[Verse]&#10;Lyrics for your song...&#10;&#10;[Chorus]&#10;Leave empty for instrumental"
+                rows={4}
+                className={textarea}
+                disabled={isSubmittingMusic || musicJob?.status === "processing"}
+              />
+            </div>
+
             <button
               onClick={handleGenerateMusic}
               disabled={isSubmittingMusic || musicJob?.status === "processing" || !musicPrompt.trim()}
@@ -916,9 +1023,16 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className={label}>Engine</label>
-                <div className="px-3 py-2.5 bg-studio-panel border border-studio-border rounded-lg text-sm text-studio-muted">
-                  Hunyuan Foley
-                </div>
+                <select
+                  value={foleyBackend}
+                  onChange={(e) => setFoleyBackend(e.target.value as "hunyuan_foley" | "fal_foley" | "replicate_foley")}
+                  className={input}
+                  disabled={isSubmittingFoley || foleyJob?.status === "processing"}
+                >
+                  <option value="hunyuan_foley">HunyuanVideo Foley (ComfyUI - Local)</option>
+                  <option value="fal_foley">HunyuanVideo Foley (Fal - Cloud)</option>
+                  <option value="replicate_foley">HunyuanVideo Foley (Replicate - Cloud)</option>
+                </select>
               </div>
               <div>
                 <label className={label}>Clip Name <span className="opacity-50 normal-case">(optional)</span></label>
@@ -931,13 +1045,29 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
               </div>
             </div>
 
+            {/* Duration */}
+            <div>
+              <label className={label}>Duration</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={1}
+                  max={30}
+                  value={foleyDuration}
+                  onChange={(e) => setFoleyDuration(Number(e.target.value) || 10)}
+                  className="flex-1 accent-studio-accent"
+                />
+                <span className="text-sm text-studio-text font-medium w-16 text-right">{foleyDuration}s</span>
+              </div>
+            </div>
+
             {/* Video Source */}
             <div>
               <label className={label}>Video Source</label>
               <div className="flex gap-2 mb-3">
                 <button
                   type="button"
-                  onClick={() => { setFoleyVideoSource("library"); setFoleyVideoFilename(""); }}
+                  onClick={() => { setFoleyVideoSource("library"); setFoleyVideoFilename(""); setFoleyVideoUrl(""); }}
                   className={`flex-1 h-9 text-xs font-medium rounded-lg border transition-colors ${
                     foleyVideoSource === "library"
                       ? "border-studio-accent bg-studio-accent/10 text-studio-accent"
@@ -948,7 +1078,7 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setFoleyVideoSource("upload"); setFoleyVideoFilename(""); }}
+                  onClick={() => { setFoleyVideoSource("upload"); setFoleyVideoFilename(""); setFoleyVideoUrl(""); }}
                   className={`flex-1 h-9 text-xs font-medium rounded-lg border transition-colors ${
                     foleyVideoSource === "upload"
                       ? "border-studio-accent bg-studio-accent/10 text-studio-accent"
@@ -957,7 +1087,33 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
                 >
                   Upload New
                 </button>
+                <button
+                  type="button"
+                  onClick={() => { setFoleyVideoSource("url"); setFoleyVideoFilename(""); setFoleyVideoUrl(""); }}
+                  className={`flex-1 h-9 text-xs font-medium rounded-lg border transition-colors ${
+                    foleyVideoSource === "url"
+                      ? "border-studio-accent bg-studio-accent/10 text-studio-accent"
+                      : "border-studio-border bg-studio-panel text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+                  }`}
+                >
+                  Public URL
+                </button>
               </div>
+
+              {foleyVideoSource === "url" && (
+                <div className="space-y-2">
+                  <input
+                    value={foleyVideoUrl}
+                    onChange={(e) => setFoleyVideoUrl(e.target.value)}
+                    placeholder="https://example.com/video.mp4"
+                    className={input}
+                    disabled={isSubmittingFoley || foleyJob?.status === "processing"}
+                  />
+                  <p className="text-[10px] text-studio-muted/60">
+                    Cloud foley engines (Fal/Replicate) require a publicly accessible video URL
+                  </p>
+                </div>
+              )}
 
               {foleyVideoSource === "library" && (
                 <div className="relative">
@@ -968,9 +1124,18 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
                     disabled={isSubmittingFoley || foleyJob?.status === "processing"}
                   >
                     <option value="">Select a video...</option>
-                    {availableVideos.length > 0 && (
+                    {availableVideos.filter((v) => v.id.startsWith("vault_")).length > 0 && (
+                      <optgroup label="Vault Videos">
+                        {availableVideos.filter((v) => v.id.startsWith("vault_")).map((v) => (
+                          <option key={v.id} value={v.video_path?.split("/").pop() || v.video_path}>
+                            {v.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {availableVideos.filter((v) => !v.id.startsWith("vault_")).length > 0 && (
                       <optgroup label="Shot Videos">
-                        {availableVideos.map((v) => (
+                        {availableVideos.filter((v) => !v.id.startsWith("vault_")).map((v) => (
                           <option key={v.id} value={v.video_path?.split("/").pop() || v.video_path}>
                             {v.name}
                           </option>
@@ -1033,6 +1198,21 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
               )}
             </div>
 
+            {/* Input Video Preview */}
+            {foleyVideoFilename && foleyVideoSource !== "url" && (
+              <div className="p-3 bg-studio-bg rounded-xl border border-studio-border">
+                <video
+                  src={
+                    availableVideos.find((v) => (v.video_path?.split("/").pop() || v.video_path) === foleyVideoFilename)?.video_path
+                    || `/assets/${projectId}/foley_videos/${foleyVideoFilename}`
+                  }
+                  controls
+                  className="w-full rounded-lg max-h-48"
+                  key={foleyVideoFilename}
+                />
+              </div>
+            )}
+
             {/* Sound presets */}
             <div className="p-4 bg-studio-bg rounded-xl border border-studio-border space-y-3">
               <label className="text-xs font-semibold text-studio-muted uppercase tracking-wider">Sound Presets</label>
@@ -1075,6 +1255,18 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
                 placeholder="Describe the sound effects for the video... (e.g., footsteps on gravel, wind blowing, door creaking)"
                 rows={3}
                 className={textarea}
+                disabled={isSubmittingFoley || foleyJob?.status === "processing"}
+              />
+            </div>
+
+            {/* Negative Prompt */}
+            <div>
+              <label className={label}>Negative Prompt <span className="opacity-50 normal-case">(optional)</span></label>
+              <input
+                value={foleyNegativePrompt}
+                onChange={(e) => setFoleyNegativePrompt(e.target.value)}
+                placeholder="e.g., noisy, harsh, crash, bang"
+                className={input}
                 disabled={isSubmittingFoley || foleyJob?.status === "processing"}
               />
             </div>

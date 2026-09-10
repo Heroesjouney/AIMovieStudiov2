@@ -1,0 +1,42 @@
+{
+  "4": {
+    "inputs": {
+      "UNKNOWN": "This is Chatterbox—and it just recreated my voice from a nine-second recording.\n\nGive it a shot with your own voice and hear the results for yourself.",
+      "UNKNOWN_1": 0.5,
+      "UNKNOWN_2": 0.5,
+      "UNKNOWN_3": 0.8,
+      "UNKNOWN_4": 390519100,
+      "UNKNOWN_5": "randomize",
+      "UNKNOWN_6": false,
+      "UNKNOWN_7": false,
+      "audio_prompt": [
+        "6",
+        0
+      ]
+    },
+    "_meta": {}
+  },
+  "5": {
+    "inputs": {
+      "filename_prefix": "audio/chatterbox_tts",
+      "quality": "V0",
+      "audio": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "SaveAudioMP3",
+    "_meta": {
+      "title": "Save Audio (MP3) (DEPRECATED)"
+    }
+  },
+  "6": {
+    "inputs": {
+      "audio": "chatterbox_input_target_voice.mp3"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "Load Audio"
+    }
+  }
+}

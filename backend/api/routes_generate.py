@@ -192,6 +192,7 @@ async def upload_model_to_subdir(subdirectory: str, file: UploadFile = File(...)
         "checkpoints", "loras", "vae", "clip", "unet", "controlnet",
         "upscale_models", "gligen", "hypernetworks", "style_models",
         "diffusion_models", "text_encoders",
+        "audio", "audio_models",
     }
     if subdirectory not in ALLOWED_SUBDIRS:
         raise HTTPException(

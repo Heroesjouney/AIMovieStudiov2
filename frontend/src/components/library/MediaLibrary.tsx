@@ -107,7 +107,7 @@ function AudioRow({
       </div>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+        className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-100 transition-all shrink-0"
       >
         <Trash2 className="w-3 h-3" />
       </button>
@@ -319,8 +319,12 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
 
   const handleDelete = async (assetId: string) => {
     if (!confirm("Delete this asset?")) return;
-    await deleteAsset(projectId, assetId);
-    await refresh();
+    try {
+      await deleteAsset(projectId, assetId);
+      await refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete asset");
+    }
   };
 
   // --- Timeline mode helpers ---
@@ -555,9 +559,9 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
     return groups;
   }, [audioFiles]);
 
-  // Split shots into video clips (have video_clip_path) and storyboard frames (only frame_image_path)
+  // Split shots into video clips (have video_clip_path) and storyboard frames (have frame_image_path)
   const shotsWithVideo = storeShots.filter((s) => s.video_clip_path);
-  const shotsWithFramesOnly = storeShots.filter((s) => s.frame_image_path && !s.video_clip_path);
+  const shotsWithFramesOnly = storeShots.filter((s) => s.frame_image_path);
 
   // Group by scene
   const groupShotsByScene = (shotList: any[]) => {
@@ -704,7 +708,8 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDelete(asset.id); }}
-                      className="absolute top-1 right-1 p-1 rounded-full bg-black/60 backdrop-blur-sm hover:bg-studio-danger text-white opacity-0 group-hover:opacity-100 transition-all"
+                      className="absolute top-1 right-1 p-1 rounded-full bg-black/60 backdrop-blur-sm hover:bg-studio-danger text-white transition-all"
+                      title="Delete asset"
                     >
                       <Trash2 className="w-3 h-3" />
                     </button>
@@ -766,7 +771,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                         </div>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDeleteVideoAsset(video); }}
-                          className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                          className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-100 transition-all shrink-0"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -831,7 +836,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                               )}
                               <button
                                 onClick={(e) => { e.stopPropagation(); const activeTake = takes.find((t: any) => t.selected) || takes[0]; if (activeTake) setPreviewTake({ path: activeTake.path, id: activeTake.id, model_id: activeTake.model_id, shotName: shot.name }); }}
-                                className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                                className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-100 transition-all shrink-0"
                                 title="Preview video"
                               >
                                 <Play className="w-3 h-3" />
@@ -864,7 +869,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                                     {!take.selected && (
                                       <button
                                         onClick={(e) => { e.stopPropagation(); handleSelectTakeInLibrary(shot.id, take.id); }}
-                                        className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                                        className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-100 transition-all shrink-0"
                                         title="Select as active"
                                       >
                                         <Check className="w-3 h-3" />
@@ -872,7 +877,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                                     )}
                                     <button
                                       onClick={(e) => { e.stopPropagation(); setPreviewTake({ path: take.path, id: take.id, model_id: take.model_id, shotName: shot.name }); }}
-                                      className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                                      className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-100 transition-all shrink-0"
                                       title="Preview"
                                     >
                                       <Video className="w-3 h-3" />
@@ -880,7 +885,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                                     {!isCameraMode && (
                                       <button
                                         onClick={(e) => { e.stopPropagation(); handleAddTakeToTimeline(shot, take); }}
-                                        className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                                        className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-100 transition-all shrink-0"
                                         title="Send to timeline"
                                       >
                                         <Send className="w-3 h-3" />
@@ -888,7 +893,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                                     )}
                                     <button
                                       onClick={(e) => { e.stopPropagation(); if (confirm(`Delete take ${take.id}?`)) handleDeleteTakeInLibrary(shot.id, take.id); }}
-                                      className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                                      className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-100 transition-all shrink-0"
                                       title="Delete take"
                                     >
                                       <Trash2 className="w-3 h-3" />
@@ -1005,7 +1010,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                   </div>
                   <button
                     onClick={(e) => { e.stopPropagation(); handleDeleteImageAsset(image); }}
-                    className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                    className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-100 transition-all shrink-0"
                   >
                     <Trash2 className="w-3 h-3" />
                   </button>

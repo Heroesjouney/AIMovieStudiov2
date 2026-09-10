@@ -253,6 +253,64 @@ async def list_images(project_id: str = Query(default="default")):
     return {"project_id": project_id, "images": images}
 
 
+@router.post("/images/save-from-url")
+async def save_image_from_url(project_id: str, image_url: str, filename: Optional[str] = None):
+    """Download a generated image from a remote URL and save it to the vault's images/ directory.
+
+    Used to persist generated storyboard frames so they appear in the Library.
+    """
+    images_dir = VAULT_DIR / project_id / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine filename
+    if not filename:
+        # Try to extract from URL, or generate one
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(image_url)
+        url_filename = Path(parsed.path).name
+        if url_filename and "." in url_filename:
+            filename = url_filename
+        else:
+            import uuid as _uuid
+            filename = f"generated_{_uuid.uuid4().hex[:8]}.png"
+
+    # Avoid collisions
+    dest = images_dir / filename
+    if dest.exists():
+        stem = dest.stem
+        suffix = dest.suffix
+        counter = 1
+        while dest.exists():
+            dest = images_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+        filename = dest.name
+
+    try:
+        # Handle local /assets/ paths (ComfyUI output already in vault)
+        if image_url.startswith("/assets/"):
+            src = VAULT_DIR / image_url[len("/assets/"):]
+            if src.exists():
+                shutil.copy2(str(src), str(dest))
+            else:
+                raise HTTPException(status_code=400, detail=f"Local image not found: {src}")
+        else:
+            # Download from remote URL (Fal, Replicate, ComfyUI view URL)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(image_url)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to download image: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save image: {e}")
+
+    return {
+        "filename": filename,
+        "image_url": f"/assets/{project_id}/images/{filename}",
+        "size_bytes": dest.stat().st_size,
+    }
+
+
 @router.delete("/images/{project_id}/{filename:path}")
 async def delete_image(project_id: str, filename: str):
     decoded_filename = unquote(filename)
@@ -606,6 +664,14 @@ async def get_waveform(project_id: str, filename: str):
         VAULT_DIR / project_id / "videos" / decoded,
         VAULT_DIR / project_id / decoded,
     ]
+    # Also search recursively in audio/ subdirectories (audio/<uuid>/<filename>)
+    audio_base = VAULT_DIR / project_id / "audio"
+    if audio_base.exists():
+        for sub in audio_base.iterdir():
+            if sub.is_dir():
+                candidates.insert(0, sub / decoded)
+            elif sub.name == decoded:
+                candidates.insert(0, sub)
     file_path = None
     for c in candidates:
         if c.exists():

@@ -128,6 +128,7 @@ export interface SceneAssetRef {
   asset_type: string;
   asset_name: string;
   image_path: string | null;
+  retention?: string;
 }
 
 export interface SceneScriptBreakdownShot {
@@ -414,7 +415,8 @@ export async function createAsset(projectId: string, type: string, name: string,
 }
 
 export async function deleteAsset(projectId: string, assetId: string): Promise<void> {
-  await fetch(`${API_BASE}/assets/${projectId}/${assetId}`, { method: "DELETE" });
+  const resp = await fetch(`${API_BASE}/assets/${projectId}/${assetId}`, { method: "DELETE" });
+  if (!resp.ok) throw new Error(`Failed to delete asset: ${resp.statusText}`);
 }
 
 export async function updateAsset(projectId: string, assetId: string, updates: Record<string, any>): Promise<AssetResponse> {
@@ -987,6 +989,39 @@ export async function removeSceneReferenceAsset(projectId: string, sceneId: stri
   return resp.json();
 }
 
+export async function updateSceneReferenceRetention(
+  projectId: string, sceneId: string, assetId: string, retention: string,
+): Promise<SceneResponse> {
+  const resp = await fetch(`${API_BASE}/scenes/${projectId}/${sceneId}/reference-assets/${assetId}/retention`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ retention }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Unknown error" }));
+    throw new Error(err.detail || "Failed to update retention");
+  }
+  return resp.json();
+}
+
+export interface SyncRecipeResult {
+  status: string;
+  scene_id: string;
+  shots_synced: number;
+  recipe_asset_count: number;
+}
+
+export async function syncSceneRecipeToShots(projectId: string, sceneId: string): Promise<SyncRecipeResult> {
+  const resp = await fetch(`${API_BASE}/scenes/${projectId}/${sceneId}/sync-recipe`, {
+    method: "POST",
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Unknown error" }));
+    throw new Error(err.detail || "Failed to sync recipe to shots");
+  }
+  return resp.json();
+}
+
 export async function generateShotVariation(
   projectId: string,
   sourceShotId: string,
@@ -1142,11 +1177,17 @@ export interface AudioRenderRequest {
   voice_id?: string;
   language?: string;
   speed?: number;
-  generator?: "fish_speech" | "chatterbox_tts" | "stable_audio_music" | "hunyuan_foley";
+  generator?: "fish_speech" | "chatterbox_tts" | "stable_audio_music" | "hunyuan_foley" | "comfy_audio" | "minimax_music3" | "fal_music" | "fal_foley" | "replicate_foley" | "fal_elevenlabs" | "fal_chatterbox_hd" | "fal_chatterbox";
   duration_seconds?: number;
   reference_audio_filename?: string;
   input_video_filename?: string;
+  input_video_url?: string;
   use_mock?: boolean;
+  lyrics?: string;
+  seed?: number;
+  steps?: number;
+  cfg?: number;
+  negative_prompt?: string;
 }
 
 export interface AudioJobStatus {
@@ -1368,6 +1409,14 @@ export async function uploadImageAsset(
 export async function listImageAssets(projectId: string = "default"): Promise<{ project_id: string; images: ImageAssetItem[] }> {
   const resp = await fetch(`${API_BASE}/assets/images/list?project_id=${projectId}`);
   if (!resp.ok) throw new Error(`Failed to list images: ${resp.statusText}`);
+  return resp.json();
+}
+
+export async function saveImageFromUrl(projectId: string, imageUrl: string, filename?: string): Promise<{ filename: string; image_url: string }> {
+  const params = new URLSearchParams({ project_id: projectId, image_url: imageUrl });
+  if (filename) params.set("filename", filename);
+  const resp = await fetch(`${API_BASE}/assets/images/save-from-url?${params}`, { method: "POST" });
+  if (!resp.ok) throw new Error(`Failed to save image: ${resp.statusText}`);
   return resp.json();
 }
 

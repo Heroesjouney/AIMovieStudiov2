@@ -53,6 +53,7 @@ class SceneAssetRef(BaseModel):
     asset_type: str
     asset_name: str
     image_path: Optional[str] = None
+    retention: str = "fully_preserved"  # fully_preserved | partially_preserved | attribute_transfer | weak_reference
 
 
 class SceneDefaults(BaseModel):

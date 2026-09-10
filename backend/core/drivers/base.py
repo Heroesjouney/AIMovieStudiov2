@@ -106,12 +106,22 @@ class VideoGenerationResponse(BaseModel):
 
 
 class AudioGenerationRequest(BaseModel):
-    """Request for audio generation (TTS)."""
-    text: str = Field(..., min_length=1, max_length=5000)
+    """Request for audio generation (TTS, music, foley)."""
+    text: str = Field(..., min_length=1, max_length=10000)
     language: str = Field(default="en")
     voice_id: Optional[str] = None
     reference_audio_path: Optional[str] = Field(None, description="Reference audio for voice cloning")
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
+    # Music generation fields (used by ComfyUI audio drivers)
+    lyrics: Optional[str] = Field(None, description="Lyrics for music generation")
+    duration_seconds: Optional[float] = Field(None, description="Target audio duration in seconds")
+    seed: Optional[int] = None
+    steps: Optional[int] = None
+    cfg: Optional[float] = None
+    clip_name: Optional[str] = None
+    video_path: Optional[str] = Field(None, description="Input video path for foley/video-to-audio")
+    negative_prompt: Optional[str] = Field(None, description="Negative prompt for audio generation")
+    extra_params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AudioGenerationResponse(BaseModel):

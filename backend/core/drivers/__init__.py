@@ -98,6 +98,15 @@ def get_audio_driver(model_id: str = "fish_speech") -> Optional[AudioDriver]:
     if model_id == "fish_speech":
         from .fish_speech import FishSpeechDriver
         return FishSpeechDriver()
+    if model_id in ("comfy_audio", "minimax_music3", "chatterbox_tts", "hunyuan_foley"):
+        from .comfy_audio import ComfyAudioDriver
+        return ComfyAudioDriver(model_id=model_id)
+    if model_id in ("fal_music", "fal_foley", "fal_elevenlabs", "fal_chatterbox_hd", "fal_chatterbox"):
+        from .fal_audio import FalAudioDriver
+        return FalAudioDriver(model_id=model_id)
+    if model_id == "replicate_foley":
+        from .replicate_foley import ReplicateFoleyDriver
+        return ReplicateFoleyDriver()
     return None
 
 
@@ -298,6 +307,74 @@ def list_audio_drivers() -> List[DriverInfo]:
         display_name="Fish Speech",
         category=DriverCategory.CLOUD if os.getenv("REPLICATE_API_TOKEN") else DriverCategory.LOCAL,
         supported_features=["tts", "voice_cloning"],
+        requires_api_key=bool(os.getenv("REPLICATE_API_TOKEN")),
+        api_key_env_var="REPLICATE_API_TOKEN",
+    ))
+    drivers.append(DriverInfo(
+        driver_id="comfy_audio",
+        display_name="MiniMax Music 3 (ComfyUI)",
+        category=DriverCategory.LOCAL,
+        supported_features=["music"],
+    ))
+    drivers.append(DriverInfo(
+        driver_id="chatterbox_tts",
+        display_name="Chatterbox TTS (ComfyUI)",
+        category=DriverCategory.LOCAL,
+        supported_features=["tts", "voice_cloning"],
+    ))
+    drivers.append(DriverInfo(
+        driver_id="hunyuan_foley",
+        display_name="HunyuanVideo Foley (ComfyUI)",
+        category=DriverCategory.LOCAL,
+        supported_features=["foley"],
+    ))
+    # Cloud - Fal.ai
+    drivers.append(DriverInfo(
+        driver_id="fal_music",
+        display_name="MiniMax Music 3 (Fal)",
+        category=DriverCategory.CLOUD,
+        supported_features=["music"],
+        requires_api_key=bool(os.getenv("FAL_KEY")),
+        api_key_env_var="FAL_KEY",
+    ))
+    drivers.append(DriverInfo(
+        driver_id="fal_foley",
+        display_name="HunyuanVideo Foley (Fal)",
+        category=DriverCategory.CLOUD,
+        supported_features=["foley"],
+        requires_api_key=bool(os.getenv("FAL_KEY")),
+        api_key_env_var="FAL_KEY",
+    ))
+    drivers.append(DriverInfo(
+        driver_id="fal_elevenlabs",
+        display_name="ElevenLabs v3 (Fal)",
+        category=DriverCategory.CLOUD,
+        supported_features=["tts"],
+        requires_api_key=bool(os.getenv("FAL_KEY")),
+        api_key_env_var="FAL_KEY",
+    ))
+    drivers.append(DriverInfo(
+        driver_id="fal_chatterbox_hd",
+        display_name="Chatterbox HD (Fal)",
+        category=DriverCategory.CLOUD,
+        supported_features=["tts", "voice_cloning"],
+        requires_api_key=bool(os.getenv("FAL_KEY")),
+        api_key_env_var="FAL_KEY",
+    ))
+    drivers.append(DriverInfo(
+        driver_id="fal_chatterbox",
+        display_name="Chatterbox OSS (Fal)",
+        category=DriverCategory.CLOUD,
+        supported_features=["tts", "voice_cloning"],
+        requires_api_key=bool(os.getenv("FAL_KEY")),
+        api_key_env_var="FAL_KEY",
+    ))
+    # Cloud - Replicate
+    drivers.append(DriverInfo(
+        driver_id="replicate_foley",
+        display_name="HunyuanVideo Foley (Replicate)",
+        category=DriverCategory.CLOUD,
+        supported_features=["foley"],
         requires_api_key=bool(os.getenv("REPLICATE_API_TOKEN")),
         api_key_env_var="REPLICATE_API_TOKEN",
     ))

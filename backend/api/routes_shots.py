@@ -179,6 +179,7 @@ async def create_shot(req: ShotCreateRequest):
                     "asset_name": ref.get("asset_name", ""),
                     "image_path": ref.get("image_path"),
                     "role": ref.get("asset_type", "character"),
+                    "retention": ref.get("retention", "fully_preserved"),
                 })
             # Then, bind scene defaults (hero cast, location, prop) if not already in ref_assets
             ref_ids = {a["asset_id"] for a in auto_assets}
@@ -346,9 +347,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     location_image = None
     character_images = []
     other_images = []
-    prompt_enrichments = []
     # First pass: collect character names to check for focus
-    character_entries = []
     for a in shot_assets:
         role = a.get("role", a.get("asset_type", ""))
         if role != "character":
@@ -370,14 +369,20 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     if focused_character_name and establishing_frame:
         print(f"[routes_shots] character focus detected: '{focused_character_name}' — filtering other characters")
 
+    # Second pass: separate assets by role for multi-reference workflow.
+    # Prompt enrichments are built by build_prompt() — this pass only
+    # collects reference images and filters characters by focus.
     for a in shot_assets:
         role = a.get("role", a.get("asset_type", ""))
         name = a.get("asset_name", "")
-        img = a.get("image_path")
         asset_id = a.get("asset_id", "")
         retention = a.get("retention", "fully_preserved")
         full_asset = asset_map.get(asset_id, {})
         desc = full_asset.get("description", "")
+        # Prefer the asset's current primary_image (always up-to-date),
+        # falling back to the snapshot image_path only if the asset record
+        # is missing (e.g. asset was deleted but shot still references it).
+        img = full_asset.get("primary_image") or a.get("image_path")
         if role == "location" and img:
             location_image = img
         elif role == "character":
@@ -388,27 +393,12 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             if focused_character_name and establishing_frame and display_name != focused_character_name:
                 print(f"[routes_shots] skipping character '{display_name}' (not focused)")
                 continue
-            if display_name:
-                if retention == "fully_preserved":
-                    prompt_enrichments.append(f"featuring {display_name}")
-                elif retention == "partially_preserved":
-                    prompt_enrichments.append(f"featuring {display_name}, with some characteristics changed")
-                elif retention == "attribute_transfer":
-                    prompt_enrichments.append(f"transferring {display_name}'s characteristics to a different subject")
-                elif retention == "weak_reference":
-                    prompt_enrichments.append(f"loosely referencing {display_name}'s style")
-                else:
-                    prompt_enrichments.append(f"featuring {display_name}")
             if img:
                 character_images.append(img)
         elif role == "prop":
-            if name:
-                prompt_enrichments.append(f"with {name}")
             if img:
                 other_images.append(img)
         elif role == "vehicle":
-            if name:
-                prompt_enrichments.append(f"with {name}")
             if img:
                 other_images.append(img)
 

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
   type ShotResponse, updateShot, generateShotFrame, checkShotFrameStatus,
+  saveImageFromUrl,
 } from "@/lib/api";
 import {
   Plus, Loader2, ImageIcon, Camera,
@@ -116,8 +117,19 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       poll.startPolling(
         () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
         async (st) => {
+          const remoteFramePath = st.image_urls?.[0] || "";
+          // Save the generated image to the vault so it appears in the library
+          let framePath = remoteFramePath;
+          if (remoteFramePath) {
+            try {
+              const saved = await saveImageFromUrl(projectId, remoteFramePath);
+              framePath = saved.image_url;
+            } catch (e) {
+              console.error("Failed to save generated image to vault:", e);
+            }
+          }
           await updateShot(projectId, shot.id, {
-            frame_image_path: st.image_urls?.[0] || "",
+            frame_image_path: framePath,
             status: "frame_generated",
           });
           await onRefresh();

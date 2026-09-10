@@ -223,12 +223,12 @@ async def register_workflow(req: RegisterWorkflowRequest):
     if not driver_id or not driver_id.replace("_", "").isalnum():
         raise HTTPException(status_code=400, detail="driver_id must be alphanumeric with underscores only")
 
-    if req.category not in ("image", "video"):
-        raise HTTPException(status_code=400, detail="category must be 'image' or 'video'")
+    if req.category not in ("image", "video", "audio"):
+        raise HTTPException(status_code=400, detail="category must be 'image', 'video', or 'audio'")
 
     # Check for conflicts with built-in drivers
-    from core.drivers import list_image_drivers, list_video_drivers
-    existing_ids = {d.driver_id for d in list_image_drivers() + list_video_drivers()}
+    from core.drivers import list_image_drivers, list_video_drivers, list_audio_drivers
+    existing_ids = {d.driver_id for d in list_image_drivers() + list_video_drivers() + list_audio_drivers()}
     # Allow re-uploading (updating) existing custom ones
     custom_ids = {wf["driver_id"] for wf in get_custom_workflows()}
     if driver_id in existing_ids and driver_id not in custom_ids:
