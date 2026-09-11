@@ -1,11 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import {
   Play, Pause, Square, SkipBack, SkipForward, Diamond, Plus, Trash2,
   Box, User, Circle, Cylinder as CylIcon, Square as SqIcon, Triangle, Donut, Camera,
 } from "lucide-react";
 import { usePrevisStore, type ProxyKind } from "@/lib/usePrevisStore";
-import { sampleTrajectory } from "@/lib/previsTrajectory";
+import { sampleTrajectory, CAMERA_CHANNELS, type CameraChannel } from "@/lib/previsTrajectory";
 import type { TrajectoryPreset } from "@/lib/previsTrajectory";
 
 const TEMPLATES: { id: TrajectoryPreset; label: string; icon: string; desc: string }[] = [
@@ -45,8 +46,10 @@ export function PrevisTransport() {
   const {
     currentFrame, durationFrames, fps, isPlaying,
     togglePlay, setIsPlaying, setCurrentFrame,
-    trajectory, applyPreset, keyframes,
-    setDurationFrames, addKeyframeAtFrame, removeKeyframeAtFrame,
+    trajectory, applyPreset, keyframes, cameraChannels,
+    addKeyframeAtFrame, removeKeyframeAtFrame,
+    addChannelKeyframe, removeChannelKeyframe,
+    setDurationFrames,
     proxies, selectedProxyId, selectProxy,
     proxyKeyframes, addProxyKeyframe, removeProxyKeyframe,
     cameraSelected, selectCamera,
@@ -55,6 +58,7 @@ export function PrevisTransport() {
   const seconds = (currentFrame / fps).toFixed(2);
   const totalSeconds = (durationFrames / fps).toFixed(0);
   const currentFrameRounded = Math.round(currentFrame);
+  const [cameraExpanded, setCameraExpanded] = useState(false);
 
   const handleStop = () => {
     setIsPlaying(false);
@@ -66,7 +70,7 @@ export function PrevisTransport() {
     const frame = currentFrameRounded;
     if (cameraSelected) {
       const t = durationFrames > 0 ? currentFrame / durationFrames : 0;
-      const { position, target } = sampleTrajectory(keyframes, t);
+      const { position, target } = sampleTrajectory(cameraChannels, t, durationFrames);
       addKeyframeAtFrame(frame, [position.x, position.y, position.z], [target.x, target.y, target.z]);
     } else if (selectedProxyId) {
       const p = proxies.find((x) => x.id === selectedProxyId);
@@ -137,11 +141,44 @@ export function PrevisTransport() {
           durationFrames={durationFrames}
           currentFrame={currentFrameRounded}
           isActive={cameraSelected}
+          isExpandable
+          isExpanded={cameraExpanded}
+          onToggleExpand={() => setCameraExpanded((v) => !v)}
           onClick={() => selectCamera(true)}
           onKeyClick={(f) => setCurrentFrame(f)}
           onKeyDelete={(f) => removeKeyframeAtFrame(f)}
           keyCount={keyframes.length}
         />
+
+        {/* Camera per-channel sub-tracks (expandable) */}
+        {cameraExpanded && CAMERA_CHANNELS.map((ch) => {
+          const track = cameraChannels[ch.id];
+          return (
+            <TrackRow
+              key={ch.id}
+              label={ch.label}
+              color={ch.color}
+              keyframes={track.map((k) => k.frame)}
+              durationFrames={durationFrames}
+              currentFrame={currentFrameRounded}
+              isActive={cameraSelected}
+              isSubTrack
+              onKeyClick={(f) => setCurrentFrame(f)}
+              onKeyDelete={(f) => removeChannelKeyframe(ch.id as CameraChannel, f)}
+              keyCount={track.length}
+              onKeyDoubleClick={(f) => {
+                // Double-click a channel key to edit its value inline
+                const existing = track.find((k) => k.frame === f);
+                const val = existing ? existing.value : 0;
+                const input = window.prompt(`${ch.label} at frame ${f}`, val.toFixed(2));
+                if (input !== null) {
+                  const v = parseFloat(input);
+                  if (!isNaN(v)) addChannelKeyframe(ch.id as CameraChannel, f, v);
+                }
+              }}
+            />
+          );
+        })}
 
         {/* Proxy tracks */}
         {proxies.map((p) => {
@@ -266,31 +303,46 @@ export function PrevisTransport() {
 /** A single track row in the multitrack timeline. */
 function TrackRow({
   label, icon: Icon, color, keyframes, durationFrames, currentFrame, isActive,
-  onClick, onKeyClick, onKeyDelete, keyCount,
+  onClick, onKeyClick, onKeyDelete, onKeyDoubleClick, keyCount,
+  isExpandable, isExpanded, onToggleExpand, isSubTrack,
 }: {
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon?: React.ComponentType<{ className?: string }>;
   color: string;
   keyframes: number[];
   durationFrames: number;
   currentFrame: number;
   isActive: boolean;
-  onClick: () => void;
+  onClick?: () => void;
   onKeyClick: (frame: number) => void;
   onKeyDelete: (frame: number) => void;
+  onKeyDoubleClick?: (frame: number) => void;
   keyCount: number;
+  isExpandable?: boolean;
+  isExpanded?: boolean;
+  onToggleExpand?: () => void;
+  isSubTrack?: boolean;
 }) {
   return (
     <div
       onClick={onClick}
       className={`flex items-center gap-1 px-1.5 py-0.5 cursor-pointer transition-colors border-b border-studio-border/30 ${
         isActive ? "bg-studio-accent/10" : "hover:bg-studio-panelHover/50"
-      }`}
+      } ${isSubTrack ? "pl-6 bg-studio-bg/30" : ""}`}
     >
       {/* Track label */}
       <div className="flex items-center gap-1 w-28 shrink-0 min-w-0">
+        {isExpandable && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+            className="text-studio-muted hover:text-studio-text shrink-0"
+            title={isExpanded ? "Collapse channels" : "Expand channels"}
+          >
+            <span className="text-[8px] inline-block transition-transform" style={{ transform: isExpanded ? "rotate(90deg)" : "none" }}>▶</span>
+          </button>
+        )}
         <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-        <Icon className="w-2.5 h-2.5 text-studio-muted shrink-0" />
+        {Icon && <Icon className="w-2.5 h-2.5 text-studio-muted shrink-0" />}
         <span className={`text-[9px] truncate ${isActive ? "text-studio-text font-medium" : "text-studio-muted"}`}>
           {label}
         </span>
@@ -309,9 +361,10 @@ function TrackRow({
                 key={i}
                 onClick={(e) => { e.stopPropagation(); onKeyClick(f); }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onKeyDelete(f); }}
+                onDoubleClick={onKeyDoubleClick ? (e) => { e.stopPropagation(); onKeyDoubleClick(f); } : undefined}
                 className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 hover:scale-125 transition-transform"
                 style={{ left }}
-                title={`f${f}${isCurrent ? " (current)" : ""} — right-click to delete`}
+                title={`f${f}${isCurrent ? " (current)" : ""} — right-click to delete${onKeyDoubleClick ? ", double-click to edit" : ""}`}
               >
                 <Diamond
                   className={`w-2.5 h-2.5 ${
@@ -319,6 +372,7 @@ function TrackRow({
                       ? "fill-white text-white drop-shadow-[0_0_3px_rgba(255,255,255,0.5)]"
                       : "fill-studio-accent text-studio-accent"
                   }`}
+                  style={isSubTrack ? { color, fill: color } : undefined}
                 />
               </button>
             );

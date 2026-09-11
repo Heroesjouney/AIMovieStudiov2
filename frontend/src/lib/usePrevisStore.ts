@@ -14,9 +14,16 @@ import {
   DEFAULT_TRAJECTORY,
   generatePresetKeyframes,
   type CameraKeyframe,
+  type CameraChannel,
+  type CameraChannelKeyframes,
+  type Keyframe1D,
   type ProxyKeyframe,
   type TrajectoryConfig,
   type TrajectoryPreset,
+  channelsToKeyframes,
+  emptyCameraChannels,
+  keyframesToChannels,
+  sampleChannel1D,
 } from "./previsTrajectory";
 
 export type ProxyKind = "character" | "set" | "cube" | "sphere" | "cylinder" | "plane" | "cone" | "torus";
@@ -72,15 +79,22 @@ interface PrevisState {
 
   // --- Trajectory + keyframes (Phase 3) ---
   trajectory: TrajectoryConfig;
+  /** Derived full-transform keyframes (for display / trajectory spline). */
   keyframes: CameraKeyframe[];
+  /** Source-of-truth per-channel keyframe tracks (pos X/Y/Z, target X/Y/Z). */
+  cameraChannels: CameraChannelKeyframes;
   setTrajectory: (patch: Partial<TrajectoryConfig>) => void;
   applyPreset: (preset: TrajectoryPreset) => void;
   setKeyframePosition: (frame: number, position: [number, number, number]) => void;
   setKeyframeTarget: (frame: number, target: [number, number, number]) => void;
-  /** Insert/update a keyframe at the current frame with the given position + target. */
+  /** Insert/update a keyframe at the current frame with the given position + target (writes all 6 channels). */
   addKeyframeAtFrame: (frame: number, position: [number, number, number], target: [number, number, number]) => void;
-  /** Remove the keyframe at the given frame (if it exists). */
+  /** Remove the keyframe at the given frame from all 6 channels (if it exists). */
   removeKeyframeAtFrame: (frame: number) => void;
+  /** Insert/update a single channel's keyframe at the given frame. */
+  addChannelKeyframe: (channel: CameraChannel, frame: number, value: number) => void;
+  /** Remove a single channel's keyframe at the given frame. */
+  removeChannelKeyframe: (channel: CameraChannel, frame: number) => void;
 
   // --- Proxy keyframes (multitrack) ---
   /** Per-proxy keyframe tracks: { [proxyId]: ProxyKeyframe[] } */
@@ -259,65 +273,111 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
 
   // Trajectory + keyframes
   trajectory: { ...DEFAULT_TRAJECTORY, preset: "custom" },
-  keyframes: [],  // start empty — user applies a template or sets keys manually
+  cameraChannels: emptyCameraChannels(),  // source of truth — per-axis tracks
+  keyframes: [],  // derived from cameraChannels for display/spline
   setTrajectory: (patch) =>
     set((s) => {
       const next = { ...s.trajectory, ...patch };
       // Only regenerate keyframes from the template if we're on a preset
       // (custom = manual keyframing, so don't clobber user keys).
-      const kfs = next.preset === "custom" ? s.keyframes : generatePresetKeyframes(next, s.durationFrames);
-      return { trajectory: next, keyframes: kfs };
+      if (next.preset === "custom") return { trajectory: next };
+      const channels = generatePresetKeyframes(next, s.durationFrames);
+      return { trajectory: next, cameraChannels: channels, keyframes: channelsToKeyframes(channels) };
     }),
   applyPreset: (preset) =>
     set((s) => {
       const next = { ...s.trajectory, preset };
       if (preset === "custom") {
         // "Custom" = clear all keyframes, start fresh (empty state).
-        return { trajectory: next, keyframes: [], currentFrame: 0, isPlaying: false };
+        return {
+          trajectory: next,
+          cameraChannels: emptyCameraChannels(),
+          keyframes: [],
+          currentFrame: 0,
+          isPlaying: false,
+        };
       }
+      const channels = generatePresetKeyframes(next, s.durationFrames);
       return {
         trajectory: next,
-        keyframes: generatePresetKeyframes(next, s.durationFrames),
+        cameraChannels: channels,
+        keyframes: channelsToKeyframes(channels),
         currentFrame: 0,
         isPlaying: false,
       };
     }),
   setKeyframePosition: (frame, position) =>
     set((s) => {
-      // Custom edit: switch to "custom" and update the nearest keyframe (or append).
-      const idx = s.keyframes.findIndex((k) => k.frame === frame);
-      const kfs =
-        idx >= 0
-          ? s.keyframes.map((k, i) => (i === idx ? { ...k, position } : k))
-          : [...s.keyframes, { frame, position, target: s.trajectory.target }];
-      kfs.sort((a, b) => a.frame - b.frame);
-      return { keyframes: kfs, trajectory: { ...s.trajectory, preset: "custom" } };
+      // Update the 3 position channels at this frame.
+      const channels = { ...s.cameraChannels };
+      for (const ch of ["posX", "posY", "posZ"] as const) {
+        const idx = channels[ch].findIndex((k) => k.frame === frame);
+        const val = ch === "posX" ? position[0] : ch === "posY" ? position[1] : position[2];
+        const kfs = idx >= 0
+          ? channels[ch].map((k, i) => (i === idx ? { ...k, value: val } : k))
+          : [...channels[ch], { frame, value: val }];
+        kfs.sort((a, b) => a.frame - b.frame);
+        channels[ch] = kfs;
+      }
+      return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
     }),
   setKeyframeTarget: (frame, target) =>
     set((s) => {
-      const idx = s.keyframes.findIndex((k) => k.frame === frame);
-      const kfs =
-        idx >= 0
-          ? s.keyframes.map((k, i) => (i === idx ? { ...k, target } : k))
-          : [...s.keyframes, { frame, position: s.trajectory.startPos, target }];
-      kfs.sort((a, b) => a.frame - b.frame);
-      return { keyframes: kfs, trajectory: { ...s.trajectory, preset: "custom" } };
+      const channels = { ...s.cameraChannels };
+      for (const ch of ["targetX", "targetY", "targetZ"] as const) {
+        const idx = channels[ch].findIndex((k) => k.frame === frame);
+        const val = ch === "targetX" ? target[0] : ch === "targetY" ? target[1] : target[2];
+        const kfs = idx >= 0
+          ? channels[ch].map((k, i) => (i === idx ? { ...k, value: val } : k))
+          : [...channels[ch], { frame, value: val }];
+        kfs.sort((a, b) => a.frame - b.frame);
+        channels[ch] = kfs;
+      }
+      return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
     }),
   addKeyframeAtFrame: (frame, position, target) =>
     set((s) => {
-      const idx = s.keyframes.findIndex((k) => k.frame === frame);
-      const kfs =
-        idx >= 0
-          ? s.keyframes.map((k, i) => (i === idx ? { ...k, position, target } : k))
-          : [...s.keyframes, { frame, position, target }];
-      kfs.sort((a, b) => a.frame - b.frame);
-      return { keyframes: kfs, trajectory: { ...s.trajectory, preset: "custom" } };
+      // Write all 6 channels at this frame.
+      const channels = { ...s.cameraChannels };
+      const vals: Record<string, number> = {
+        posX: position[0], posY: position[1], posZ: position[2],
+        targetX: target[0], targetY: target[1], targetZ: target[2],
+      };
+      for (const ch of Object.keys(vals) as CameraChannel[]) {
+        const idx = channels[ch].findIndex((k) => k.frame === frame);
+        const kfs = idx >= 0
+          ? channels[ch].map((k, i) => (i === idx ? { ...k, value: vals[ch] } : k))
+          : [...channels[ch], { frame, value: vals[ch] }];
+        kfs.sort((a, b) => a.frame - b.frame);
+        channels[ch] = kfs;
+      }
+      return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
     }),
   removeKeyframeAtFrame: (frame) =>
     set((s) => {
-      // Allow removing down to 0 keyframes (empty state is valid).
-      const kfs = s.keyframes.filter((k) => k.frame !== frame);
-      return { keyframes: kfs, trajectory: { ...s.trajectory, preset: "custom" } };
+      // Remove from all 6 channels at this frame.
+      const channels = { ...s.cameraChannels };
+      for (const ch of Object.keys(channels) as CameraChannel[]) {
+        channels[ch] = channels[ch].filter((k) => k.frame !== frame);
+      }
+      return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
+    }),
+  addChannelKeyframe: (channel, frame, value) =>
+    set((s) => {
+      const track = s.cameraChannels[channel];
+      const idx = track.findIndex((k) => k.frame === frame);
+      const kfs = idx >= 0
+        ? track.map((k, i) => (i === idx ? { ...k, value } : k))
+        : [...track, { frame, value }];
+      kfs.sort((a, b) => a.frame - b.frame);
+      const channels = { ...s.cameraChannels, [channel]: kfs };
+      return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
+    }),
+  removeChannelKeyframe: (channel, frame) =>
+    set((s) => {
+      const kfs = s.cameraChannels[channel].filter((k) => k.frame !== frame);
+      const channels = { ...s.cameraChannels, [channel]: kfs };
+      return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
     }),
 
   // Proxy keyframes (multitrack)
@@ -347,12 +407,18 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
   currentFrame: 0,
   isPlaying: false,
   setDurationFrames: (n) =>
-    set((s) => ({
-      durationFrames: n,
-      // Only regenerate keyframes from the template if on a preset.
-      keyframes: s.trajectory.preset !== "custom" ? generatePresetKeyframes(s.trajectory, n) : s.keyframes,
-      currentFrame: Math.min(s.currentFrame, n),
-    })),
+    set((s) => {
+      if (s.trajectory.preset === "custom") {
+        return { durationFrames: n, currentFrame: Math.min(s.currentFrame, n) };
+      }
+      const channels = generatePresetKeyframes(s.trajectory, n);
+      return {
+        durationFrames: n,
+        cameraChannels: channels,
+        keyframes: channelsToKeyframes(channels),
+        currentFrame: Math.min(s.currentFrame, n),
+      };
+    }),
   setCurrentFrame: (currentFrame) => set({ currentFrame: Math.max(0, Math.min(currentFrame, get().durationFrames)) }),
   togglePlay: () => set((s) => ({ isPlaying: !s.isPlaying })),
   setIsPlaying: (isPlaying) => set({ isPlaying }),

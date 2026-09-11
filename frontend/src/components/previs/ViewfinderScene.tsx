@@ -71,7 +71,7 @@ function ViewfinderProxies() {
 
 function ViewfinderCamera() {
   const { camera } = useThree();
-  const keyframes = usePrevisStore((s) => s.keyframes);
+  const cameraChannels = usePrevisStore((s) => s.cameraChannels);
   const durationFrames = usePrevisStore((s) => s.durationFrames);
   const currentFrame = usePrevisStore((s) => s.currentFrame);
   const focalLength = usePrevisStore((s) => s.focalLength);
@@ -91,7 +91,7 @@ function ViewfinderCamera() {
   useFrame(() => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return;
     const t = durationFrames > 0 ? currentFrame / durationFrames : 0;
-    const { position, target } = sampleTrajectory(keyframes, t);
+    const { position, target } = sampleTrajectory(cameraChannels, t, durationFrames);
     camera.position.copy(position);
     camera.lookAt(target);
     camera.fov = focalToFov(focalLength);

@@ -24,6 +24,97 @@ export interface ProxyKeyframe {
   scale: [number, number, number];
 }
 
+// --- Per-axis camera keyframing ---
+// Each camera transform channel gets its own keyframe track so the user can
+// keyframe X position independently from Y, pan independently from tilt, etc.
+
+export type CameraChannel = "posX" | "posY" | "posZ" | "targetX" | "targetY" | "targetZ";
+
+export const CAMERA_CHANNELS: { id: CameraChannel; label: string; color: string }[] = [
+  { id: "posX", label: "Pos X", color: "#ef4444" },
+  { id: "posY", label: "Pos Y", color: "#22c55e" },
+  { id: "posZ", label: "Pos Z", color: "#3b82f6" },
+  { id: "targetX", label: "Tgt X", color: "#f87171" },
+  { id: "targetY", label: "Tgt Y", color: "#4ade80" },
+  { id: "targetZ", label: "Tgt Z", color: "#60a5fa" },
+];
+
+export interface Keyframe1D {
+  frame: number;
+  value: number;
+}
+
+export type CameraChannelKeyframes = Record<CameraChannel, Keyframe1D[]>;
+
+export function emptyCameraChannels(): CameraChannelKeyframes {
+  return {
+    posX: [],
+    posY: [],
+    posZ: [],
+    targetX: [],
+    targetY: [],
+    targetZ: [],
+  };
+}
+
+/** Convert a full-transform keyframe array into per-channel keyframes. */
+export function keyframesToChannels(keyframes: CameraKeyframe[]): CameraChannelKeyframes {
+  return {
+    posX: keyframes.map((k) => ({ frame: k.frame, value: k.position[0] })),
+    posY: keyframes.map((k) => ({ frame: k.frame, value: k.position[1] })),
+    posZ: keyframes.map((k) => ({ frame: k.frame, value: k.position[2] })),
+    targetX: keyframes.map((k) => ({ frame: k.frame, value: k.target[0] })),
+    targetY: keyframes.map((k) => ({ frame: k.frame, value: k.target[1] })),
+    targetZ: keyframes.map((k) => ({ frame: k.frame, value: k.target[2] })),
+  };
+}
+
+/** Convert per-channel keyframes back into full-transform keyframes (for display). */
+export function channelsToKeyframes(channels: CameraChannelKeyframes): CameraKeyframe[] {
+  // Collect all unique frame numbers across all channels
+  const frameSet = new Set<number>();
+  for (const ch of CAMERA_CHANNELS) {
+    for (const k of channels[ch.id]) frameSet.add(k.frame);
+  }
+  const frames = Array.from(frameSet).sort((a, b) => a - b);
+  return frames.map((frame) => ({
+    frame,
+    position: [
+      sampleChannel1D(channels.posX, frame),
+      sampleChannel1D(channels.posY, frame),
+      sampleChannel1D(channels.posZ, frame),
+    ],
+    target: [
+      sampleChannel1D(channels.targetX, frame),
+      sampleChannel1D(channels.targetY, frame),
+      sampleChannel1D(channels.targetZ, frame),
+    ],
+  }));
+}
+
+/**
+ * Sample a 1D keyframe track at a given frame using linear interpolation.
+ * Falls back to the nearest keyframe value if outside the keyframe range.
+ */
+export function sampleChannel1D(keyframes: Keyframe1D[], frame: number): number {
+  if (keyframes.length === 0) return 0;
+  if (keyframes.length === 1) return keyframes[0].value;
+  // Sort by frame (defensive — they should already be sorted)
+  const sorted = keyframes.length > 1 && keyframes[0].frame > keyframes[1].frame
+    ? [...keyframes].sort((a, b) => a.frame - b.frame)
+    : keyframes;
+  if (frame <= sorted[0].frame) return sorted[0].value;
+  if (frame >= sorted[sorted.length - 1].frame) return sorted[sorted.length - 1].value;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (sorted[i].frame <= frame && sorted[i + 1].frame >= frame) {
+      const span = Math.max(0.001, sorted[i + 1].frame - sorted[i].frame);
+      const t = (frame - sorted[i].frame) / span;
+      return THREE.MathUtils.lerp(sorted[i].value, sorted[i + 1].value, t);
+    }
+  }
+  return sorted[sorted.length - 1].value;
+}
+
 export interface TrajectoryConfig {
   preset: TrajectoryPreset;
   startPos: [number, number, number];
@@ -58,17 +149,15 @@ export const DEFAULT_TRAJECTORY: TrajectoryConfig = {
 export function generatePresetKeyframes(
   cfg: TrajectoryConfig,
   durationFrames: number,
-): CameraKeyframe[] {
+): CameraChannelKeyframes {
+  // Build the full-transform keyframes, then convert to per-channel.
+  let kfs: CameraKeyframe[];
   if (cfg.preset === "dolly") {
-    // Linear translation between start and end — 2 keyframes is enough.
-    return [
+    kfs = [
       { frame: 0, position: cfg.startPos, target: cfg.target },
       { frame: durationFrames, position: cfg.endPos, target: cfg.target },
     ];
-  }
-
-  if (cfg.preset === "arc") {
-    // Arc around the target — start and end positions on the orbit circle.
+  } else if (cfg.preset === "arc") {
     const center = new THREE.Vector3(...cfg.target);
     const startH = cfg.startPos[1];
     const startAng = cfg.startAngle * (Math.PI / 180);
@@ -77,16 +166,13 @@ export function generatePresetKeyframes(
     const sz = center.z + cfg.radius * Math.cos(startAng);
     const ex = center.x + cfg.radius * Math.sin(endAng);
     const ez = center.z + cfg.radius * Math.cos(endAng);
-    return [
+    kfs = [
       { frame: 0, position: [sx, startH, sz], target: cfg.target },
       { frame: durationFrames, position: [ex, startH, ez], target: cfg.target },
     ];
-  }
-
-  if (cfg.preset === "crane") {
-    // Vertical move with pitch — start and end with adjusted look-down.
+  } else if (cfg.preset === "crane") {
     const pitchEnd = (cfg.endPos[1] - cfg.startPos[1]) / Math.max(0.001, cfg.endPos[1] - cfg.startPos[1]);
-    return [
+    kfs = [
       { frame: 0, position: cfg.startPos, target: cfg.target },
       {
         frame: durationFrames,
@@ -94,13 +180,13 @@ export function generatePresetKeyframes(
         target: [cfg.target[0], cfg.target[1] - pitchEnd * 0.6, cfg.target[2]] as [number, number, number],
       },
     ];
+  } else {
+    kfs = [
+      { frame: 0, position: cfg.startPos, target: cfg.target },
+      { frame: durationFrames, position: cfg.endPos, target: cfg.target },
+    ];
   }
-
-  // "custom" — start with 2 default keyframes (start + end).
-  return [
-    { frame: 0, position: cfg.startPos, target: cfg.target },
-    { frame: durationFrames, position: cfg.endPos, target: cfg.target },
-  ];
+  return keyframesToChannels(kfs);
 }
 
 function lerp3(
@@ -140,12 +226,45 @@ export type SampleResult = { position: THREE.Vector3; target: THREE.Vector3; rea
 
 /**
  * Sample camera position + look-at target at a given normalized time `t` in [0,1].
+ * Accepts either the old CameraKeyframe[] format or the new per-channel format.
  */
 export function sampleTrajectory(
-  keyframes: CameraKeyframe[],
+  keyframesOrChannels: CameraKeyframe[] | CameraChannelKeyframes,
   t: number,
+  durationFrames?: number,
 ): { position: THREE.Vector3; target: THREE.Vector3 } {
   const clamped = Math.max(0, Math.min(1, t));
+
+  // Detect per-channel format
+  if (!Array.isArray(keyframesOrChannels)) {
+    const ch = keyframesOrChannels;
+    // If all channels are empty, fall back to a sensible default camera
+    // position (eye-level, looking at the scene center).
+    const allEmpty = ch.posX.length === 0 && ch.posY.length === 0 && ch.posZ.length === 0
+      && ch.targetX.length === 0 && ch.targetY.length === 0 && ch.targetZ.length === 0;
+    if (allEmpty) {
+      return {
+        position: new THREE.Vector3(0, 1.6, 6),
+        target: new THREE.Vector3(0, 1, 0),
+      };
+    }
+    const frame = durationFrames !== undefined ? clamped * durationFrames : 0;
+    return {
+      position: new THREE.Vector3(
+        sampleChannel1D(ch.posX, frame),
+        sampleChannel1D(ch.posY, frame),
+        sampleChannel1D(ch.posZ, frame),
+      ),
+      target: new THREE.Vector3(
+        sampleChannel1D(ch.targetX, frame),
+        sampleChannel1D(ch.targetY, frame),
+        sampleChannel1D(ch.targetZ, frame),
+      ),
+    };
+  }
+
+  // Legacy CameraKeyframe[] format
+  const keyframes = keyframesOrChannels;
   const { posCurve, targetCurve, ready } = buildCurves(keyframes);
   if (!ready || !posCurve || !targetCurve) {
     const first = keyframes[0];
@@ -168,12 +287,34 @@ export function focalToFov(focalMm: number, sensorHeightMm = 24): number {
  * Sampled polyline of the trajectory path (for drawing the spline in the
  * editor view). Returns an array of [x,y,z] points.
  */
-export function trajectoryPoints(keyframes: CameraKeyframe[], segments = 64): [number, number, number][] {
+export function trajectoryPoints(
+  keyframesOrChannels: CameraKeyframe[] | CameraChannelKeyframes,
+  segments = 64,
+  durationFrames?: number,
+): [number, number, number][] {
+  // Per-channel format
+  if (!Array.isArray(keyframesOrChannels)) {
+    const ch = keyframesOrChannels;
+    // If all channels are empty, return a default static position (no spline).
+    const allEmpty = ch.posX.length === 0 && ch.posY.length === 0 && ch.posZ.length === 0;
+    if (allEmpty) return [[0, 1.6, 6], [0, 1.6, 6]];
+    const dur = durationFrames ?? 96;
+    const pts: [number, number, number][] = [];
+    for (let i = 0; i <= segments; i++) {
+      const frame = (i / segments) * dur;
+      pts.push([
+        sampleChannel1D(ch.posX, frame),
+        sampleChannel1D(ch.posY, frame),
+        sampleChannel1D(ch.posZ, frame),
+      ]);
+    }
+    return pts;
+  }
+
+  // Legacy CameraKeyframe[] format
+  const keyframes = keyframesOrChannels;
   const { posCurve, ready } = buildCurves(keyframes);
   if (!ready || !posCurve) {
-    // Fallback: use the raw keyframe positions. If fewer than 2, pad with
-    // defaults so the <Line> component never receives an empty array
-    // (which crashes with "Invalid typed array length: -6").
     const pts = keyframes.map((k) => k.position);
     if (pts.length >= 2) return pts;
     if (pts.length === 1) return [pts[0], pts[0]];

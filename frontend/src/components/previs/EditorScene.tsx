@@ -74,10 +74,12 @@ export function EditorScene() {
     const t = durationFrames > 0 ? currentFrame / durationFrames : 0;
     // Always read fresh keyframes from the store (subscribed value can lag).
     const { position: sampledPos, target: sampledTarget } = sampleTrajectory(
-      usePrevisStore.getState().keyframes,
+      usePrevisStore.getState().cameraChannels,
       t,
+      durationFrames,
     );
     const newPos = cameraRef.current.position;
+    const store = usePrevisStore.getState();
 
     if (gizmoMode === "translate") {
       // Delta from the previous tick (or from the sampled position on first tick).
@@ -85,11 +87,22 @@ export function EditorScene() {
       const delta = new THREE.Vector3().subVectors(newPos, prev);
       // Move the target by the same delta → camera keeps looking the same way.
       const newTarget = sampledTarget.clone().add(delta);
-      addKeyframeAtFrame(
-        frame,
-        [newPos.x, newPos.y, newPos.z],
-        [newTarget.x, newTarget.y, newTarget.z],
-      );
+      // Only key the 3 position channels (translate doesn't change look direction).
+      store.addChannelKeyframe("posX", frame, newPos.x);
+      store.addChannelKeyframe("posY", frame, newPos.y);
+      store.addChannelKeyframe("posZ", frame, newPos.z);
+      // Also move the target by the same delta so the view stays consistent,
+      // but only if there isn't already a target key at this frame (don't
+      // clobber an intentional pan key the user set at the same frame).
+      const hasTargetKey =
+        store.cameraChannels.targetX.some((k) => k.frame === frame) ||
+        store.cameraChannels.targetY.some((k) => k.frame === frame) ||
+        store.cameraChannels.targetZ.some((k) => k.frame === frame);
+      if (!hasTargetKey) {
+        store.addChannelKeyframe("targetX", frame, newTarget.x);
+        store.addChannelKeyframe("targetY", frame, newTarget.y);
+        store.addChannelKeyframe("targetZ", frame, newTarget.z);
+      }
     } else if (gizmoMode === "rotate") {
       // The gizmo rotated the group — read forward direction from the quaternion.
       // Object3D.lookAt points +Z toward the target, so forward = +Z.
@@ -100,11 +113,22 @@ export function EditorScene() {
         newPos.y + forward.y * dist,
         newPos.z + forward.z * dist,
       );
-      addKeyframeAtFrame(
-        frame,
-        [newPos.x, newPos.y, newPos.z],
-        [newTarget.x, newTarget.y, newTarget.z],
-      );
+      // Key the 3 target channels (pan/tilt).
+      store.addChannelKeyframe("targetX", frame, newTarget.x);
+      store.addChannelKeyframe("targetY", frame, newTarget.y);
+      store.addChannelKeyframe("targetZ", frame, newTarget.z);
+      // Also key the position at the current spot if there isn't already a
+      // position key at this frame — otherwise playback would sample empty
+      // position channels to 0 and the camera would jump to the origin.
+      const hasPosKey =
+        store.cameraChannels.posX.some((k) => k.frame === frame) ||
+        store.cameraChannels.posY.some((k) => k.frame === frame) ||
+        store.cameraChannels.posZ.some((k) => k.frame === frame);
+      if (!hasPosKey) {
+        store.addChannelKeyframe("posX", frame, newPos.x);
+        store.addChannelKeyframe("posY", frame, newPos.y);
+        store.addChannelKeyframe("posZ", frame, newPos.z);
+      }
     }
 
     prevCamPos.current = newPos.clone();
@@ -236,8 +260,9 @@ function CameraFlyController() {
   useEffect(() => {
     const t = durationFrames > 0 ? currentFrame / durationFrames : 0;
     const { position, target } = sampleTrajectory(
-      usePrevisStore.getState().keyframes,
+      usePrevisStore.getState().cameraChannels,
       t,
+      durationFrames,
     );
     livePos.current = position.clone();
     liveTarget.current = target.clone();
@@ -378,8 +403,9 @@ function CameraFlyController() {
       // Playing — sample the trajectory (don't allow manual override during playback)
       const t = durationFrames > 0 ? currentFrame / durationFrames : 0;
       const { position, target } = sampleTrajectory(
-        usePrevisStore.getState().keyframes,
+        usePrevisStore.getState().cameraChannels,
         t,
+        durationFrames,
       );
       livePos.current.copy(position);
       liveTarget.current.copy(target);

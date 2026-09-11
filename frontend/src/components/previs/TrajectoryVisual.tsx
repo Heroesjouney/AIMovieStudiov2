@@ -20,6 +20,7 @@ export function TrajectoryVisual({
   cameraRef: React.RefObject<THREE.Group>;
 }) {
   const keyframes = usePrevisStore((s) => s.keyframes);
+  const cameraChannels = usePrevisStore((s) => s.cameraChannels);
   const durationFrames = usePrevisStore((s) => s.durationFrames);
   const currentFrame = usePrevisStore((s) => s.currentFrame);
   const focalLength = usePrevisStore((s) => s.focalLength);
@@ -29,7 +30,7 @@ export function TrajectoryVisual({
   const cameraSelected = usePrevisStore((s) => s.cameraSelected);
   const selectCamera = usePrevisStore((s) => s.selectCamera);
 
-  const pathPts = useMemo(() => trajectoryPoints(keyframes, 96), [keyframes]);
+  const pathPts = useMemo(() => trajectoryPoints(cameraChannels, 96, durationFrames), [cameraChannels, durationFrames]);
   const aspect = aspectRatio === "16:9" ? 16 / 9 : 2.39 / 1;
 
   const frustumRef = useRef<THREE.LineSegments>(null);
@@ -38,7 +39,7 @@ export function TrajectoryVisual({
   useFrame(() => {
     const s = usePrevisStore.getState();
     const t = s.durationFrames > 0 ? s.currentFrame / s.durationFrames : 0;
-    const { position, target } = sampleTrajectory(s.keyframes, t);
+    const { position, target } = sampleTrajectory(s.cameraChannels, t, s.durationFrames);
 
     // Drive the camera marker along the trajectory during playback, or when
     // the camera is NOT selected (so the gizmo isn't fighting the sampler).
@@ -81,12 +82,12 @@ export function TrajectoryVisual({
   // 180° axis crossing detection
   const crossesLine = useMemo(() => {
     const t = durationFrames > 0 ? currentFrame / durationFrames : 0;
-    const { position, target } = sampleTrajectory(keyframes, t);
+    const { position, target } = sampleTrajectory(cameraChannels, t, durationFrames);
     const horizAngle = (Math.atan2(position.x - target.x, position.z - target.z) * 180) / Math.PI;
     const axisBack = (actionAxisAngle + 180) % 360;
     const norm = ((horizAngle - axisBack + 540) % 360) - 180;
     return Math.abs(norm) < 18;
-  }, [keyframes, currentFrame, durationFrames, actionAxisAngle]);
+  }, [cameraChannels, currentFrame, durationFrames, actionAxisAngle]);
 
   const axisRad = (actionAxisAngle * Math.PI) / 180;
   const axisLine: [number, number, number][] = [
