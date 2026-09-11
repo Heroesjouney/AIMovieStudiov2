@@ -671,6 +671,22 @@ class ComfyVideoDriver(VideoDriver):
         if loras:
             workflow = inject_loras(workflow, loras)
 
+        # Checkpoint override — swap the model file in any loader node
+        checkpoint_override = request.extra_params.get("checkpoint_override")
+        if checkpoint_override:
+            for nid, nd in workflow.items():
+                if not isinstance(nd, dict):
+                    continue
+                ct = nd.get("class_type", "")
+                if ct in ("CheckpointLoaderSimple", "CheckpointLoader") and "ckpt_name" in nd.get("inputs", {}):
+                    old = nd["inputs"]["ckpt_name"]
+                    nd["inputs"]["ckpt_name"] = checkpoint_override
+                    print(f"[ComfyVideoDriver]   checkpoint override: {old} → {checkpoint_override}")
+                elif ct in ("UNETLoader", "UnetLoaderGGUF") and "unet_name" in nd.get("inputs", {}):
+                    old = nd["inputs"]["unet_name"]
+                    nd["inputs"]["unet_name"] = checkpoint_override
+                    print(f"[ComfyVideoDriver]   unet override: {old} → {checkpoint_override}")
+
         self._jobs[job_id] = {
             "workflow": workflow,
             "status": GenerationStatus.PENDING,

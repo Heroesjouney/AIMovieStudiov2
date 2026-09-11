@@ -5,6 +5,7 @@ import { useStudioStore } from "@/lib/store";
 import { generateImage, checkGenerationStatus, saveGeneratedToAsset, fetchAssets } from "@/lib/api";
 import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
 import { StepsCfgControl } from "@/components/shared/StepsCfgControl";
+import { CheckpointOverride } from "@/components/shared/CheckpointOverride";
 import {
   Sparkles, Loader2, Save, Download, Check, RotateCcw,
   Dices, ChevronDown, Settings, Clock, X, Layers,
@@ -96,6 +97,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
 
   // LoRA selections
   const [loras, setLoras] = useState<LoRASelection[]>([]);
+  const [checkpointOverride, setCheckpointOverride] = useState("");
 
   // Steps & CFG overrides
   const [userSteps, setUserSteps] = useState<number | null>(null);
@@ -215,6 +217,9 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
       const extraParams: Record<string, any> = {};
       if (loras.length > 0) {
         extraParams.loras = loras;
+      }
+      if (checkpointOverride) {
+        extraParams.checkpoint_override = checkpointOverride;
       }
       if (userSteps !== null) extraParams.steps = userSteps;
       if (userCfg !== null) extraParams.cfg = userCfg;
@@ -626,6 +631,12 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
                 <LoRASelector selected={loras} onChange={setLoras} />
               </div>
             )}
+
+            {/* Model Override */}
+            <CheckpointOverride
+              value={checkpointOverride}
+              onChange={setCheckpointOverride}
+            />
           </div>
         )}
       </div>

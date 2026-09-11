@@ -425,6 +425,22 @@ class ComfyImageDriver(ImageDriver):
         if loras:
             wf = inject_loras(wf, loras)
 
+        # Checkpoint override — swap the model file in any loader node
+        checkpoint_override = request.extra_params.get("checkpoint_override")
+        if checkpoint_override:
+            for nid, nd in wf.items():
+                if not isinstance(nd, dict):
+                    continue
+                ct = nd.get("class_type", "")
+                if ct in ("CheckpointLoaderSimple", "CheckpointLoader") and "ckpt_name" in nd.get("inputs", {}):
+                    old = nd["inputs"]["ckpt_name"]
+                    nd["inputs"]["ckpt_name"] = checkpoint_override
+                    print(f"[ComfyImageDriver]   checkpoint override: {old} → {checkpoint_override}")
+                elif ct in ("UNETLoader", "UnetLoaderGGUF") and "unet_name" in nd.get("inputs", {}):
+                    old = nd["inputs"]["unet_name"]
+                    nd["inputs"]["unet_name"] = checkpoint_override
+                    print(f"[ComfyImageDriver]   unet override: {old} → {checkpoint_override}")
+
         # Debug: log injected LoadImage values and denoise
         for nid, nd in wf.items():
             if nd.get("class_type") == "LoadImage":

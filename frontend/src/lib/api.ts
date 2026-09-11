@@ -182,10 +182,10 @@ export async function fetchLoras(): Promise<{ loras: LoRAInfo[]; comfy_url: stri
   return resp.json();
 }
 
-export async function uploadLora(file: File): Promise<{ name: string; size_bytes: number; path: string }> {
+export async function uploadLora(file: File, overwrite = false): Promise<{ name: string; size_bytes: number; path: string; overwritten?: boolean }> {
   const formData = new FormData();
   formData.append("file", file);
-  const resp = await fetch(`${API_BASE}/generate/loras/upload`, {
+  const resp = await fetch(`${API_BASE}/generate/loras/upload?overwrite=${overwrite}`, {
     method: "POST",
     body: formData,
   });
@@ -206,10 +206,10 @@ export async function fetchModels(): Promise<{ models: ModelInfo[]; comfy_url: s
   return resp.json();
 }
 
-export async function uploadModel(file: File): Promise<{ name: string; size_bytes: number; path: string }> {
+export async function uploadModel(file: File, overwrite = false): Promise<{ name: string; size_bytes: number; path: string; overwritten?: boolean }> {
   const formData = new FormData();
   formData.append("file", file);
-  const resp = await fetch(`${API_BASE}/generate/models/upload`, {
+  const resp = await fetch(`${API_BASE}/generate/models/upload?overwrite=${overwrite}`, {
     method: "POST",
     body: formData,
   });
@@ -263,6 +263,10 @@ export interface ComfyConfig {
   url: string;
   auth_token: string;
   is_remote: boolean;
+  models_dir: string;
+  loras_dir: string;
+  checkpoints_dir: string;
+  extra_model_dirs: string[];
 }
 
 export async function getComfyConfig(): Promise<ComfyConfig> {
@@ -270,11 +274,11 @@ export async function getComfyConfig(): Promise<ComfyConfig> {
   return resp.json();
 }
 
-export async function saveComfyConfig(url: string, authToken: string, isRemote: boolean): Promise<{ status: string }> {
+export async function saveComfyConfig(url: string, authToken: string, isRemote: boolean, modelsDir: string, lorasDir: string = "", checkpointsDir: string = "", extraModelDirs: string[] = []): Promise<{ status: string }> {
   const resp = await fetch(`${API_BASE}/settings/comfy-config`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, auth_token: authToken, is_remote: isRemote }),
+    body: JSON.stringify({ url, auth_token: authToken, is_remote: isRemote, models_dir: modelsDir, loras_dir: lorasDir, checkpoints_dir: checkpointsDir, extra_model_dirs: extraModelDirs }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: "Save failed" }));

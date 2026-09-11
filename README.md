@@ -66,6 +66,7 @@ Block out camera moves in a real-time 3D stage before spending generation credit
 - [Docker (One Command)](#-docker-one-command)
 - [How to Use](#-how-to-use)
 - [LoRA Support](#-lora-support)
+- [Model Override](#-model-override)
 - [Settings & Configuration](#-settings--configuration)
 - [Custom Workflows](#-custom-comfyui-workflows)
 - [Available Models](#-available-image-models)
@@ -99,7 +100,9 @@ Block out camera moves in a real-time 3D stage before spending generation credit
 - **🎞️ Long Take Mode** *(Experimental)* - Chain keyframe interpolation across multiple segments to generate continuous shots longer than a single clip. Define keyframes by image, prompt, or both. The backend generates missing images via T2I, interpolates between keyframe pairs using first-last-frame-to-video (FLF2V), and stitches segments with ffmpeg. Only available for models that support first+last frame (e.g. LTX Video 2.3, Wan Video).
 - **🔀 Shot Management** - Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
 - **📄 Screenplay Import** - Import Fountain (`.fountain`, `.txt`, `.spmd`) or Final Draft (`.fdx`) screenplays. The parser creates scenes with time-of-day, mood, and lighting inferred from the script, and stores the shot breakdown as a screenplay-formatted reference in each scene's recipe. Copy dialogue/action directly into new shots as you build the storyboard — the establish-then-continue workflow stays intact. Bulk-delete an entire imported screenplay with one action.
-- **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders. Available in all 5 generation surfaces: Generate tab, Shot tab, Camera tab, Shot Create panel, and Retake panel.
+- **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders. LoRAs auto-populate from ComfyUI's `models/loras/` directory (works offline). Available in all 5 generation surfaces: Generate tab, Shot tab, Camera tab, Shot Create panel, and Retake panel.
+- **🔄 Model Override** - Swap the base model (checkpoint or UNet) in any workflow from the Advanced Settings dropdown. Lists all models from `checkpoints/`, `unet/`, and `diffusion_models/` directories. Use a smaller/faster model without editing workflow JSON. Works alongside LoRAs.
+- **📁 Configurable Model Paths** - Set your ComfyUI `models` directory in Settings. Add extra model directories with a **+** button. LoRAs and models auto-populate from the filesystem whether ComfyUI is running or offline.
 - **⚙️ Settings Panel** - A built-in settings panel (gear icon in header) for managing cloud API keys, uploading models to ComfyUI, and registering custom workflows — no code changes or `.env` editing required.
 - **🔧 Custom Workflows** - Build workflows in ComfyUI, export as JSON, and upload them through the Settings panel. Custom workflows appear as new models in all dropdowns with full LoRA support. Driver dropdowns auto-refresh after registering or deleting workflows — no page reload needed.
 - **🔍 Workflow Model Analysis** - When uploading a custom workflow, the app automatically analyzes the JSON and lists all required models (checkpoints, LoRAs, VAEs, CLIP, UNet, ControlNet, etc.). Each model is checked against your ComfyUI instance — models already present show a green "In ComfyUI" badge, and missing models can be uploaded directly to the correct subdirectory from the same UI.
@@ -396,6 +399,8 @@ AI Movie Studio 2 includes built-in LoRA (Low-Rank Adaptation) support for all l
 6. The LoRA list refreshes automatically after upload
 7. LoRAs are preserved when regenerating shots (stored in the generation recipe)
 
+> 💡 **LoRAs auto-populate** — The dropdown scans your ComfyUI `models/loras/` directory on disk. LoRAs appear whether ComfyUI is running or offline. If ComfyUI is running, the app uses its API (which may include subfolder paths); if offline, it falls back to a filesystem scan.
+
 ### How It Works
 
 - LoRAs are injected as `LoraLoader` nodes into the ComfyUI workflow JSON
@@ -407,7 +412,30 @@ AI Movie Studio 2 includes built-in LoRA (Low-Rank Adaptation) support for all l
 ### LoRA Upload Endpoint
 
 - **`POST /api/generate/loras/upload`** — Uploads `.safetensors`, `.pt`, `.pth`, `.ckpt`, or `.gguf` files to ComfyUI's `models/loras/` directory
+- Pass `overwrite=true` to replace an existing LoRA with the same name
 - Target directory resolved from `COMFY_LORAS_DIR`, `COMFY_MODELS_DIR`, or `COMFY_DIR` env vars
+
+---
+
+## 🔄 Model Override
+
+Swap the base model (checkpoint or UNet) in any workflow without editing JSON files.
+
+### Using Model Override
+
+1. In any generation surface, expand **Advanced Settings**
+2. The **Model Override** dropdown lists all model files from `checkpoints/`, `unet/`, and `diffusion_models/` directories
+3. Select a different model (e.g., a smaller/faster version) — leave empty to use the workflow's built-in model
+4. Generate — the app swaps the model in the workflow before sending to ComfyUI
+
+### How It Works
+
+- The override is passed via `extra_params.checkpoint_override` in generation requests
+- The driver swaps `ckpt_name` in `CheckpointLoaderSimple` nodes or `unet_name` in `UNETLoader` / `UnetLoaderGGUF` nodes
+- Works alongside LoRA injection — the LoRA is applied to the overridden model
+- Available in all 4 generation surfaces: Generate tab, Shot Detail (retake), Shot Create panel, Camera Director (video)
+
+> 💡 **Models auto-populate** — The dropdown scans `checkpoints/`, `unet/`, `diffusion_models/`, and any extra directories you've configured. Works whether ComfyUI is running or offline.
 
 ---
 
@@ -429,12 +457,29 @@ Keys are stored locally in `backend/assets/settings.json` and loaded into enviro
 - `POST /api/settings/api-keys` — Save or update a key
 - `DELETE /api/settings/api-keys/{key_name}` — Remove a key
 
+### ComfyUI Server Configuration
+
+Configure your local ComfyUI connection and model paths:
+
+- **Server URL** — ComfyUI address (default `http://127.0.0.1:8188`)
+- **Auth Token** — Bearer token for cloud/remote ComfyUI instances
+- **Models Directory** — Base `models` folder path (e.g., `D:\AI_Master\ComfyUI\models`). The app derives `loras/`, `checkpoints/`, `unet/`, and `diffusion_models/` automatically
+- **Extra Model Directories** — Add additional model folders with the **+ Add** button. All folders are scanned and merged into the Model Override dropdown
+- **LoRAs Directory** — Optional override if your LoRAs live outside `{models_dir}/loras/`
+- **Remote / cloud server** — Toggle for remote ComfyUI instances (uses API uploads instead of filesystem)
+
+Settings are stored in `backend/assets/settings.json` and loaded into environment variables at startup and on save.
+
+**Endpoint:**
+- `GET /api/settings/comfy-config` — Returns current ComfyUI config (url, auth_token, is_remote, models_dir, loras_dir, checkpoints_dir, extra_model_dirs)
+- `POST /api/settings/comfy-config` — Saves ComfyUI config
+
 ### Model Upload
 
 Upload checkpoint models (`.safetensors`, `.ckpt`, `.pt`) directly to ComfyUI's `models/checkpoints/` directory:
 
-- **`GET /api/generate/models`** — Lists available checkpoints from ComfyUI
-- **`POST /api/generate/models/upload`** — Uploads a model file
+- **`GET /api/generate/models`** — Lists available models from `checkpoints/`, `unet/`, `diffusion_models/`, and extra directories
+- **`POST /api/generate/models/upload`** — Uploads a model file (pass `overwrite=true` to replace existing)
 - Target directory resolved from `COMFY_CHECKPOINTS_DIR`, `COMFY_MODELS_DIR`, or `COMFY_DIR` env vars
 
 > 💡 Models are stored in ComfyUI's directory — our app just queries ComfyUI's API to list them. No duplication.
@@ -558,17 +603,18 @@ All configuration is done through a single `.env` file in the `backend/` directo
 
 | Variable | Required? | Default | Description |
 | -------- | --------- | ------- | ----------- |
-| `COMFY_URL` | No (has default) | `http://127.0.0.1:8188` | URL of your local ComfyUI instance. Under Docker Compose, defaults to `host.docker.internal:8188`. |
+| `COMFY_URL` | No (has default) | `http://127.0.0.1:8188` | URL of your local ComfyUI instance. Under Docker Compose, defaults to `host.docker.internal:8188`. Can also be set via Settings panel UI. |
 | `COMFY_OUTPUT_DIR` | No | *(auto-detect)* | Path to ComfyUI's output folder (for reading saved text/metadata) |
 | `COMFY_DIR` | No | - | Path to your ComfyUI installation. Used for LoRA/model uploads (resolves `models/loras/` and `models/checkpoints/`) |
-| `COMFY_LORAS_DIR` | No | - | Direct path to ComfyUI's LoRAs directory (overrides `COMFY_DIR`/`COMFY_MODELS_DIR` for LoRA uploads) |
-| `COMFY_CHECKPOINTS_DIR` | No | - | Direct path to ComfyUI's checkpoints directory (overrides `COMFY_DIR`/`COMFY_MODELS_DIR` for model uploads) |
-| `COMFY_MODELS_DIR` | No | - | Path to ComfyUI's `models/` directory (used as fallback for both LoRA and checkpoint uploads) |
+| `COMFY_LORAS_DIR` | No | - | Direct path to ComfyUI's LoRAs directory (overrides `COMFY_DIR`/`COMFY_MODELS_DIR` for LoRA uploads). Can also be set via Settings panel UI. |
+| `COMFY_CHECKPOINTS_DIR` | No | - | Direct path to ComfyUI's checkpoints directory (overrides `COMFY_DIR`/`COMFY_MODELS_DIR` for model uploads). Can also be set via Settings panel UI. |
+| `COMFY_MODELS_DIR` | No | - | Path to ComfyUI's `models/` directory (used as fallback for both LoRA and checkpoint uploads). Can also be set via Settings panel UI. |
+| `COMFY_EXTRA_MODEL_DIRS` | No | - | JSON array of extra directories to scan for model files. Set via Settings panel UI (Extra Model Directories). |
 | `FAL_KEY` | No | - | Fal.ai API key. Enables cloud image + video models. Can also be set via Settings panel UI. |
 | `REPLICATE_API_TOKEN` | No | - | Replicate API token. Enables cloud image models + Fish Speech TTS. Can also be set via Settings panel UI. |
 | `FISH_SPEECH_URL` | No | - | URL for a self-hosted Fish Speech instance (alternative to Replicate-hosted TTS) |
 
-> 💡 You only need **one** of the cloud API keys. If you only use local ComfyUI, just set `COMFY_URL` and skip the rest. API keys can also be managed via the Settings panel (gear icon in header) — they're stored in `backend/assets/settings.json`.
+> 💡 You only need **one** of the cloud API keys. If you only use local ComfyUI, just set **Models Directory** in the Settings panel (gear icon in header) — the app handles the rest. All ComfyUI path settings are stored in `backend/assets/settings.json` and loaded into environment variables at startup.
 
 ---
 
@@ -735,7 +781,7 @@ The software itself is AGPLv3 licensed. For commercial use without open-sourcing
 Two ways: (1) Build a workflow in ComfyUI, export as API JSON, and register it via the Settings panel (gear icon in header) — no code needed. The app automatically analyzes the workflow JSON and tells you which models are required and whether they're already in ComfyUI. Missing models can be uploaded directly from the same UI. (2) Add a new Driver class in `backend/core/drivers/` for more complex integrations. See [Custom Workflows](#-custom-comfyui-workflows) for details.
 
 **How do I add LoRAs?**
-In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand Advanced Settings and use the LoRA selector. You can upload `.safetensors` LoRA files directly from the UI — they're saved to ComfyUI's `models/loras/` directory. LoRAs are preserved when regenerating shots. See [LoRA Support](#-lora-support) for details.
+In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand Advanced Settings. Use the **LoRA selector** to add LoRAs and the **Model Override** dropdown to swap the base model. You can upload `.safetensors` LoRA files directly from the UI — they're saved to ComfyUI's `models/loras/` directory. LoRAs and model overrides are preserved when regenerating shots. See [LoRA Support](#-lora-support) and [Model Override](#-model-override) for details.
 
 **How do I set API keys without editing .env?**
 Click the gear icon (⚙) in the header to open the Settings panel. You can add, update, and remove Fal.ai and Replicate API keys from there. Keys are stored in `backend/assets/settings.json` and loaded at backend startup.
@@ -761,6 +807,9 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 
 ### 🟢 Phase 1: Core Systems & Engine
 - [x] **LoRA Support** — Upload, select, and strength control across all generation surfaces
+- [x] **Model Override** — Swap base model (checkpoint/UNet) from the Advanced Settings dropdown
+- [x] **Configurable Model Paths** — Models Directory, LoRAs Directory override, and extra model directories via Settings UI
+- [x] **Offline LoRA/Model Discovery** — Filesystem fallback scans ComfyUI directories when the API is offline
 - [x] **Settings Panel** — API key management, model uploads, custom workflows, and collapsible UI
 - [x] **Custom Workflow Registration** — No-code ComfyUI model and pipeline integration
 - [x] **Workflow Model Analysis** — Auto-detect required models and verify local ComfyUI availability

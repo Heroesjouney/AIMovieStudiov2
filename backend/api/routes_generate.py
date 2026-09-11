@@ -59,7 +59,7 @@ async def list_loras():
 
 
 @router.post("/loras/upload")
-async def upload_lora(file: UploadFile = File(...)):
+async def upload_lora(file: UploadFile = File(...), overwrite: bool = False):
     """Upload a LoRA file (.safetensors) to ComfyUI's models/loras directory.
 
     The target directory is determined by (in order):
@@ -67,6 +67,8 @@ async def upload_lora(file: UploadFile = File(...)):
     2. COMFY_MODELS_DIR env var + /loras
     3. COMFY_DIR env var + /models/loras
     4. Fallback: ./ComfyUI/models/loras relative to CWD
+
+    Pass overwrite=true to replace an existing LoRA with the same name.
     """
     loras_dir = (
         os.getenv("COMFY_LORAS_DIR")
@@ -79,7 +81,7 @@ async def upload_lora(file: UploadFile = File(...)):
     if not loras_path.exists():
         raise HTTPException(
             status_code=400,
-            detail=f"ComfyUI loras directory not found: {loras_path}. Set COMFY_LORAS_DIR or COMFY_DIR env var.",
+            detail=f"ComfyUI loras directory not found: {loras_path}. Set Models Directory in Settings → ComfyUI Server, or set COMFY_LORAS_DIR / COMFY_MODELS_DIR / COMFY_DIR env var.",
         )
 
     # Validate file extension
@@ -91,56 +93,105 @@ async def upload_lora(file: UploadFile = File(...)):
         )
 
     dest = loras_path / filename
-    if dest.exists():
+    if dest.exists() and not overwrite:
         raise HTTPException(
             status_code=409,
-            detail=f"A LoRA named '{filename}' already exists.",
+            detail=f"A LoRA named '{filename}' already exists. Pass overwrite=true to replace it.",
         )
 
     # Write the file
     content = await file.read()
     dest.write_bytes(content)
-    print(f"[LoRA] Uploaded '{filename}' ({len(content)} bytes) to {dest}")
+    action = "Overwrote" if dest.exists() and overwrite else "Uploaded"
+    print(f"[LoRA] {action} '{filename}' ({len(content)} bytes) to {dest}")
 
-    return {"name": filename, "size_bytes": len(content), "path": str(dest)}
+    return {"name": filename, "size_bytes": len(content), "path": str(dest), "overwritten": overwrite and dest.exists()}
 
 
 @router.get("/models")
 async def list_models():
-    """List available checkpoint models from the local ComfyUI instance."""
+    """List available model files from the local ComfyUI instance.
+
+    Scans checkpoints, unet, and diffusion_models directories.
+    Falls back to filesystem scan if ComfyUI API is offline or returns empty.
+    """
     comfy_url = os.getenv("COMFY_URL", "http://127.0.0.1:8188")
     auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
     import aiohttp
 
+    headers = {}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    extensions = {".safetensors", ".pt", ".pth", ".ckpt", ".gguf"}
+    models_dir = os.getenv("COMFY_MODELS_DIR", "")
+
+    # Try the ComfyUI API first — query all loader node types
+    api_models: dict = {}  # filename -> True (dedup)
     try:
-        headers = {}
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(
-                f"{comfy_url}/object_info/CheckpointLoaderSimple",
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    return {"models": [], "comfy_url": comfy_url}
-                data = await resp.json()
-                ckpt_info = data.get("CheckpointLoaderSimple", {})
-                input_spec = ckpt_info.get("input", {})
-                ckpt_input = input_spec.get("ckpt_name", {})
-                if isinstance(ckpt_input, dict):
-                    filenames = ckpt_input.get("values", [])
-                elif isinstance(ckpt_input, list):
-                    filenames = ckpt_input
-                else:
-                    filenames = []
-                return {"models": [{"name": fn} for fn in filenames], "comfy_url": comfy_url}
+            for node_type, field_name in (
+                ("CheckpointLoaderSimple", "ckpt_name"),
+                ("UNETLoader", "unet_name"),
+                ("UnetLoaderGGUF", "unet_name"),
+            ):
+                try:
+                    async with session.get(
+                        f"{comfy_url}/object_info/{node_type}",
+                        timeout=aiohttp.ClientTimeout(total=3),
+                    ) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        node_info = data.get(node_type, {})
+                        input_spec = node_info.get("input", {})
+                        field_input = input_spec.get(field_name, {})
+                        if isinstance(field_input, dict):
+                            filenames = field_input.get("values", [])
+                        elif isinstance(field_input, list):
+                            filenames = field_input
+                        else:
+                            filenames = []
+                        for fn in filenames:
+                            api_models[fn] = True
+                except Exception:
+                    continue
     except Exception as e:
-        print(f"[Models] Failed to fetch checkpoint list from ComfyUI: {e}")
-        return {"models": [], "comfy_url": comfy_url}
+        print(f"[Models] ComfyUI API unreachable ({e}) — falling back to filesystem scan")
+
+    # Filesystem fallback: scan checkpoints, unet, and diffusion_models
+    if not api_models and models_dir:
+        subdirs = ("checkpoints", "unet", "diffusion_models")
+        for sub in subdirs:
+            scan_path = Path(models_dir) / sub
+            if scan_path.exists():
+                for f in sorted(scan_path.iterdir()):
+                    if f.is_file() and f.suffix.lower() in extensions:
+                        api_models[f.name] = True
+                print(f"[Models] Scanned {sub}/: found files in {scan_path}")
+
+    # Also scan extra model directories (user-configured additional paths)
+    extra_dirs_json = os.getenv("COMFY_EXTRA_MODEL_DIRS", "")
+    if extra_dirs_json:
+        try:
+            extra_dirs = json.loads(extra_dirs_json)
+        except (json.JSONDecodeError, TypeError):
+            extra_dirs = []
+        for extra_dir in extra_dirs:
+            extra_path = Path(extra_dir)
+            if extra_path.exists() and extra_path.is_dir():
+                for f in sorted(extra_path.iterdir()):
+                    if f.is_file() and f.suffix.lower() in extensions:
+                        api_models[f.name] = True
+                print(f"[Models] Scanned extra dir: {extra_path}")
+
+    models = [{"name": name} for name in sorted(api_models.keys())]
+    print(f"[Models] Total models available: {len(models)}")
+    return {"models": models, "comfy_url": comfy_url}
 
 
 @router.post("/models/upload")
-async def upload_model(file: UploadFile = File(...)):
+async def upload_model(file: UploadFile = File(...), overwrite: bool = False):
     """Upload a checkpoint model file to ComfyUI's models/checkpoints directory.
 
     The target directory is determined by (in order):
@@ -148,6 +199,8 @@ async def upload_model(file: UploadFile = File(...)):
     2. COMFY_MODELS_DIR env var + /checkpoints
     3. COMFY_DIR env var + /models/checkpoints
     4. Fallback: ./ComfyUI/models/checkpoints relative to CWD
+
+    Pass overwrite=true to replace an existing model with the same name.
     """
     ckpt_dir = (
         os.getenv("COMFY_CHECKPOINTS_DIR")
@@ -160,7 +213,7 @@ async def upload_model(file: UploadFile = File(...)):
     if not ckpt_path.exists():
         raise HTTPException(
             status_code=400,
-            detail=f"ComfyUI checkpoints directory not found: {ckpt_path}. Set COMFY_CHECKPOINTS_DIR or COMFY_DIR env var.",
+            detail=f"ComfyUI checkpoints directory not found: {ckpt_path}. Set Models Directory in Settings → ComfyUI Server, or set COMFY_CHECKPOINTS_DIR / COMFY_MODELS_DIR / COMFY_DIR env var.",
         )
 
     filename = file.filename or "uploaded.safetensors"
@@ -171,17 +224,18 @@ async def upload_model(file: UploadFile = File(...)):
         )
 
     dest = ckpt_path / filename
-    if dest.exists():
+    if dest.exists() and not overwrite:
         raise HTTPException(
             status_code=409,
-            detail=f"A model named '{filename}' already exists.",
+            detail=f"A model named '{filename}' already exists. Pass overwrite=true to replace it.",
         )
 
     content = await file.read()
     dest.write_bytes(content)
-    print(f"[Models] Uploaded '{filename}' ({len(content)} bytes) to {dest}")
+    action = "Overwrote" if dest.exists() and overwrite else "Uploaded"
+    print(f"[Models] {action} '{filename}' ({len(content)} bytes) to {dest}")
 
-    return {"name": filename, "size_bytes": len(content), "path": str(dest)}
+    return {"name": filename, "size_bytes": len(content), "path": str(dest), "overwritten": overwrite and dest.exists()}
 
 
 @router.post("/models/upload-to")
@@ -218,7 +272,7 @@ async def upload_model_to_subdir(subdirectory: str, file: UploadFile = File(...)
         except Exception:
             raise HTTPException(
                 status_code=400,
-                detail=f"ComfyUI models directory not found: {target_dir}. Set COMFY_MODELS_DIR or COMFY_DIR env var.",
+                detail=f"ComfyUI models directory not found: {target_dir}. Set Models Directory in Settings → ComfyUI Server, or set COMFY_MODELS_DIR / COMFY_DIR env var.",
             )
 
     filename = file.filename or "uploaded.safetensors"

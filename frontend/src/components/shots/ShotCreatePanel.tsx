@@ -18,6 +18,7 @@ import { AssetPicker } from "../shared/AssetPicker";
 import { ShotFrameLinker } from "../shared/ShotFrameLinker";
 import { ModelSelector } from "../shared/ModelSelector";
 import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
+import { CheckpointOverride } from "../shared/CheckpointOverride";
 import { useGenerationPolling } from "@/lib/useGenerationPolling";
 import {
   wouldCrossLine, suggestReverse,
@@ -95,6 +96,7 @@ export function ShotCreatePanel({
   const [advCfg, setAdvCfg] = useState("");
   const [advSteps, setAdvSteps] = useState("");
   const [loras, setLoras] = useState<LoRASelection[]>([]);
+  const [checkpointOverride, setCheckpointOverride] = useState("");
 
   const poll = useGenerationPolling();
 
@@ -144,6 +146,7 @@ export function ShotCreatePanel({
 
       const extraParams: Record<string, any> = {};
       if (loras.length > 0) extraParams.loras = loras;
+      if (checkpointOverride) extraParams.checkpoint_override = checkpointOverride;
 
       const resp = await generateShotFrame(
         shot.id, fullPrompt, selectedImageDriver,
@@ -515,6 +518,15 @@ export function ShotCreatePanel({
               <LoRASelector selected={loras} onChange={setLoras} compact />
             </div>
           )}
+
+          {/* Model Override */}
+          <div className="mt-3">
+            <CheckpointOverride
+              value={checkpointOverride}
+              onChange={setCheckpointOverride}
+              compact
+            />
+          </div>
         </div>
       )}
 

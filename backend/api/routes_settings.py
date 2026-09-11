@@ -37,7 +37,7 @@ def _load_settings() -> dict:
     """Load settings from the JSON file."""
     if SETTINGS_FILE.exists():
         try:
-            return json.loads(SETTINGS_FILE.read_text())
+            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8-sig"))
         except (json.JSONDecodeError, IOError):
             pass
     return {}
@@ -64,6 +64,21 @@ def load_api_keys_into_env():
         print(f"[Settings] Loaded ComfyUI URL from settings.json: {comfy_config['url']}")
     if comfy_config.get("auth_token"):
         os.environ["COMFY_AUTH_TOKEN"] = comfy_config["auth_token"]
+    if comfy_config.get("models_dir"):
+        models_dir = comfy_config["models_dir"]
+        os.environ["COMFY_MODELS_DIR"] = models_dir
+        print(f"[Settings] Loaded ComfyUI models dir from settings.json: {models_dir}")
+    if comfy_config.get("loras_dir"):
+        os.environ["COMFY_LORAS_DIR"] = comfy_config["loras_dir"]
+        print(f"[Settings] Loaded ComfyUI loras dir from settings.json: {comfy_config['loras_dir']}")
+    if comfy_config.get("checkpoints_dir"):
+        os.environ["COMFY_CHECKPOINTS_DIR"] = comfy_config["checkpoints_dir"]
+        print(f"[Settings] Loaded ComfyUI checkpoints dir from settings.json: {comfy_config['checkpoints_dir']}")
+    # Extra model directories — stored as JSON string in env for the scan code to read
+    extra_dirs = comfy_config.get("extra_model_dirs", [])
+    if extra_dirs:
+        os.environ["COMFY_EXTRA_MODEL_DIRS"] = json.dumps(extra_dirs)
+        print(f"[Settings] Loaded {len(extra_dirs)} extra model dir(s) from settings.json")
 
 
 @router.get("/api-keys")
@@ -149,6 +164,10 @@ async def get_comfy_config():
         "url": comfy.get("url", os.getenv("COMFY_URL", "http://127.0.0.1:8188")),
         "auth_token": comfy.get("auth_token", ""),
         "is_remote": comfy.get("is_remote", False),
+        "models_dir": comfy.get("models_dir", os.getenv("COMFY_MODELS_DIR", "")),
+        "loras_dir": comfy.get("loras_dir", os.getenv("COMFY_LORAS_DIR", "")),
+        "checkpoints_dir": comfy.get("checkpoints_dir", os.getenv("COMFY_CHECKPOINTS_DIR", "")),
+        "extra_model_dirs": comfy.get("extra_model_dirs", []),
     }
 
 
@@ -156,16 +175,25 @@ class SaveComfyConfigRequest(BaseModel):
     url: str
     auth_token: Optional[str] = ""
     is_remote: bool = False
+    models_dir: Optional[str] = ""
+    loras_dir: Optional[str] = ""
+    checkpoints_dir: Optional[str] = ""
+    extra_model_dirs: Optional[List[str]] = []
 
 
 @router.post("/comfy-config")
 async def save_comfy_config(req: SaveComfyConfigRequest):
     """Save ComfyUI server configuration."""
     settings = _load_settings()
+    extra_dirs = [d for d in (req.extra_model_dirs or []) if d.strip()]
     settings["comfy_config"] = {
         "url": req.url,
         "auth_token": req.auth_token or "",
         "is_remote": req.is_remote,
+        "models_dir": req.models_dir or "",
+        "loras_dir": req.loras_dir or "",
+        "checkpoints_dir": req.checkpoints_dir or "",
+        "extra_model_dirs": extra_dirs,
     }
     _save_settings(settings)
 
@@ -175,8 +203,25 @@ async def save_comfy_config(req: SaveComfyConfigRequest):
         os.environ["COMFY_AUTH_TOKEN"] = req.auth_token
     elif "COMFY_AUTH_TOKEN" in os.environ:
         del os.environ["COMFY_AUTH_TOKEN"]
+    if req.models_dir:
+        os.environ["COMFY_MODELS_DIR"] = req.models_dir
+        os.environ["COMFY_DIR"] = req.models_dir.replace("/models", "") if req.models_dir.endswith("/models") else req.models_dir
+    elif "COMFY_MODELS_DIR" in os.environ:
+        del os.environ["COMFY_MODELS_DIR"]
+    if req.loras_dir:
+        os.environ["COMFY_LORAS_DIR"] = req.loras_dir
+    elif "COMFY_LORAS_DIR" in os.environ:
+        del os.environ["COMFY_LORAS_DIR"]
+    if req.checkpoints_dir:
+        os.environ["COMFY_CHECKPOINTS_DIR"] = req.checkpoints_dir
+    elif "COMFY_CHECKPOINTS_DIR" in os.environ:
+        del os.environ["COMFY_CHECKPOINTS_DIR"]
+    if extra_dirs:
+        os.environ["COMFY_EXTRA_MODEL_DIRS"] = json.dumps(extra_dirs)
+    elif "COMFY_EXTRA_MODEL_DIRS" in os.environ:
+        del os.environ["COMFY_EXTRA_MODEL_DIRS"]
 
-    print(f"[Settings] Saved ComfyUI config: url={req.url}, remote={req.is_remote}")
+    print(f"[Settings] Saved ComfyUI config: url={req.url}, remote={req.is_remote}, models_dir={req.models_dir or '(not set)'}, loras_dir={req.loras_dir or '(not set)'}, extra_dirs={len(extra_dirs)}")
     return {"status": "ok"}
 
 

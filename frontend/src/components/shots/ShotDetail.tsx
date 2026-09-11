@@ -16,6 +16,7 @@ import { ShotFrameLinker } from "../shared/ShotFrameLinker";
 import { ModelSelector } from "../shared/ModelSelector";
 import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
 import { StepsCfgControl } from "../shared/StepsCfgControl";
+import { CheckpointOverride } from "../shared/CheckpointOverride";
 import { Lightbox } from "../shared/Lightbox";
 import { MultiAnglePanel } from "./MultiAnglePanel";
 import { VariationPanel } from "./VariationPanel";
@@ -43,6 +44,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
 
   // LoRA selections
   const [loras, setLoras] = useState<LoRASelection[]>([]);
+  const [checkpointOverride, setCheckpointOverride] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Steps & CFG overrides
@@ -98,6 +100,9 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       const extraParams: Record<string, any> = {};
       if (loras.length > 0) {
         extraParams.loras = loras;
+      }
+      if (checkpointOverride) {
+        extraParams.checkpoint_override = checkpointOverride;
       }
       if (userSteps !== null) extraParams.steps = userSteps;
       if (userCfg !== null) extraParams.cfg = userCfg;
@@ -341,6 +346,11 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
                       <LoRASelector selected={loras} onChange={setLoras} compact />
                     </div>
                   )}
+                  <CheckpointOverride
+                    value={checkpointOverride}
+                    onChange={setCheckpointOverride}
+                    compact
+                  />
                 </div>
               )}
             </div>

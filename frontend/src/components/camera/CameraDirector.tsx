@@ -30,6 +30,7 @@ import {
   ChevronDown, Settings, Clock, Route,
 } from "lucide-react";
 import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
+import { CheckpointOverride } from "@/components/shared/CheckpointOverride";
 import { StepsCfgControl } from "@/components/shared/StepsCfgControl";
 
 // =============================================================================
@@ -248,6 +249,9 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   // LoRA selections
   const [loras, setLoras] = useState<LoRASelection[]>([]);
+
+  // Checkpoint override (swap model file in the workflow)
+  const [checkpointOverride, setCheckpointOverride] = useState("");
 
   // Steps & CFG overrides
   const [userSteps, setUserSteps] = useState<number | null>(null);
@@ -735,6 +739,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           ...(loras.length > 0 ? { loras } : {}),
           ...(userSteps !== null ? { steps: userSteps } : {}),
           ...(userCfg !== null ? { cfg: userCfg } : {}),
+          ...(checkpointOverride ? { checkpoint_override: checkpointOverride } : {}),
         },
         skip_continuity: skipContinuity,
       });
@@ -954,6 +959,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         ...(loras.length > 0 ? { loras } : {}),
         ...(userSteps !== null ? { steps: userSteps } : {}),
         ...(userCfg !== null ? { cfg: userCfg } : {}),
+        ...(checkpointOverride ? { checkpoint_override: checkpointOverride } : {}),
       },
       skip_continuity: skipContinuity,
     };
@@ -1863,6 +1869,12 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                   <LoRASelector selected={loras} onChange={setLoras} />
                 </div>
               )}
+
+              {/* Model Override */}
+              <CheckpointOverride
+                value={checkpointOverride}
+                onChange={setCheckpointOverride}
+              />
             </div>
           )}
         </div>

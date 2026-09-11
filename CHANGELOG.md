@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Configurable ComfyUI Model Paths
+- **Models Directory setting** — Set the base `models` folder for your ComfyUI installation in Settings → ComfyUI Server → Models Directory. The app derives `loras/`, `checkpoints/`, `unet/`, and `diffusion_models/` subdirectories automatically. No `.env` editing required.
+- **LoRAs Directory override** — Optional field to point LoRAs to a non-standard path if your setup stores them outside `{models_dir}/loras/`.
+- **Extra Model Directories** — Add additional model folders with a **+ Add** button under Models Directory. All folders are scanned for model files and merged into the Model Override dropdown. Useful for shared model folders on other drives.
+- **Settings persistence** — All ComfyUI path settings are stored in `backend/assets/settings.json` and loaded into environment variables (`COMFY_MODELS_DIR`, `COMFY_LORAS_DIR`, `COMFY_EXTRA_MODEL_DIRS`) at backend startup and on save.
+- **UTF-8 BOM handling** — Settings loader now reads `settings.json` with `utf-8-sig` encoding so files written by PowerShell's `Set-Content` (which adds a BOM) parse correctly.
+
+#### Model Override (Checkpoint Swap)
+- **Model Override dropdown** — New dropdown in the Advanced section of all 4 generation surfaces (Generate tab, Shot Detail retake, Shot Create panel, Camera Director). Lists all model files from `checkpoints/`, `unet/`, and `diffusion_models/` directories. Select a different model to swap the base model in the workflow before sending to ComfyUI — no JSON editing required.
+- **Override injection** — `ComfyImageDriver` and `ComfyVideoDriver` now check `extra_params.checkpoint_override` and swap the `ckpt_name` (CheckpointLoaderSimple) or `unet_name` (UNETLoader / UnetLoaderGGUF) in the workflow. Works alongside LoRA injection — the LoRA is applied to the overridden model.
+- **Multi-directory model scan** — `GET /api/generate/models` now queries ComfyUI API for `CheckpointLoaderSimple`, `UNETLoader`, and `UnetLoaderGGUF` node types, and falls back to scanning `checkpoints/`, `unet/`, `diffusion_models/`, and any configured extra directories on disk.
+
+#### Offline LoRA & Model Discovery
+- **Filesystem fallback for LoRAs** — `GET /api/generate/loras` now falls back to scanning the `loras/` directory on disk when ComfyUI is offline or returns an empty list. LoRAs appear in the dropdown whether ComfyUI is running or not.
+- **Filesystem fallback for models** — `GET /api/generate/models` falls back to scanning `checkpoints/`, `unet/`, `diffusion_models/`, and extra directories on disk when ComfyUI is offline.
+- **Shorter API timeout** — ComfyUI API queries now use a 3-second timeout (was 10s) so the filesystem fallback kicks in quickly when ComfyUI is down.
+
+#### Upload Improvements
+- **Overwrite support** — LoRA and checkpoint upload endpoints now accept an `overwrite` query parameter. When a file with the same name exists, the frontend prompts to confirm overwrite instead of silently failing with a 409.
+- **Updated error messages** — Upload error messages now direct users to set the Models Directory in Settings → ComfyUI Server instead of referencing environment variables.
+
 ### Fixed
 
 #### Scene Deletion Preserves Videos, Deletes Images

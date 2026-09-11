@@ -71,6 +71,10 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
   const [comfyAuth, setComfyAuth] = useState("");
   const [comfyRemote, setComfyRemote] = useState(false);
+  const [comfyModelsDir, setComfyModelsDir] = useState("");
+  const [comfyLorasDir, setComfyLorasDir] = useState("");
+  const [comfyCheckpointsDir, setComfyCheckpointsDir] = useState("");
+  const [comfyExtraModelDirs, setComfyExtraModelDirs] = useState<string[]>([]);
   const [loadingComfy, setLoadingComfy] = useState(true);
   const [savingComfy, setSavingComfy] = useState(false);
   const [comfyMsg, setComfyMsg] = useState<string | null>(null);
@@ -145,6 +149,10 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       setComfyUrl(cfg.url);
       setComfyAuth(cfg.auth_token || "");
       setComfyRemote(cfg.is_remote);
+      setComfyModelsDir(cfg.models_dir || "");
+      setComfyLorasDir(cfg.loras_dir || "");
+      setComfyCheckpointsDir(cfg.checkpoints_dir || "");
+      setComfyExtraModelDirs(cfg.extra_model_dirs || []);
     } catch {
       setComfyError("Failed to load ComfyUI config");
     } finally {
@@ -201,7 +209,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     setComfyError(null);
     setComfyMsg(null);
     try {
-      await saveComfyConfig(comfyUrl.trim(), comfyAuth.trim(), comfyRemote);
+      await saveComfyConfig(comfyUrl.trim(), comfyAuth.trim(), comfyRemote, comfyModelsDir.trim(), comfyLorasDir.trim(), comfyCheckpointsDir.trim(), comfyExtraModelDirs.filter(d => d.trim()));
       setComfyMsg("ComfyUI server config saved! Restart backend to apply.");
     } catch (err) {
       setComfyError(err instanceof Error ? err.message : "Failed to save");
@@ -344,31 +352,61 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   };
 
-  const handleUploadLora = async (file: File) => {
+  const handleUploadLora = async (file: File, overwrite = false) => {
     setUploadingLora(true);
     setLoraError(null);
     setLoraMsg(null);
     try {
-      await uploadLora(file);
+      await uploadLora(file, overwrite);
       setLoraMsg(`Uploaded ${file.name} — refreshing list...`);
       await loadLoras();
     } catch (err) {
-      setLoraError(err instanceof Error ? err.message : "Upload failed");
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      if (msg.includes("already exists")) {
+        setLoraError(msg);
+        if (window.confirm(`A LoRA named '${file.name}' already exists. Overwrite it?`)) {
+          setLoraError(null);
+          try {
+            await uploadLora(file, true);
+            setLoraMsg(`Overwrote ${file.name} — refreshing list...`);
+            await loadLoras();
+          } catch (err2) {
+            setLoraError(err2 instanceof Error ? err2.message : "Overwrite failed");
+          }
+        }
+      } else {
+        setLoraError(msg);
+      }
     } finally {
       setUploadingLora(false);
     }
   };
 
-  const handleUploadModel = async (file: File) => {
+  const handleUploadModel = async (file: File, overwrite = false) => {
     setUploadingModel(true);
     setModelError(null);
     setModelMsg(null);
     try {
-      await uploadModel(file);
+      await uploadModel(file, overwrite);
       setModelMsg(`Uploaded ${file.name} — refreshing list...`);
       await loadModels();
     } catch (err) {
-      setModelError(err instanceof Error ? err.message : "Upload failed");
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      if (msg.includes("already exists")) {
+        setModelError(msg);
+        if (window.confirm(`A model named '${file.name}' already exists. Overwrite it?`)) {
+          setModelError(null);
+          try {
+            await uploadModel(file, true);
+            setModelMsg(`Overwrote ${file.name} — refreshing list...`);
+            await loadModels();
+          } catch (err2) {
+            setModelError(err2 instanceof Error ? err2.message : "Overwrite failed");
+          }
+        }
+      } else {
+        setModelError(msg);
+      }
     } finally {
       setUploadingModel(false);
     }
@@ -428,6 +466,85 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     placeholder="Bearer token or API key"
                     className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none"
                   />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1">
+                    Models Directory <span className="normal-case opacity-50">(local installs — path to ComfyUI/models)</span>
+                  </label>
+                  <input
+                    value={comfyModelsDir}
+                    onChange={(e) => setComfyModelsDir(e.target.value)}
+                    placeholder="D:\AI_Master\ComfyUI-Easy-Install\ComfyUI-Easy-Install\ComfyUI\models"
+                    className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none font-mono"
+                  />
+                  <p className="text-[10px] text-studio-muted/60 mt-1">
+                    Set this to your ComfyUI <code className="text-studio-accent">models</code> folder so LoRA and model uploads go to the right place. Leave empty for remote/cloud servers.
+                  </p>
+                </div>
+
+                {/* Extra model directories (under Models Directory) */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
+                      Extra Model Directories <span className="normal-case opacity-50">(optional)</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setComfyExtraModelDirs([...comfyExtraModelDirs, ""])}
+                      className="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-studio-accent/20 hover:bg-studio-accent/30 text-studio-accent transition-colors"
+                      title="Add another model directory"
+                    >
+                      <Plus className="w-3 h-3" />
+                      Add
+                    </button>
+                  </div>
+                  {comfyExtraModelDirs.length === 0 ? (
+                    <p className="text-[10px] text-studio-muted/50">
+                      Add extra directories to scan for model files (e.g. a shared models folder on another drive).
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {comfyExtraModelDirs.map((dir, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5">
+                          <input
+                            value={dir}
+                            onChange={(e) => {
+                              const next = [...comfyExtraModelDirs];
+                              next[idx] = e.target.value;
+                              setComfyExtraModelDirs(next);
+                            }}
+                            placeholder="D:\SharedModels\checkpoints"
+                            className="flex-1 bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setComfyExtraModelDirs(comfyExtraModelDirs.filter((_, i) => i !== idx))}
+                            className="p-1 rounded hover:bg-studio-danger/20 text-studio-muted hover:text-studio-danger transition-colors shrink-0"
+                            title="Remove this directory"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1">
+                      LoRAs Directory <span className="normal-case opacity-50">(optional override)</span>
+                    </label>
+                    <input
+                      value={comfyLorasDir}
+                      onChange={(e) => setComfyLorasDir(e.target.value)}
+                      placeholder="{models_dir}/loras"
+                      className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none font-mono"
+                    />
+                    <p className="text-[10px] text-studio-muted/60 mt-1">
+                      Optional: override the LoRAs folder if your setup uses a non-standard path. Leave empty to use <code className="text-studio-accent">models_dir/loras</code>.
+                    </p>
+                  </div>
                 </div>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input

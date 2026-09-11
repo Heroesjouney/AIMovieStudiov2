@@ -110,37 +110,60 @@ def inject_loras(workflow: dict, loras: List[Dict[str, Any]]) -> dict:
 async def fetch_lora_list(comfy_url: str) -> List[Dict[str, Any]]:
     """Fetch the list of available LoRAs from ComfyUI's object_info endpoint.
 
-    Returns a list of {"name": "filename.safetensors", "size_bytes": ...} dicts.
+    Falls back to scanning the loras directory on disk if ComfyUI is offline.
     """
     import aiohttp
     import os
+    from pathlib import Path
 
     auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
     headers = {}
     if auth_token:
         headers["Authorization"] = f"Bearer {auth_token}"
 
+    # Try the ComfyUI API first (short timeout — fall back to disk quickly)
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(
                 f"{comfy_url}/object_info/LoraLoader",
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=3),
             ) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-                lora_info = data.get("LoraLoader", {})
-                input_spec = lora_info.get("input", {})
-                lora_input = input_spec.get("lora_name", {})
-                # lora_name is a list of allowed values (filenames)
-                if isinstance(lora_input, dict):
-                    filenames = lora_input.get("values", [])
-                elif isinstance(lora_input, list):
-                    filenames = lora_input
-                else:
-                    filenames = []
-
-                return [{"name": fn} for fn in filenames]
+                if resp.status == 200:
+                    data = await resp.json()
+                    lora_info = data.get("LoraLoader", {})
+                    input_spec = lora_info.get("input", {})
+                    lora_input = input_spec.get("lora_name", {})
+                    if isinstance(lora_input, dict):
+                        filenames = lora_input.get("values", [])
+                    elif isinstance(lora_input, list):
+                        filenames = lora_input
+                    else:
+                        filenames = []
+                    if filenames:
+                        return [{"name": fn} for fn in filenames]
+                    # API returned empty list — try filesystem too
     except Exception as e:
-        print(f"[LoRA] Failed to fetch LoRA list from ComfyUI: {e}")
+        print(f"[LoRA] ComfyUI API unreachable ({e}) — falling back to filesystem scan")
+
+    # Fallback: scan the loras directory on disk
+    loras_dir = (
+        os.getenv("COMFY_LORAS_DIR")
+        or (os.path.join(os.getenv("COMFY_MODELS_DIR", ""), "loras") if os.getenv("COMFY_MODELS_DIR") else None)
+        or (os.path.join(os.getenv("COMFY_DIR", ""), "models", "loras") if os.getenv("COMFY_DIR") else None)
+    )
+    if not loras_dir:
+        print("[LoRA] No loras directory configured — set Models Directory in Settings")
         return []
+
+    loras_path = Path(loras_dir)
+    if not loras_path.exists():
+        print(f"[LoRA] Loras directory not found: {loras_path}")
+        return []
+
+    extensions = {".safetensors", ".pt", ".pth", ".ckpt", ".gguf"}
+    loras = []
+    for f in sorted(loras_path.iterdir()):
+        if f.is_file() and f.suffix.lower() in extensions:
+            loras.append({"name": f.name})
+    print(f"[LoRA] Found {len(loras)} LoRA(s) via filesystem scan: {loras_path}")
+    return loras
