@@ -3,7 +3,7 @@
 import { useEffect, useRef, useMemo } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { usePrevisStore } from "@/lib/usePrevisStore";
+import { usePrevisStore, aspectRatioValue } from "@/lib/usePrevisStore";
 import { focalToFov, sampleTrajectory, sampleProxyTransform } from "@/lib/previsTrajectory";
 import { ProxyMesh } from "./ProxyMesh";
 
@@ -77,7 +77,7 @@ function ViewfinderCamera() {
   const focalLength = usePrevisStore((s) => s.focalLength);
   const aspectRatio = usePrevisStore((s) => s.aspectRatio);
 
-  const aspect = aspectRatio === "16:9" ? 16 / 9 : 2.39 / 1;
+  const aspect = aspectRatioValue(aspectRatio);
 
   // Tighten near/far to the scene scale for accurate depth buffer precision.
   useEffect(() => {
@@ -91,10 +91,13 @@ function ViewfinderCamera() {
   useFrame(() => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return;
     const t = durationFrames > 0 ? currentFrame / durationFrames : 0;
-    const { position, target } = sampleTrajectory(cameraChannels, t, durationFrames);
+    const { position, target, roll, focal } = sampleTrajectory(cameraChannels, t, durationFrames);
     camera.position.copy(position);
     camera.lookAt(target);
-    camera.fov = focalToFov(focalLength);
+    // Dutch angle — rotate around the view forward axis.
+    camera.rotateZ(THREE.MathUtils.degToRad(roll));
+    // Animated focal (dolly zoom) when keyed, otherwise the static setting.
+    camera.fov = focalToFov(focal ?? focalLength);
     camera.aspect = aspect;
     camera.updateProjectionMatrix();
   });

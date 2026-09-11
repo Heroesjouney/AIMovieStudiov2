@@ -2,12 +2,27 @@
 
 import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Line, Html } from "@react-three/drei";
+import { Line } from "@react-three/drei";
 import * as THREE from "three";
-import { usePrevisStore } from "@/lib/usePrevisStore";
+import { usePrevisStore, aspectRatioValue } from "@/lib/usePrevisStore";
 import { focalToFov, sampleTrajectory, trajectoryPoints } from "@/lib/previsTrajectory";
+import { SceneLabel } from "./SceneLabel";
 
 const STAGE_EXTENT = 10;
+
+// Frustum wire = 4 rays (camera → corners) + 4 edges = 16 points = 48 floats.
+const FRUSTUM_FLOATS = 48;
+
+// Module-scope scratch objects — reused every frame so playback doesn't
+// generate garbage (the old code allocated a new buffer + ~10 vectors per
+// frame, which caused GC stutter on long timelines).
+const _dir = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _trueUp = new THREE.Vector3();
+const _center = new THREE.Vector3();
+const _corner = new THREE.Vector3();
+const _nextCorner = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
 
 /**
  * Editor-view overlay: trajectory spline, keyframe markers (click to delete),
@@ -31,15 +46,20 @@ export function TrajectoryVisual({
   const selectCamera = usePrevisStore((s) => s.selectCamera);
 
   const pathPts = useMemo(() => trajectoryPoints(cameraChannels, 96, durationFrames), [cameraChannels, durationFrames]);
-  const aspect = aspectRatio === "16:9" ? 16 / 9 : 2.39 / 1;
+  const aspect = aspectRatioValue(aspectRatio);
 
   const frustumRef = useRef<THREE.LineSegments>(null);
-  const frustumGeom = useMemo(() => new THREE.BufferGeometry(), []);
+  // Preallocated frustum buffer — written in place every frame (no GC churn).
+  const frustumGeom = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(FRUSTUM_FLOATS), 3));
+    return g;
+  }, []);
 
   useFrame(() => {
     const s = usePrevisStore.getState();
     const t = s.durationFrames > 0 ? s.currentFrame / s.durationFrames : 0;
-    const { position, target } = sampleTrajectory(s.cameraChannels, t, s.durationFrames);
+    const { position, target, roll, focal } = sampleTrajectory(s.cameraChannels, t, s.durationFrames);
 
     // Drive the camera marker along the trajectory during playback, or when
     // the camera is NOT selected (so the gizmo isn't fighting the sampler).
@@ -47,35 +67,44 @@ export function TrajectoryVisual({
     if (cameraRef.current && (!cameraSelected || s.isPlaying)) {
       cameraRef.current.position.copy(position);
       cameraRef.current.lookAt(target);
+      cameraRef.current.rotateZ(THREE.MathUtils.degToRad(roll));
     }
 
     // Rebuild frustum from the camera's current position (works during drag too)
     const camPos = cameraRef.current ? cameraRef.current.position : position;
-    const dir = target.clone().sub(camPos);
-    const dist = dir.length() || 1;
-    dir.normalize();
-    const fov = focalToFov(focalLength) * (Math.PI / 180);
+    _dir.copy(target).sub(camPos);
+    const dist = _dir.length() || 1;
+    _dir.normalize();
+    // Use the animated focal when keyed, otherwise the static setting.
+    const fov = focalToFov(focal ?? focalLength) * (Math.PI / 180);
     const halfH = Math.tan(fov / 2) * dist;
     const halfW = halfH * aspect;
 
-    const up = new THREE.Vector3(0, 1, 0);
-    const right = new THREE.Vector3().crossVectors(dir, up).normalize();
-    const trueUp = new THREE.Vector3().crossVectors(right, dir).normalize();
+    _right.crossVectors(_dir, UP).normalize();
+    _trueUp.crossVectors(_right, _dir).normalize();
 
-    const center = camPos.clone().add(dir.clone().multiplyScalar(dist));
-    const c = [
-      center.clone().add(right.clone().multiplyScalar(halfW)).add(trueUp.clone().multiplyScalar(halfH)),
-      center.clone().add(right.clone().multiplyScalar(-halfW)).add(trueUp.clone().multiplyScalar(halfH)),
-      center.clone().add(right.clone().multiplyScalar(-halfW)).add(trueUp.clone().multiplyScalar(-halfH)),
-      center.clone().add(right.clone().multiplyScalar(halfW)).add(trueUp.clone().multiplyScalar(-halfH)),
-    ];
-    const verts: number[] = [];
+    _center.copy(camPos).addScaledVector(_dir, dist);
+
+    const posAttr = frustumGeom.getAttribute("position") as THREE.BufferAttribute;
+    const arr = posAttr.array as Float32Array;
+    let o = 0;
     for (let i = 0; i < 4; i++) {
-      verts.push(camPos.x, camPos.y, camPos.z, c[i].x, c[i].y, c[i].z);
+      // Corner signs: 0=(+W,+H) 1=(-W,+H) 2=(-W,-H) 3=(+W,-H)
+      const sx = i === 0 || i === 3 ? halfW : -halfW;
+      const sy = i === 0 || i === 1 ? halfH : -halfH;
+      _corner.copy(_center).addScaledVector(_right, sx).addScaledVector(_trueUp, sy);
+      // Ray: camera → corner
+      arr[o++] = camPos.x; arr[o++] = camPos.y; arr[o++] = camPos.z;
+      arr[o++] = _corner.x; arr[o++] = _corner.y; arr[o++] = _corner.z;
+      // Edge: corner → next corner
       const n = (i + 1) % 4;
-      verts.push(c[i].x, c[i].y, c[i].z, c[n].x, c[n].y, c[n].z);
+      const nx = n === 0 || n === 3 ? halfW : -halfW;
+      const ny = n === 0 || n === 1 ? halfH : -halfH;
+      _nextCorner.copy(_center).addScaledVector(_right, nx).addScaledVector(_trueUp, ny);
+      arr[o++] = _corner.x; arr[o++] = _corner.y; arr[o++] = _corner.z;
+      arr[o++] = _nextCorner.x; arr[o++] = _nextCorner.y; arr[o++] = _nextCorner.z;
     }
-    frustumGeom.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+    posAttr.needsUpdate = true;
     if (frustumRef.current) frustumRef.current.geometry = frustumGeom;
   });
 
@@ -138,11 +167,7 @@ export function TrajectoryVisual({
                 <meshBasicMaterial color="#ffffff" transparent opacity={0.2} />
               </mesh>
             )}
-            <Html position={[0, 0.2, 0]} center>
-              <div className={`text-[7px] select-none pointer-events-none whitespace-nowrap ${isCurrent ? "text-white font-bold" : "text-studio-muted/60"}`}>
-                f{k.frame}
-              </div>
-            </Html>
+            <SceneLabel text={`f${k.frame}`} position={[0, 0.2, 0]} color={isCurrent ? "#ffffff" : "#94a3b8"} bold={isCurrent} />
           </group>
         );
       })}
@@ -154,11 +179,7 @@ export function TrajectoryVisual({
 
       {/* 180° warning label */}
       {crossesLine && (
-        <Html position={[0, STAGE_EXTENT * 0.4, 0]} center>
-          <div className="text-[10px] font-bold text-red-400 bg-red-500/15 px-1.5 py-0.5 rounded select-none pointer-events-none whitespace-nowrap">
-            180° AXIS CROSSED
-          </div>
-        </Html>
+        <SceneLabel text="180° AXIS CROSSED" position={[0, STAGE_EXTENT * 0.4, 0]} color="#f87171" height={0.45} bold />
       )}
     </group>
   );
@@ -268,11 +289,12 @@ export function CameraMarker({
         <meshStandardMaterial color="#71717a" metalness={0.8} roughness={0.25} />
       </mesh>
 
-      <Html position={[0, 0.4, 0]} center>
-        <div className={`text-[7px] font-bold select-none pointer-events-none whitespace-nowrap ${cameraSelected ? "text-white" : "text-amber-400"}`}>
-          {cameraSelected ? "CAMERA" : "click to edit"}
-        </div>
-      </Html>
+      <SceneLabel
+        text={cameraSelected ? "CAMERA" : "click to edit"}
+        position={[0, 0.4, 0]}
+        color={cameraSelected ? "#ffffff" : "#fbbf24"}
+        bold
+      />
     </group>
   );
 }

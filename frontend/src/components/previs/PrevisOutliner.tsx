@@ -56,7 +56,10 @@ export function PrevisOutliner() {
       {/* Header */}
       <div className="px-2.5 py-1.5 border-b border-studio-border shrink-0">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[9px] text-studio-muted/60 uppercase tracking-wider font-semibold">
+          <span
+            className="text-[9px] text-studio-muted/60 uppercase tracking-wider font-semibold cursor-help"
+            title="Double-click an item to rename · Drag in 3D to move"
+          >
             Scene
           </span>
           <div className="relative">
@@ -174,12 +177,7 @@ export function PrevisOutliner() {
         })}
       </div>
 
-      {/* Footer hint */}
-      <div className="px-2.5 py-1 border-t border-studio-border shrink-0">
-        <p className="text-[8px] text-studio-muted/30 leading-tight">
-          Double-click to rename · Drag in 3D to move
-        </p>
-      </div>
+      {/* Footer — removed; hint moved to header tooltip */}
     </div>
   );
 }

@@ -212,6 +212,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     addTimelineClip, addAudioTrack, setTimelineProjectId, timeline,
     setSelectedShotId,
     activeVideoJob, setActiveVideoJob,
+    pendingRefVideoPath, setPendingRefVideoPath,
   } = useStudioStore();
 
   // Mode — explicit user selection (default to t2v when no shot selected)
@@ -304,6 +305,16 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     [shots, selectedShotId]
   );
   const caps = getModelCaps(selectedModelId, videoDrivers);
+
+  // Previs handoff — when a previs recording arrives from the Previs stage,
+  // apply it as the video reference and switch to Reference (r2v) mode so all
+  // generation (and its other references) stay here in the Camera Director.
+  useEffect(() => {
+    if (!pendingRefVideoPath) return;
+    setRefVideoPath(pendingRefVideoPath);
+    if (caps.supportsR2V) setMode("r2v");
+    setPendingRefVideoPath(null);
+  }, [pendingRefVideoPath, caps.supportsR2V, setPendingRefVideoPath]);
 
   // Storyboard frames for reference picking — same scene when shot selected, all frames otherwise
   // Exclude hidden (scratch/freestyle) shots from pickers

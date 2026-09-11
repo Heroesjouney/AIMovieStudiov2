@@ -33,6 +33,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Depth Pass** (`ViewfinderScene.tsx`) — Custom linear depth shader (replaces `THREE.MeshDepthMaterial`) that maps view-space distance linearly across `[0, depthRange]` — white at camera, black at `depthRange` meters. Adjustable range slider (2–40m) so the gradient covers the scene. Affects the rendered MP4, producing a depth-reference clip for downstream video-to-video models.
 - **Viewport Letterboxing** — In Camera mode, the editor canvas is scissored to the target aspect ratio with CSS letterbox bars so the user sees the exact framing the camera will capture.
 
+#### Previs Professional Upgrade
+- **Eased Camera Motion** — Keyframe segments now interpolate with smoothstep ease-in/out by default (accelerate/settle like real camera hardware) instead of robotic linear ramps. Per-key easing is toggleable (smooth ↔ linear) via **shift+click** on a channel keyframe in the timeline.
+- **Dutch Angle (Roll)** — New `roll` camera channel (degrees) applied as a rotation around the view forward axis in the viewfinder, fly mode, and camera marker. **Keyframable from the rotate gizmo**: the camera gizmo now uses local space (rings = pan / tilt / roll) and decomposes the gizmo rotation against the zero-roll lookAt orientation so the twist around the lens keys the `roll` channel exactly — gizmo, inspector slider, and timeline all write the same channel and round-trip losslessly.
+- **Focal Length Animation** — New `focal` channel enables dolly-zoom (Vertigo) shots. When keyed, the viewfinder + frustum sample the animated focal; the focal buttons also update the key at the current frame (marked "animated").
+- **Scene Persistence** — Previs scenes (proxies, camera channels, proxy keyframes, timeline + capture settings) now save to the Vault at `assets/<project>/previs/scene.json` (`GET/PUT /api/previs/{project_id}`), hydrate on mount, and **auto-save 1s after any authoring change** (flushed on tab switch). A Save button + status indicator lives in the transport bar. Reloads no longer lose work.
+- **Undo / Redo** — 50-step authoring history (proxies, keyframes, trajectory, duration) with `Ctrl+Z` / `Ctrl+Shift+Z` (or `Ctrl+Y`) and transport-bar buttons. Gizmo drags push one entry per drag (mouse-down boundary), fly-mode WASD one per gesture, so continuous writes don't flood the stack.
+- **Top-Down Plan View** — New **Plan** viewport mode (**P**): orthographic floor-plan schematic with camera path, keyframe markers, and proxy name labels — the classic previs deliverable. Pan + wheel-zoom navigation; gizmos hidden.
+- **Gizmo Grid Snapping** — Magnet toggle in the viewport toolbar snaps gizmo drags to 0.5m translation / 15° rotation increments.
+- **Performance: Frustum Buffer** — The FOV frustum in `TrajectoryVisual` no longer allocates a new geometry + ~10 vectors every frame; writes into a preallocated `Float32Array` with reusable scratch vectors (eliminates GC stutter during playback).
+- **Performance: Sprite Labels** — Replaced all drei `<Html>` DOM labels (keyframe tags, distance markers, camera marker, 180° warning) with canvas-texture sprites (`SceneLabel.tsx`) — single GPU quads that billboard in both perspective and ortho views, fully offline (no font CDN).
+- **Smarter Empty-Channel Defaults** — Sampling an empty position or target channel now falls back to the standard default pose per side instead of snapping the camera to the origin when only one side is keyed.
+
 #### Audio System Overhaul
 
 ##### ComfyUI Audio Driver

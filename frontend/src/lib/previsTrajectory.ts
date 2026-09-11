@@ -14,6 +14,10 @@ export interface CameraKeyframe {
   frame: number;
   position: [number, number, number];
   target: [number, number, number];
+  /** Dutch angle in degrees (rotation around the view forward axis). */
+  roll: number;
+  /** Focal length in mm at this key (0 = not animated / use static). */
+  focal: number;
 }
 
 /** A keyframe for an object's transform (position, rotation, scale). */
@@ -28,7 +32,7 @@ export interface ProxyKeyframe {
 // Each camera transform channel gets its own keyframe track so the user can
 // keyframe X position independently from Y, pan independently from tilt, etc.
 
-export type CameraChannel = "posX" | "posY" | "posZ" | "targetX" | "targetY" | "targetZ";
+export type CameraChannel = "posX" | "posY" | "posZ" | "targetX" | "targetY" | "targetZ" | "roll" | "focal";
 
 export const CAMERA_CHANNELS: { id: CameraChannel; label: string; color: string }[] = [
   { id: "posX", label: "Pos X", color: "#ef4444" },
@@ -37,11 +41,17 @@ export const CAMERA_CHANNELS: { id: CameraChannel; label: string; color: string 
   { id: "targetX", label: "Tgt X", color: "#f87171" },
   { id: "targetY", label: "Tgt Y", color: "#4ade80" },
   { id: "targetZ", label: "Tgt Z", color: "#60a5fa" },
+  { id: "roll", label: "Roll°", color: "#fbbf24" },
+  { id: "focal", label: "Focal", color: "#a78bfa" },
 ];
 
 export interface Keyframe1D {
   frame: number;
   value: number;
+  /** Interpolation for the segment starting at this key.
+   *  "smooth" (default) = ease-in/out ramp, like a physical camera move.
+   *  "linear" = constant velocity through the segment. */
+  ease?: "smooth" | "linear";
 }
 
 export type CameraChannelKeyframes = Record<CameraChannel, Keyframe1D[]>;
@@ -54,6 +64,8 @@ export function emptyCameraChannels(): CameraChannelKeyframes {
     targetX: [],
     targetY: [],
     targetZ: [],
+    roll: [],
+    focal: [],
   };
 }
 
@@ -66,6 +78,8 @@ export function keyframesToChannels(keyframes: CameraKeyframe[]): CameraChannelK
     targetX: keyframes.map((k) => ({ frame: k.frame, value: k.target[0] })),
     targetY: keyframes.map((k) => ({ frame: k.frame, value: k.target[1] })),
     targetZ: keyframes.map((k) => ({ frame: k.frame, value: k.target[2] })),
+    roll: keyframes.filter((k) => k.roll !== 0).map((k) => ({ frame: k.frame, value: k.roll })),
+    focal: keyframes.filter((k) => k.focal > 0).map((k) => ({ frame: k.frame, value: k.focal })),
   };
 }
 
@@ -89,12 +103,18 @@ export function channelsToKeyframes(channels: CameraChannelKeyframes): CameraKey
       sampleChannel1D(channels.targetY, frame),
       sampleChannel1D(channels.targetZ, frame),
     ],
+    roll: sampleChannel1D(channels.roll, frame),
+    focal: sampleChannel1D(channels.focal, frame),
   }));
 }
 
 /**
- * Sample a 1D keyframe track at a given frame using linear interpolation.
- * Falls back to the nearest keyframe value if outside the keyframe range.
+ * Sample a 1D keyframe track at a given frame.
+ *
+ * Interpolation is controlled by each key's `ease` property (the segment
+ * starting at that key): "smooth" (default) applies an ease-in/out ramp so
+ * camera moves accelerate and settle like real hardware; "linear" holds a
+ * constant velocity. Falls back to the nearest keyframe value outside range.
  */
 export function sampleChannel1D(keyframes: Keyframe1D[], frame: number): number {
   if (keyframes.length === 0) return 0;
@@ -108,7 +128,8 @@ export function sampleChannel1D(keyframes: Keyframe1D[], frame: number): number 
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i].frame <= frame && sorted[i + 1].frame >= frame) {
       const span = Math.max(0.001, sorted[i + 1].frame - sorted[i].frame);
-      const t = (frame - sorted[i].frame) / span;
+      let t = (frame - sorted[i].frame) / span;
+      if (sorted[i].ease !== "linear") t = t * t * (3 - 2 * t); // smoothstep ease-in/out
       return THREE.MathUtils.lerp(sorted[i].value, sorted[i + 1].value, t);
     }
   }
@@ -154,8 +175,8 @@ export function generatePresetKeyframes(
   let kfs: CameraKeyframe[];
   if (cfg.preset === "dolly") {
     kfs = [
-      { frame: 0, position: cfg.startPos, target: cfg.target },
-      { frame: durationFrames, position: cfg.endPos, target: cfg.target },
+      { frame: 0, position: cfg.startPos, target: cfg.target, roll: 0, focal: 0 },
+      { frame: durationFrames, position: cfg.endPos, target: cfg.target, roll: 0, focal: 0 },
     ];
   } else if (cfg.preset === "arc") {
     const center = new THREE.Vector3(...cfg.target);
@@ -167,23 +188,25 @@ export function generatePresetKeyframes(
     const ex = center.x + cfg.radius * Math.sin(endAng);
     const ez = center.z + cfg.radius * Math.cos(endAng);
     kfs = [
-      { frame: 0, position: [sx, startH, sz], target: cfg.target },
-      { frame: durationFrames, position: [ex, startH, ez], target: cfg.target },
+      { frame: 0, position: [sx, startH, sz], target: cfg.target, roll: 0, focal: 0 },
+      { frame: durationFrames, position: [ex, startH, ez], target: cfg.target, roll: 0, focal: 0 },
     ];
   } else if (cfg.preset === "crane") {
     const pitchEnd = (cfg.endPos[1] - cfg.startPos[1]) / Math.max(0.001, cfg.endPos[1] - cfg.startPos[1]);
     kfs = [
-      { frame: 0, position: cfg.startPos, target: cfg.target },
+      { frame: 0, position: cfg.startPos, target: cfg.target, roll: 0, focal: 0 },
       {
         frame: durationFrames,
         position: cfg.endPos,
         target: [cfg.target[0], cfg.target[1] - pitchEnd * 0.6, cfg.target[2]] as [number, number, number],
+        roll: 0,
+        focal: 0,
       },
     ];
   } else {
     kfs = [
-      { frame: 0, position: cfg.startPos, target: cfg.target },
-      { frame: durationFrames, position: cfg.endPos, target: cfg.target },
+      { frame: 0, position: cfg.startPos, target: cfg.target, roll: 0, focal: 0 },
+      { frame: durationFrames, position: cfg.endPos, target: cfg.target, roll: 0, focal: 0 },
     ];
   }
   return keyframesToChannels(kfs);
@@ -218,48 +241,55 @@ export function buildCurves(keyframes: CameraKeyframe[]) {
   return { posCurve: null, targetCurve: null, ready: false as const };
 }
 
-export type SampleResult = { position: THREE.Vector3; target: THREE.Vector3; ready: false } | {
+export type SampleResult = { position: THREE.Vector3; target: THREE.Vector3; roll: number; focal: number | null; ready: false } | {
   position: THREE.Vector3;
   target: THREE.Vector3;
+  roll: number;
+  focal: number | null;
   ready: true;
 };
 
 /**
- * Sample camera position + look-at target at a given normalized time `t` in [0,1].
- * Accepts either the old CameraKeyframe[] format or the new per-channel format.
+ * Sample camera position + look-at target (+ roll / animated focal) at a given
+ * normalized time `t` in [0,1]. Accepts either the old CameraKeyframe[] format
+ * or the new per-channel format.
+ *
+ * - `roll` is in degrees (0 when no roll keys exist).
+ * - `focal` is the animated focal length in mm, or null when the focal
+ *   channel is empty (caller falls back to the static focal setting).
  */
 export function sampleTrajectory(
   keyframesOrChannels: CameraKeyframe[] | CameraChannelKeyframes,
   t: number,
   durationFrames?: number,
-): { position: THREE.Vector3; target: THREE.Vector3 } {
+): { position: THREE.Vector3; target: THREE.Vector3; roll: number; focal: number | null } {
   const clamped = Math.max(0, Math.min(1, t));
 
   // Detect per-channel format
   if (!Array.isArray(keyframesOrChannels)) {
     const ch = keyframesOrChannels;
-    // If all channels are empty, fall back to a sensible default camera
-    // position (eye-level, looking at the scene center).
-    const allEmpty = ch.posX.length === 0 && ch.posY.length === 0 && ch.posZ.length === 0
-      && ch.targetX.length === 0 && ch.targetY.length === 0 && ch.targetZ.length === 0;
-    if (allEmpty) {
-      return {
-        position: new THREE.Vector3(0, 1.6, 6),
-        target: new THREE.Vector3(0, 1, 0),
-      };
-    }
     const frame = durationFrames !== undefined ? clamped * durationFrames : 0;
+    // Empty position/target channels each fall back to a sensible default
+    // (eye-level camera looking at the scene center) instead of the origin.
+    const posEmpty = ch.posX.length === 0 && ch.posY.length === 0 && ch.posZ.length === 0;
+    const tgtEmpty = ch.targetX.length === 0 && ch.targetY.length === 0 && ch.targetZ.length === 0;
     return {
-      position: new THREE.Vector3(
-        sampleChannel1D(ch.posX, frame),
-        sampleChannel1D(ch.posY, frame),
-        sampleChannel1D(ch.posZ, frame),
-      ),
-      target: new THREE.Vector3(
-        sampleChannel1D(ch.targetX, frame),
-        sampleChannel1D(ch.targetY, frame),
-        sampleChannel1D(ch.targetZ, frame),
-      ),
+      position: posEmpty
+        ? new THREE.Vector3(0, 1.6, 6)
+        : new THREE.Vector3(
+            sampleChannel1D(ch.posX, frame),
+            sampleChannel1D(ch.posY, frame),
+            sampleChannel1D(ch.posZ, frame),
+          ),
+      target: tgtEmpty
+        ? new THREE.Vector3(0, 1, 0)
+        : new THREE.Vector3(
+            sampleChannel1D(ch.targetX, frame),
+            sampleChannel1D(ch.targetY, frame),
+            sampleChannel1D(ch.targetZ, frame),
+          ),
+      roll: ch.roll.length > 0 ? sampleChannel1D(ch.roll, frame) : 0,
+      focal: ch.focal.length > 0 ? sampleChannel1D(ch.focal, frame) : null,
     };
   }
 
@@ -270,9 +300,17 @@ export function sampleTrajectory(
     const first = keyframes[0];
     const pos = first ? new THREE.Vector3(...first.position) : new THREE.Vector3(0, 1.6, 6);
     const tgt = first ? new THREE.Vector3(...first.target) : new THREE.Vector3(0, 1, 0);
-    return { position: pos, target: tgt };
+    return { position: pos, target: tgt, roll: first?.roll ?? 0, focal: first?.focal || null };
   }
-  return { position: posCurve.getPoint(clamped), target: targetCurve.getPoint(clamped) };
+  return {
+    position: posCurve.getPoint(clamped),
+    target: targetCurve.getPoint(clamped),
+    roll: sampleChannel1D(
+      keyframes.filter((k) => k.roll !== 0).map((k) => ({ frame: k.frame, value: k.roll })),
+      clamped * (durationFrames ?? 0),
+    ),
+    focal: null,
+  };
 }
 
 /**

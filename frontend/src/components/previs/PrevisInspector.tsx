@@ -3,9 +3,9 @@
 import { useState, useEffect } from "react";
 import {
   Loader2, Circle, Video, CheckCircle2, AlertCircle,
-  SlidersHorizontal, Camera, Layers, Save, Film, Info,
+  SlidersHorizontal, Camera, Layers, Save, Film,
 } from "lucide-react";
-import { usePrevisStore, FOCAL_LENGTHS, ASPECT_RATIOS, RENDER_RESOLUTIONS, type FocalLength, type RenderResolution } from "@/lib/usePrevisStore";
+import { usePrevisStore, LENS_GROUPS, ASPECT_RATIOS, RENDER_RESOLUTIONS, type FocalLength, type RenderResolution } from "@/lib/usePrevisStore";
 import { useStudioStore } from "@/lib/store";
 import { renderPrevisToMp4 } from "@/lib/api";
 
@@ -51,6 +51,7 @@ export function PrevisInspector({
 
 function TransformEditor({ proxy }: { proxy: NonNullable<ReturnType<typeof usePrevisStore.getState>["proxies"][number]> }) {
   const updateProxy = usePrevisStore((s) => s.updateProxy);
+  const pushHistory = usePrevisStore((s) => s.pushHistory);
 
   const axes = [
     { key: "position" as const, label: "Pos", color: "#ef4444" },
@@ -65,8 +66,8 @@ function TransformEditor({ proxy }: { proxy: NonNullable<ReturnType<typeof usePr
       {/* Header */}
       <div className="flex items-center gap-1.5">
         <SlidersHorizontal className="w-3 h-3 text-studio-accent" />
-        <span className="text-[10px] text-studio-text font-semibold truncate">{proxy.label}</span>
-        <span className="text-[8px] text-studio-muted/50 uppercase ml-auto">{proxy.kind}</span>
+        <span className="text-[9px] text-studio-muted/60 uppercase tracking-wider font-semibold truncate">{proxy.label}</span>
+        <span className="text-[8px] text-studio-muted/40 uppercase ml-auto">{proxy.kind}</span>
       </div>
 
       {/* Transform rows */}
@@ -82,6 +83,7 @@ function TransformEditor({ proxy }: { proxy: NonNullable<ReturnType<typeof usePr
                   label={c}
                   value={proxy[axis.key][i]}
                   onChange={(v) => {
+                    pushHistory();
                     const arr = [...proxy[axis.key]] as [number, number, number];
                     arr[i] = v;
                     updateProxy(proxy.id, { [axis.key]: arr });
@@ -165,73 +167,69 @@ function CameraSettings() {
     actionAxisAngle, setActionAxisAngle,
     depthMode, setDepthMode,
     depthRange, setDepthRange,
+    cameraChannels, addChannelKeyframe, currentFrame,
   } = usePrevisStore();
+
+  const currentFrameRounded = Math.round(currentFrame);
+  const focalAnimated = cameraChannels.focal.length > 0;
 
   return (
     <div className="p-2.5 flex flex-col gap-2.5">
       <div className="flex items-center gap-1.5">
         <Camera className="w-3 h-3 text-studio-accent" />
-        <span className="text-[10px] text-studio-text font-semibold">Shot Camera</span>
+        <span className="text-[9px] text-studio-muted/60 uppercase tracking-wider font-semibold">Shot Camera</span>
       </div>
 
-      {/* Focal length */}
+      {/* Focal length — dropdown grouped by lens type */}
       <div className="flex flex-col gap-1">
-        <span className="text-[8px] text-studio-muted/60 uppercase tracking-wider">Focal Length</span>
-        <div className="flex items-center gap-1">
-          {FOCAL_LENGTHS.map((f) => (
-            <button
-              key={f}
-              onClick={() => setFocalLength(f as FocalLength)}
-              className={`flex-1 py-1 rounded text-[10px] tabular-nums font-medium transition-colors ${
-                focalLength === f
-                  ? "bg-studio-accent text-white"
-                  : "bg-studio-panelHover text-studio-muted hover:text-studio-text"
-              }`}
-            >
-              {f}mm
-            </button>
+        <label className="text-[8px] text-studio-muted/60 uppercase tracking-wider">
+          Focal Length{focalAnimated && <span className="text-studio-accent ml-1 normal-case">(animated)</span>}
+        </label>
+        <select
+          value={focalLength}
+          onChange={(e) => {
+            const f = parseInt(e.target.value, 10) as FocalLength;
+            setFocalLength(f);
+            if (focalAnimated) addChannelKeyframe("focal", currentFrameRounded, f);
+          }}
+          className="w-full px-2 py-1.5 bg-studio-bg border border-studio-border rounded text-[10px] text-studio-text focus:outline-none focus:border-studio-accent/50 hover:border-studio-borderHover transition-colors cursor-pointer"
+        >
+          {LENS_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.focal.map((f) => (
+                <option key={f} value={f}>{f}mm — {group.hint}</option>
+              ))}
+            </optgroup>
           ))}
-        </div>
+        </select>
       </div>
 
-      {/* Aspect ratio */}
+      {/* Aspect ratio — dropdown */}
       <div className="flex flex-col gap-1">
-        <span className="text-[8px] text-studio-muted/60 uppercase tracking-wider">Aspect Ratio</span>
-        <div className="flex items-center gap-1">
+        <label className="text-[8px] text-studio-muted/60 uppercase tracking-wider">Aspect Ratio</label>
+        <select
+          value={aspectRatio}
+          onChange={(e) => setAspectRatio(e.target.value as typeof aspectRatio)}
+          className="w-full px-2 py-1.5 bg-studio-bg border border-studio-border rounded text-[10px] text-studio-text focus:outline-none focus:border-studio-accent/50 hover:border-studio-borderHover transition-colors cursor-pointer"
+        >
           {ASPECT_RATIOS.map((a) => (
-            <button
-              key={a.id}
-              onClick={() => setAspectRatio(a.id)}
-              className={`flex-1 py-1 rounded text-[10px] font-medium transition-colors ${
-                aspectRatio === a.id
-                  ? "bg-studio-accent text-white"
-                  : "bg-studio-panelHover text-studio-muted hover:text-studio-text"
-              }`}
-            >
-              {a.label}
-            </button>
+            <option key={a.id} value={a.id}>{a.label} ({a.w}:{a.h})</option>
           ))}
-        </div>
+        </select>
       </div>
 
-      {/* Render resolution */}
+      {/* Render resolution — dropdown */}
       <div className="flex flex-col gap-1">
-        <span className="text-[8px] text-studio-muted/60 uppercase tracking-wider">Render Resolution</span>
-        <div className="flex items-center gap-1">
+        <label className="text-[8px] text-studio-muted/60 uppercase tracking-wider">Render Resolution</label>
+        <select
+          value={renderResolution}
+          onChange={(e) => setRenderResolution(e.target.value as RenderResolution)}
+          className="w-full px-2 py-1.5 bg-studio-bg border border-studio-border rounded text-[10px] text-studio-text focus:outline-none focus:border-studio-accent/50 hover:border-studio-borderHover transition-colors cursor-pointer"
+        >
           {RENDER_RESOLUTIONS.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => setRenderResolution(r.id as RenderResolution)}
-              className={`flex-1 py-1 rounded text-[10px] font-medium tabular-nums transition-colors ${
-                renderResolution === r.id
-                  ? "bg-studio-accent text-white"
-                  : "bg-studio-panelHover text-studio-muted hover:text-studio-text"
-              }`}
-            >
-              {r.label}
-            </button>
+            <option key={r.id} value={r.id}>{r.label} ({r.height}p)</option>
           ))}
-        </div>
+        </select>
       </div>
 
       {/* Action axis (180° line) */}
@@ -312,6 +310,17 @@ function PromptAndGenerate({ viewfinderCanvasRef }: { viewfinderCanvasRef: React
 
   const bumpVideoLibraryRefresh = useStudioStore((s) => s.bumpVideoLibraryRefresh);
   const projectId = useStudioStore((s) => s.timeline.projectId);
+  const setActiveInspector = useStudioStore((s) => s.setActiveInspector);
+  const setPendingRefVideoPath = useStudioStore((s) => s.setPendingRefVideoPath);
+
+  // Hand the previs recording to the Camera Director as the motion reference
+  // (Reference / r2v mode). Generation stays in the Camera Director so all
+  // references (characters, scenes, audio) live in one place.
+  const handleSendToCameraDirector = () => {
+    if (!savedPrevisUrl) return;
+    setPendingRefVideoPath(savedPrevisUrl);
+    setActiveInspector("camera");
+  };
 
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -366,14 +375,8 @@ function PromptAndGenerate({ viewfinderCanvasRef }: { viewfinderCanvasRef: React
     <div className="p-2.5 flex flex-col gap-2">
       <div className="flex items-center gap-1.5">
         <Film className="w-3 h-3 text-studio-accent" />
-        <span className="text-[10px] text-studio-text font-semibold">Render Previs</span>
+        <span className="text-[9px] text-studio-muted/60 uppercase tracking-wider font-semibold">Render Previs</span>
       </div>
-
-      <p className="text-[9px] text-studio-muted/60 leading-relaxed">
-        Records the viewfinder and converts it to MP4. The clip is saved to your
-        video library — use it as a motion reference in the Camera Director's
-        Reference mode.
-      </p>
 
       <button
         onClick={handleRenderPrevis}
@@ -416,10 +419,13 @@ function PromptAndGenerate({ viewfinderCanvasRef }: { viewfinderCanvasRef: React
               view
             </a>
           </div>
-          <div className="flex items-start gap-1.5 text-[9px] text-studio-muted/50 bg-studio-bg/40 border border-studio-border/50 rounded-lg px-2 py-1.5">
-            <Info className="w-2.5 h-2.5 mt-0.5 shrink-0" />
-            <span>Open Camera Director → Reference mode to generate from this clip with character & scene references.</span>
-          </div>
+          <button
+            onClick={handleSendToCameraDirector}
+            className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-studio-accent/15 hover:bg-studio-accent/25 border border-studio-accent/40 text-studio-accent rounded-lg text-[10px] font-semibold transition-colors"
+          >
+            <Camera className="w-3 h-3" />
+            Use in Camera Director
+          </button>
         </div>
       )}
     </div>

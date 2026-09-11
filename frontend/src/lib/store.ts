@@ -38,6 +38,9 @@ interface StudioState {
   timelineDockOpen: boolean;
   sidebarMode: "default" | "timeline" | "camera";
   loading: boolean;
+  /** Previs → Camera Director handoff: a video path waiting to be applied as
+   *  the Camera Director's motion reference (r2v). Consumed and cleared on mount. */
+  pendingRefVideoPath: string | null;
 
   // Timeline state
   timeline: TimelineState;
@@ -60,6 +63,7 @@ interface StudioState {
   setTimelineDockOpen: (open: boolean) => void;
   setSidebarMode: (mode: StudioState["sidebarMode"]) => void;
   setLoading: (loading: boolean) => void;
+  setPendingRefVideoPath: (path: string | null) => void;
 
   // Timeline actions
   setTimelineProjectId: (projectId: string) => void;
@@ -157,6 +161,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   timelineDockOpen: false,
   sidebarMode: "default",
   loading: false,
+  pendingRefVideoPath: null,
 
   // Undo/Redo stacks
   undoStack: [],
@@ -216,6 +221,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setTimelineDockOpen: (open) => set({ timelineDockOpen: open }),
   setSidebarMode: (mode) => set({ sidebarMode: mode }),
   setLoading: (loading) => set({ loading }),
+  setPendingRefVideoPath: (path) => set({ pendingRefVideoPath: path }),
 
   // Timeline actions
   setTimelineProjectId: (projectId) =>

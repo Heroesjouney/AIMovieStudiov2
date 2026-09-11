@@ -2,14 +2,17 @@
 
 import { useRef, useEffect, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
-import { Grid, Html, OrbitControls, TransformControls } from "@react-three/drei";
+import { Grid, OrbitControls, OrthographicCamera, TransformControls } from "@react-three/drei";
 import * as THREE from "three";
-import { usePrevisStore } from "@/lib/usePrevisStore";
+import { usePrevisStore, aspectRatioValue } from "@/lib/usePrevisStore";
 import { ProxyMesh } from "./ProxyMesh";
 import { TrajectoryVisual, CameraMarker } from "./TrajectoryVisual";
-import { sampleTrajectory, sampleProxyTransform, focalToFov } from "@/lib/previsTrajectory";
+import { SceneLabel } from "./SceneLabel";
+import { sampleTrajectory, sampleProxyTransform, sampleChannel1D, focalToFov } from "@/lib/previsTrajectory";
 
-const GRID_SIZE = 20;
+const GRID_SIZE = 60;
+
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 /**
  * The authoring scene rendered inside the editor Canvas:
@@ -32,9 +35,17 @@ export function EditorScene() {
   const focalLength = usePrevisStore((s) => s.focalLength);
   const aspectRatio = usePrevisStore((s) => s.aspectRatio);
   const isPlaying = usePrevisStore((s) => s.isPlaying);
+  const snapEnabled = usePrevisStore((s) => s.snapEnabled);
+  const pushHistory = usePrevisStore((s) => s.pushHistory);
 
   const refMap = useRef(new Map<string, THREE.Group>());
   const cameraRef = useRef<THREE.Group>(null);
+
+  // True while a gizmo drag is actively in progress. The ProxyAnimator and
+  // camera sampler skip the dragged object during a drag so the gizmo stays
+  // in control — but once the drag ends, animation sampling resumes so the
+  // object follows its keyframes when the timeline scrubs.
+  const draggingRef = useRef(false);
 
   // Track the camera's position between gizmo ticks so we can compute the
   // incremental delta for translate mode (move target with camera, not orbit).
@@ -67,7 +78,10 @@ export function EditorScene() {
   //
   //   rotate: the gizmo rotates the camera group. We read the new forward
   //   direction from the quaternion and project a new look-at target at the
-  //   current distance — so the camera stays put but aims somewhere else.
+  //   current distance (pan/tilt). Any twist around the view axis is the
+  //   roll (dutch angle) — decomposed against the zero-roll lookAt
+  //   orientation and keyed on the roll channel. The timeline Roll°
+  //   sub-track is the precise-numeric companion to this gizmo.
   const handleCameraGizmoChange = () => {
     if (!cameraRef.current) return;
     const frame = Math.round(currentFrame);
@@ -106,7 +120,8 @@ export function EditorScene() {
     } else if (gizmoMode === "rotate") {
       // The gizmo rotated the group — read forward direction from the quaternion.
       // Object3D.lookAt points +Z toward the target, so forward = +Z.
-      const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(cameraRef.current.quaternion);
+      const quat = cameraRef.current.quaternion;
+      const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(quat).normalize();
       const dist = sampledPos.distanceTo(sampledTarget) || 5;
       const newTarget = new THREE.Vector3(
         newPos.x + forward.x * dist,
@@ -117,6 +132,24 @@ export function EditorScene() {
       store.addChannelKeyframe("targetX", frame, newTarget.x);
       store.addChannelKeyframe("targetY", frame, newTarget.y);
       store.addChannelKeyframe("targetZ", frame, newTarget.z);
+
+      // Roll (dutch angle): build the zero-roll orientation for this forward
+      // exactly like Object3D.lookAt does (x = up×z, y = z×x, z = forward),
+      // then the leftover twist of the gizmo rotation is a pure rotation
+      // about the view axis — the roll. This matches how the sampler applies
+      // it (lookAt + rotateZ(roll)), so gizmo ⇄ timeline round-trip exactly.
+      const xAxis = new THREE.Vector3().crossVectors(WORLD_UP, forward);
+      if (xAxis.lengthSq() > 1e-6) {
+        xAxis.normalize();
+        const yAxis = new THREE.Vector3().crossVectors(forward, xAxis);
+        const qLook = new THREE.Quaternion().setFromRotationMatrix(
+          new THREE.Matrix4().makeBasis(xAxis, yAxis, forward),
+        );
+        const twist = qLook.clone().invert().multiply(quat);
+        const rollDeg = THREE.MathUtils.radToDeg(2 * Math.atan2(twist.z, twist.w));
+        store.addChannelKeyframe("roll", frame, rollDeg);
+      }
+
       // Also key the position at the current spot if there isn't already a
       // position key at this frame — otherwise playback would sample empty
       // position channels to 0 and the camera would jump to the origin.
@@ -155,7 +188,7 @@ export function EditorScene() {
         sectionSize={5}
         sectionThickness={1.2}
         sectionColor="#6a6a86"
-        fadeDistance={28}
+        fadeDistance={80}
         fadeStrength={1}
         followCamera={false}
         infiniteGrid={false}
@@ -165,42 +198,61 @@ export function EditorScene() {
       {/* World axis vectors at origin */}
       <AxisVectors />
 
-      {/* Proxies */}
+      {/* Proxies — the transform group (refMap/gizmo target) is wrapped in an
+          unscaled outer group so plan-view labels aren't distorted by proxy scale. */}
       {proxies.map((p) => (
-        <group
-          key={p.id}
-          ref={(el) => {
-            if (el) refMap.current.set(p.id, el);
-            else refMap.current.delete(p.id);
-          }}
-          position={p.position}
-          rotation={p.rotation}
-          scale={p.scale}
-        >
-          <ProxyMesh proxy={p} selected={selectedProxyId === p.id} onSelect={selectProxy} interactive />
+        <group key={p.id}>
+          <group
+            ref={(el) => {
+              if (el) refMap.current.set(p.id, el);
+              else refMap.current.delete(p.id);
+            }}
+            position={p.position}
+            rotation={p.rotation}
+            scale={p.scale}
+          >
+            <ProxyMesh proxy={p} selected={selectedProxyId === p.id} onSelect={selectProxy} interactive={viewMode !== "camera"} />
+          </group>
+          {viewMode === "plan" && (
+            <SceneLabel text={p.label} position={[p.position[0], 1.2, p.position[2]]} color={p.color} height={0.45} bold />
+          )}
         </group>
       ))}
 
-      {/* In Perspective mode: show the camera marker, gizmos, and trajectory.
+      {/* In Perspective + Plan modes: show the camera marker + trajectory.
           In Camera mode: hide them (we ARE the camera — clean first-person view). */}
-      {viewMode === "perspective" && (
+      {viewMode !== "camera" && (
         <>
           {/* Draggable shot camera marker */}
           <CameraMarker cameraRef={cameraRef} />
 
-          {/* Gizmo for the selected proxy */}
-          {selectedProxyRef && !cameraSelected && (
-            <TransformControls object={selectedProxyRef} mode={gizmoMode} onObjectChange={handleProxyGizmoChange} />
+          {/* Gizmo for the selected proxy — perspective mode only, snaps to
+              the grid when snapping is enabled, pushes one undo entry per drag. */}
+          {viewMode === "perspective" && selectedProxyRef && !cameraSelected && (
+            <TransformControls
+              object={selectedProxyRef}
+              mode={gizmoMode}
+              onObjectChange={handleProxyGizmoChange}
+              onMouseDown={() => { draggingRef.current = true; pushHistory(); }}
+              onMouseUp={() => { draggingRef.current = false; }}
+              translationSnap={snapEnabled ? 0.5 : null}
+              rotationSnap={snapEnabled ? THREE.MathUtils.degToRad(15) : null}
+            />
           )}
 
           {/* Gizmo for the selected camera — hidden during playback so it
-              doesn't fight the trajectory animation. */}
-          {cameraSelected && cameraRef.current && !isPlaying && (
+              doesn't fight the trajectory animation. Local space so the rotate
+              rings map to pan / tilt / roll (roll = the ring around the lens). */}
+          {viewMode === "perspective" && cameraSelected && cameraRef.current && !isPlaying && (
             <TransformControls
               object={cameraRef.current}
               mode={gizmoMode === "scale" ? "translate" : gizmoMode}
+              space={gizmoMode === "rotate" ? "local" : "world"}
               onObjectChange={handleCameraGizmoChange}
+              onMouseDown={() => pushHistory()}
               onPointerMissed={() => selectCamera(false)}
+              translationSnap={snapEnabled ? 0.5 : null}
+              rotationSnap={snapEnabled ? THREE.MathUtils.degToRad(15) : null}
             />
           )}
 
@@ -212,13 +264,40 @@ export function EditorScene() {
       {/* Camera mode: fly controller replaces OrbitControls + gizmos */}
       {viewMode === "camera" && <CameraFlyController />}
 
+      {/* Plan mode: top-down orthographic floor-plan view */}
+      {viewMode === "plan" && (
+        <OrthographicCamera makeDefault position={[0, 30, 0]} rotation={[-Math.PI / 2, 0, 0]} zoom={45} near={0.1} far={100} />
+      )}
+
       {/* Proxy animation — interpolates proxy transforms from keyframes each frame.
           Skips the currently-selected proxy so the gizmo has full control. */}
-      <ProxyAnimator refMap={refMap} />
+      <ProxyAnimator refMap={refMap} draggingRef={draggingRef} />
 
-      {/* OrbitControls only in perspective mode */}
+      {/* F-key frame-selected (UE5): listens for the hotkey event and moves
+          the orbit camera + target to frame the selected proxy or the camera
+          marker. Only active in perspective mode. */}
+      {viewMode === "perspective" && <FrameSelected refMap={refMap} cameraRef={cameraRef} />}
+
+      {/* Viewport navigation per mode: free orbit (perspective), pan/zoom only (plan) */}
       {viewMode === "perspective" && (
-        <OrbitControls makeDefault enablePan minDistance={3} maxDistance={30} maxPolarAngle={Math.PI / 2.05} />
+        <>
+          <OrbitControls
+            makeDefault
+            enablePan
+            minDistance={1}
+            maxDistance={500}
+            maxPolarAngle={Math.PI / 2.05}
+            mouseButtons={{
+              LEFT: THREE.MOUSE.ROTATE,
+              MIDDLE: THREE.MOUSE.PAN,
+              RIGHT: null as unknown as THREE.MOUSE,
+            }}
+          />
+          <PerspectiveWASD />
+        </>
+      )}
+      {viewMode === "plan" && (
+        <OrbitControls makeDefault enableRotate={false} enablePan minZoom={10} maxZoom={200} screenSpacePanning />
       )}
     </>
   );
@@ -317,15 +396,22 @@ function CameraFlyController() {
 
     const onKeyDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
+      const wasDown = keysDown.current.has(k);
       keysDown.current.add(k);
+      const s = usePrevisStore.getState();
       // K = drop keyframe at current frame
       if (k === "k" && livePos.current && liveTarget.current) {
-        const frame = Math.round(usePrevisStore.getState().currentFrame);
-        usePrevisStore.getState().addKeyframeAtFrame(
+        const frame = Math.round(s.currentFrame);
+        s.pushHistory();
+        s.addKeyframeAtFrame(
           frame,
           [livePos.current.x, livePos.current.y, livePos.current.z],
           [liveTarget.current.x, liveTarget.current.y, liveTarget.current.z],
         );
+      }
+      // First movement key of a gesture = one undo entry for the whole drive.
+      if (!wasDown && ["w", "a", "s", "d", "q", "e"].includes(k) && rmbHeld.current) {
+        s.pushHistory();
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -418,12 +504,18 @@ function CameraFlyController() {
     // Apply to the actual editor camera
     camera.position.copy(livePos.current);
     camera.lookAt(liveTarget.current);
-    camera.fov = focalToFov(focalLength);
+    // Roll (dutch angle) + animated focal come from the keyframe channels.
+    const s = usePrevisStore.getState();
+    const frameNow = Math.round(s.currentFrame);
+    const rollNow = sampleChannel1D(s.cameraChannels.roll, frameNow);
+    camera.rotateZ(THREE.MathUtils.degToRad(rollNow));
+    const focalNow = s.cameraChannels.focal.length > 0 ? sampleChannel1D(s.cameraChannels.focal, frameNow) : null;
+    camera.fov = focalToFov(focalNow ?? focalLength);
 
     // Letterbox the WebGL viewport to the target aspect ratio so the render
     // matches the camera's framing (no stretching). The areas outside the
     // letterbox are covered by CSS bars in PrevisStage.
-    const targetAspect = aspectRatio === "16:9" ? 16 / 9 : 2.39 / 1;
+    const targetAspect = aspectRatioValue(aspectRatio);
     const canvas = gl.domElement;
     const bufW = canvas.width;
     const bufH = canvas.height;
@@ -464,18 +556,196 @@ function CameraFlyController() {
 }
 
 /**
+ * Unreal Engine 5-style perspective viewport navigation.
+ *
+ *   LMB-drag  = orbit around pivot (handled by OrbitControls)
+ *   RMB-drag  = free-look (rotate camera in place; OrbitControls disabled)
+ *   RMB+WASD  = fly along view direction (including pitch)
+ *   RMB+Q/E   = world up/down
+ *   Wheel     = dolly toward pivot (OrbitControls)
+ *
+ * WASD/QE only respond while RMB is held, matching UE5. Forward uses the
+ * camera's actual look direction (with pitch), not a flattened horizon vector.
+ */
+function PerspectiveWASD() {
+  const { camera, gl, controls } = useThree();
+  const keys = useRef(new Set<string>());
+  const rmb = useRef(false);
+  const lastMouse = useRef<{ x: number; y: number } | null>(null);
+  // Yaw/pitch for free-look, derived from camera orientation each RMB press.
+  const yaw = useRef(0);
+  const pitch = useRef(0);
+
+  useEffect(() => {
+    const dom = gl.domElement;
+
+    const isTyping = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTyping(e)) return;
+      keys.current.add(e.key.toLowerCase());
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      keys.current.delete(e.key.toLowerCase());
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return; // RMB only
+      rmb.current = true;
+      lastMouse.current = { x: e.clientX, y: e.clientY };
+      // Seed yaw/pitch from current camera orientation
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      yaw.current = Math.atan2(dir.x, dir.z);
+      pitch.current = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+      // Disable OrbitControls so RMB-drag free-looks instead of orbiting
+      if (controls && "enabled" in controls) (controls as { enabled: boolean }).enabled = false;
+      dom.style.cursor = "grabbing";
+    };
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      rmb.current = false;
+      lastMouse.current = null;
+      if (controls && "enabled" in controls) (controls as { enabled: boolean }).enabled = true;
+      dom.style.cursor = "default";
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!rmb.current || !lastMouse.current) return;
+      const dx = e.clientX - lastMouse.current.x;
+      const dy = e.clientY - lastMouse.current.y;
+      lastMouse.current = { x: e.clientX, y: e.clientY };
+      const sens = 0.0035;
+      yaw.current -= dx * sens;
+      pitch.current = THREE.MathUtils.clamp(
+        pitch.current - dy * sens,
+        -Math.PI / 2 + 0.05,
+        Math.PI / 2 - 0.05,
+      );
+    };
+    const onContext = (e: Event) => e.preventDefault();
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    dom.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("mousemove", onMouseMove);
+    dom.addEventListener("contextmenu", onContext);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      dom.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("mousemove", onMouseMove);
+      dom.removeEventListener("contextmenu", onContext);
+    };
+  }, [gl, camera, controls]);
+
+  useFrame((_, dt) => {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+
+    // --- Free-look: apply yaw/pitch to camera orientation while RMB held ---
+    if (rmb.current) {
+      const dir = new THREE.Vector3(
+        Math.sin(yaw.current) * Math.cos(pitch.current),
+        Math.sin(pitch.current),
+        Math.cos(yaw.current) * Math.cos(pitch.current),
+      );
+      const target = camera.position.clone().add(dir);
+      camera.lookAt(target);
+    }
+
+    // --- WASD/QE movement (only while RMB held, UE5-style) ---
+    const k = keys.current;
+    if (!rmb.current) return;
+    if (!k.has("w") && !k.has("a") && !k.has("s") && !k.has("d") && !k.has("q") && !k.has("e")) return;
+
+    // Forward = actual view direction (with pitch), like UE5
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+    // Shift = 3× speed boost (UE5 convention)
+    const speed = (k.has("shift") ? 24.0 : 8.0) * dt;
+    const move = new THREE.Vector3();
+    if (k.has("w")) move.addScaledVector(forward, speed);
+    if (k.has("s")) move.addScaledVector(forward, -speed);
+    if (k.has("a")) move.addScaledVector(right, -speed);
+    if (k.has("d")) move.addScaledVector(right, speed);
+    if (k.has("e")) move.y += speed;
+    if (k.has("q")) move.y -= speed;
+
+    camera.position.add(move);
+    // Move the orbit target with the camera so LMB-orbit stays centered
+    const orbitTarget = (controls as unknown as { target?: THREE.Vector3 } | null)?.target;
+    if (orbitTarget) orbitTarget.add(move);
+  });
+
+  return null;
+}
+
+/**
+ * F-key frame-selected (UE5 "Focus"). Listens for the `previs-frame-selected`
+ * window event (dispatched by the PrevisStage hotkey handler) and moves the
+ * orbit camera + target to frame the selected proxy or the shot camera.
+ */
+function FrameSelected({
+  refMap,
+  cameraRef,
+}: {
+  refMap: React.MutableRefObject<Map<string, THREE.Group>>;
+  cameraRef: React.RefObject<THREE.Group>;
+}) {
+  const { camera, controls } = useThree();
+
+  useEffect(() => {
+    const onFrame = () => {
+      const s = usePrevisStore.getState();
+      let targetPos: THREE.Vector3 | null = null;
+
+      if (s.selectedProxyId) {
+        const obj = refMap.current.get(s.selectedProxyId);
+        if (obj) targetPos = obj.position.clone();
+      } else if (s.cameraSelected && cameraRef.current) {
+        targetPos = cameraRef.current.position.clone();
+      }
+
+      if (!targetPos) return;
+      const orbitTarget = (controls as unknown as { target?: THREE.Vector3 } | null)?.target;
+      if (orbitTarget) orbitTarget.copy(targetPos);
+
+      // Place the camera at a comfortable viewing distance along the current
+      // view direction, preserving the user's orbit angle.
+      if (camera instanceof THREE.PerspectiveCamera) {
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        const dist = 6;
+        camera.position.copy(targetPos).addScaledVector(dir, -dist);
+      }
+    };
+    window.addEventListener("previs-frame-selected", onFrame);
+    return () => window.removeEventListener("previs-frame-selected", onFrame);
+  }, [camera, controls, refMap, cameraRef]);
+
+  return null;
+}
+
+/**
  * Reads proxy keyframes from the store and applies interpolated transforms to
  * proxy groups every frame. The selected proxy is skipped (gizmo controls it).
  */
-function ProxyAnimator({ refMap }: { refMap: React.MutableRefObject<Map<string, THREE.Group>> }) {
+function ProxyAnimator({ refMap, draggingRef }: { refMap: React.MutableRefObject<Map<string, THREE.Group>>; draggingRef: React.MutableRefObject<boolean> }) {
   useFrame(() => {
     const s = usePrevisStore.getState();
     const frame = s.currentFrame;
     const selectedId = s.selectedProxyId;
 
     for (const [id, group] of refMap.current) {
-      // Skip the selected proxy — the gizmo is controlling it.
-      if (id === selectedId) continue;
+      // Skip the selected proxy only while a gizmo drag is active —
+      // otherwise the gizmo and the sampler fight over its transform.
+      if (id === selectedId && draggingRef.current) continue;
       const track = s.proxyKeyframes[id];
       if (!track || track.length === 0) continue;
       const { position, rotation, scale } = sampleProxyTransform(track, frame);
@@ -498,11 +768,7 @@ function DistanceMarkers({ extent }: { extent: number }) {
   return (
     <group>
       {marks.map((m, i) => (
-        <Html key={i} position={m.pos} center>
-          <div className="text-[8px] text-studio-muted/50 select-none pointer-events-none whitespace-nowrap">
-            {m.label}
-          </div>
-        </Html>
+        <SceneLabel key={i} text={m.label} position={m.pos} color="#64748b" height={0.3} />
       ))}
     </group>
   );
@@ -517,7 +783,7 @@ function AxisVectors() {
         <meshBasicMaterial color="#ef4444" />
       </mesh>
       {/* Z (blue) */}
-      <mesh position={[0, 0, 0.5]}>
+      <mesh position={[0, 0, 0.5]} rotation={[Math.PI / 2, 0, 0]}>
         <cylinderGeometry args={[0.01, 0.01, 1, 6]} />
         <meshBasicMaterial color="#3b82f6" />
       </mesh>

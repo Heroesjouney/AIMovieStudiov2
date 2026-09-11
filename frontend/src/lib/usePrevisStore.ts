@@ -5,8 +5,9 @@
  * Kept separate from the main useStudioStore so previs authoring state
  * (proxies, keyframes, playback) doesn't bloat the global studio slice.
  *
- * The motion generation job is tracked here so useGenerationPolling can
- * poll it the same way it polls frame/video jobs.
+ * Previs does NOT generate AI video directly — it records the viewfinder to
+ * an MP4 in the project video library, which is then submitted to the
+ * Camera Director (Reference mode) as a motion reference.
  */
 
 import { create } from "zustand";
@@ -24,6 +25,7 @@ import {
   emptyCameraChannels,
   keyframesToChannels,
   sampleChannel1D,
+  sampleTrajectory,
 } from "./previsTrajectory";
 
 export type ProxyKind = "character" | "set" | "cube" | "sphere" | "cylinder" | "plane" | "cone" | "torus";
@@ -38,15 +40,33 @@ export interface ProxyObject {
   color: string;
 }
 
-export type AspectRatioId = "16:9" | "2.39:1";
+export type AspectRatioId = "4:3" | "16:9" | "2.35:1" | "2.39:1" | "1:1" | "9:16";
 
-export const FOCAL_LENGTHS = [18, 35, 50, 85] as const;
+export const FOCAL_LENGTHS = [14, 18, 24, 28, 35, 50, 85, 135] as const;
 export type FocalLength = (typeof FOCAL_LENGTHS)[number];
 
-export const ASPECT_RATIOS: { id: AspectRatioId; label: string; w: number; h: number }[] = [
-  { id: "16:9", label: "16:9", w: 16, h: 9 },
-  { id: "2.39:1", label: "2.39:1", w: 2.39, h: 1 },
+/** Lens categories for display grouping in the inspector. */
+export const LENS_GROUPS: { label: string; focal: number[]; hint: string }[] = [
+  { label: "Ultra-Wide", focal: [14, 18], hint: "Wide FOV, deep focus" },
+  { label: "Wide", focal: [24, 28], hint: "Establishing / environment" },
+  { label: "Normal", focal: [35, 50], hint: "Natural perspective" },
+  { label: "Telephoto", focal: [85, 135], hint: "Compressed, shallow DOF" },
 ];
+
+export const ASPECT_RATIOS: { id: AspectRatioId; label: string; w: number; h: number }[] = [
+  { id: "1:1", label: "1:1", w: 1, h: 1 },
+  { id: "4:3", label: "4:3", w: 4, h: 3 },
+  { id: "16:9", label: "16:9", w: 16, h: 9 },
+  { id: "2.35:1", label: "2.35:1", w: 2.35, h: 1 },
+  { id: "2.39:1", label: "2.39:1", w: 2.39, h: 1 },
+  { id: "9:16", label: "9:16", w: 9, h: 16 },
+];
+
+/** Look up the numeric aspect ratio (w/h) for a given id. */
+export function aspectRatioValue(id: AspectRatioId): number {
+  const r = ASPECT_RATIOS.find((a) => a.id === id);
+  return r ? r.w / r.h : 16 / 9;
+}
 
 export const RENDER_RESOLUTIONS: { id: RenderResolution; label: string; height: number }[] = [
   { id: "480p", label: "480p", height: 480 },
@@ -62,6 +82,8 @@ interface PrevisState {
   addProxy: (kind: ProxyKind) => void;
   updateProxy: (id: string, patch: Partial<ProxyObject>) => void;
   removeProxy: (id: string) => void;
+  /** Duplicate the selected proxy in place (offset slightly so it's visible). */
+  duplicateSelectedProxy: () => void;
   renameProxy: (id: string, label: string) => void;
   selectProxy: (id: string | null) => void;
   /** True when the shot camera is the active selection (for TransformControls). */
@@ -87,14 +109,16 @@ interface PrevisState {
   applyPreset: (preset: TrajectoryPreset) => void;
   setKeyframePosition: (frame: number, position: [number, number, number]) => void;
   setKeyframeTarget: (frame: number, target: [number, number, number]) => void;
-  /** Insert/update a keyframe at the current frame with the given position + target (writes all 6 channels). */
-  addKeyframeAtFrame: (frame: number, position: [number, number, number], target: [number, number, number]) => void;
-  /** Remove the keyframe at the given frame from all 6 channels (if it exists). */
+  /** Insert/update a keyframe at the current frame with the given position + target (writes all channels). */
+  addKeyframeAtFrame: (frame: number, position: [number, number, number], target: [number, number, number], roll?: number, focal?: number) => void;
+  /** Remove the keyframe at the given frame from all channels (if it exists). */
   removeKeyframeAtFrame: (frame: number) => void;
   /** Insert/update a single channel's keyframe at the given frame. */
-  addChannelKeyframe: (channel: CameraChannel, frame: number, value: number) => void;
+  addChannelKeyframe: (channel: CameraChannel, frame: number, value: number, ease?: "smooth" | "linear") => void;
   /** Remove a single channel's keyframe at the given frame. */
   removeChannelKeyframe: (channel: CameraChannel, frame: number) => void;
+  /** Toggle a channel keyframe's segment easing between smooth and linear. */
+  toggleChannelKeyframeEase: (channel: CameraChannel, frame: number) => void;
 
   // --- Proxy keyframes (multitrack) ---
   /** Per-proxy keyframe tracks: { [proxyId]: ProxyKeyframe[] } */
@@ -118,10 +142,11 @@ interface PrevisState {
   gizmoMode: "translate" | "rotate" | "scale";
   setGizmoMode: (m: "translate" | "rotate" | "scale") => void;
 
-  // --- Editor viewport mode (Unreal-style Perspective / Camera toggle) ---
-  /** "perspective" = free orbit viewport; "camera" = look through the shot camera. */
-  viewMode: "perspective" | "camera";
-  setViewMode: (m: "perspective" | "camera") => void;
+  // --- Editor viewport mode (Unreal-style Perspective / Camera / Plan toggle) ---
+  /** "perspective" = free orbit viewport; "camera" = look through the shot camera;
+   *  "plan" = top-down orthographic floor-plan schematic. */
+  viewMode: "perspective" | "camera" | "plan";
+  setViewMode: (m: "perspective" | "camera" | "plan") => void;
 
   // --- Capture (Phase 4) ---
   depthMode: boolean;
@@ -135,22 +160,74 @@ interface PrevisState {
   isRecording: boolean;
   setIsRecording: (v: boolean) => void;
 
-  // --- Generation (Phase 5) ---
-  shotPrompt: string;
-  setShotPrompt: (p: string) => void;
-  selectedModelId: string;
-  setSelectedModelId: (m: string) => void;
-  activeMotionJob: { job_id: string; model_id: string } | null;
-  setActiveMotionJob: (job: { job_id: string; model_id: string } | null) => void;
-  resultVideoUrl: string | null;
-  setResultVideoUrl: (u: string | null) => void;
   /** URL of the previs recording saved to the project library. */
   savedPrevisUrl: string | null;
   setSavedPrevisUrl: (u: string | null) => void;
+
+  // --- Gizmo snapping ---
+  snapEnabled: boolean;
+  setSnapEnabled: (v: boolean) => void;
+
+  // --- Undo/redo (authoring history) ---
+  past: PrevisSnapshot[];
+  future: PrevisSnapshot[];
+  /** Snapshot the current authoring state onto the undo stack (call BEFORE a mutation). */
+  pushHistory: () => void;
+  undo: () => void;
+  redo: () => void;
+
+  // --- Persistence (save/load the previs scene to the Vault) ---
+  serialize: () => PrevisScenePayload;
+  hydrate: (data: PrevisScenePayload) => void;
+  /** Reset the entire previs scene to empty defaults (proxies, keyframes,
+   *  camera channels, trajectory). Pushes the current state to undo first
+   *  so a reset can be undone. */
+  resetScene: () => void;
+}
+
+/** The subset of previs state that is undoable (authoring, not playback). */
+export interface PrevisSnapshot {
+  proxies: ProxyObject[];
+  proxyKeyframes: Record<string, ProxyKeyframe[]>;
+  cameraChannels: CameraChannelKeyframes;
+  keyframes: CameraKeyframe[];
+  trajectory: TrajectoryConfig;
+  durationFrames: number;
+}
+
+/** Serializable previs scene (what gets written to / read from the Vault). */
+export interface PrevisScenePayload {
+  version: number;
+  proxies: ProxyObject[];
+  proxyKeyframes: Record<string, ProxyKeyframe[]>;
+  cameraChannels: CameraChannelKeyframes;
+  trajectory: TrajectoryConfig;
+  durationFrames: number;
+  fps: number;
+  focalLength: FocalLength;
+  aspectRatio: AspectRatioId;
+  actionAxisAngle: number;
+  depthMode: boolean;
+  depthRange: number;
+  renderResolution: RenderResolution;
 }
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
+}
+
+const HISTORY_LIMIT = 50;
+
+/** Snapshot the undoable (authoring) subset of the previs state. */
+function snapshotState(s: PrevisState): PrevisSnapshot {
+  return {
+    proxies: s.proxies,
+    proxyKeyframes: s.proxyKeyframes,
+    cameraChannels: s.cameraChannels,
+    keyframes: s.keyframes,
+    trajectory: s.trajectory,
+    durationFrames: s.durationFrames,
+  };
 }
 
 const PROXY_COLORS = ["#f59e0b", "#06b6d4", "#22c55e", "#a855f7", "#ec4899", "#3b82f6"];
@@ -226,7 +303,8 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
     },
   ],
   selectedProxyId: null,
-  addProxy: (kind) =>
+  addProxy: (kind) => {
+    get().pushHistory();
     set((s) => {
       const p = defaultProxy(kind);
       const count = s.proxies.filter((x) => x.kind === kind).length + 1;
@@ -234,18 +312,42 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
       else if (kind === "set") p.label = `Set Piece ${count}`;
       else p.label = `${PRIMITIVE_DEFAULTS[kind].label} ${count}`;
       return { proxies: [...s.proxies, p], selectedProxyId: p.id };
-    }),
+    });
+  },
   updateProxy: (id, patch) =>
     set((s) => ({
       proxies: s.proxies.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     })),
-  removeProxy: (id) =>
+  removeProxy: (id) => {
+    get().pushHistory();
     set((s) => {
       const { [id]: _removed, ...rest } = s.proxyKeyframes;
       return {
         proxies: s.proxies.filter((p) => p.id !== id),
         selectedProxyId: s.selectedProxyId === id ? null : s.selectedProxyId,
         proxyKeyframes: rest,
+      };
+    });
+  },
+  duplicateSelectedProxy: () =>
+    set((s) => {
+      if (!s.selectedProxyId) return {};
+      const src = s.proxies.find((p) => p.id === s.selectedProxyId);
+      if (!src) return {};
+      get().pushHistory();
+      const copy: ProxyObject = {
+        ...src,
+        id: uid(),
+        label: `${src.label} copy`,
+        position: [src.position[0] + 1, src.position[1], src.position[2] + 1],
+      };
+      // Copy the source proxy's keyframe track (offset by 0 frames — same timing)
+      const srcTrack = s.proxyKeyframes[src.id] ?? [];
+      const copyTrack = srcTrack.map((k) => ({ ...k }));
+      return {
+        proxies: [...s.proxies, copy],
+        selectedProxyId: copy.id,
+        proxyKeyframes: { ...s.proxyKeyframes, [copy.id]: copyTrack },
       };
     }),
   renameProxy: (id, label) =>
@@ -284,7 +386,8 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
       const channels = generatePresetKeyframes(next, s.durationFrames);
       return { trajectory: next, cameraChannels: channels, keyframes: channelsToKeyframes(channels) };
     }),
-  applyPreset: (preset) =>
+  applyPreset: (preset) => {
+    get().pushHistory();
     set((s) => {
       const next = { ...s.trajectory, preset };
       if (preset === "custom") {
@@ -305,7 +408,8 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
         currentFrame: 0,
         isPlaying: false,
       };
-    }),
+    });
+  },
   setKeyframePosition: (frame, position) =>
     set((s) => {
       // Update the 3 position channels at this frame.
@@ -335,13 +439,21 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
       }
       return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
     }),
-  addKeyframeAtFrame: (frame, position, target) =>
+  addKeyframeAtFrame: (frame, position, target, roll, focal) =>
     set((s) => {
-      // Write all 6 channels at this frame.
+      // Sample the current roll/focal so unspecified values are preserved.
+      const cur = sampleTrajectory(
+        s.cameraChannels,
+        s.durationFrames > 0 ? frame / s.durationFrames : 0,
+        s.durationFrames,
+      );
+      // Write all 8 channels at this frame.
       const channels = { ...s.cameraChannels };
       const vals: Record<string, number> = {
         posX: position[0], posY: position[1], posZ: position[2],
         targetX: target[0], targetY: target[1], targetZ: target[2],
+        roll: roll ?? cur.roll,
+        focal: focal ?? (cur.focal ?? s.focalLength),
       };
       for (const ch of Object.keys(vals) as CameraChannel[]) {
         const idx = channels[ch].findIndex((k) => k.frame === frame);
@@ -353,32 +465,46 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
       }
       return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
     }),
-  removeKeyframeAtFrame: (frame) =>
+  removeKeyframeAtFrame: (frame) => {
+    get().pushHistory();
     set((s) => {
-      // Remove from all 6 channels at this frame.
+      // Remove from all channels at this frame.
       const channels = { ...s.cameraChannels };
       for (const ch of Object.keys(channels) as CameraChannel[]) {
         channels[ch] = channels[ch].filter((k) => k.frame !== frame);
       }
       return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
-    }),
-  addChannelKeyframe: (channel, frame, value) =>
+    });
+  },
+  addChannelKeyframe: (channel, frame, value, ease) =>
     set((s) => {
       const track = s.cameraChannels[channel];
       const idx = track.findIndex((k) => k.frame === frame);
       const kfs = idx >= 0
-        ? track.map((k, i) => (i === idx ? { ...k, value } : k))
-        : [...track, { frame, value }];
+        ? track.map((k, i) => (i === idx ? { ...k, value, ease } : k))
+        : [...track, { frame, value, ease }];
       kfs.sort((a, b) => a.frame - b.frame);
       const channels = { ...s.cameraChannels, [channel]: kfs };
       return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
     }),
-  removeChannelKeyframe: (channel, frame) =>
+  removeChannelKeyframe: (channel, frame) => {
+    get().pushHistory();
     set((s) => {
       const kfs = s.cameraChannels[channel].filter((k) => k.frame !== frame);
       const channels = { ...s.cameraChannels, [channel]: kfs };
       return { cameraChannels: channels, keyframes: channelsToKeyframes(channels), trajectory: { ...s.trajectory, preset: "custom" } };
-    }),
+    });
+  },
+  toggleChannelKeyframeEase: (channel, frame) => {
+    get().pushHistory();
+    set((s) => {
+      const kfs = s.cameraChannels[channel].map((k) =>
+        k.frame === frame ? { ...k, ease: k.ease === "linear" ? ("smooth" as const) : ("linear" as const) } : k,
+      );
+      const channels = { ...s.cameraChannels, [channel]: kfs };
+      return { cameraChannels: channels };
+    });
+  },
 
   // Proxy keyframes (multitrack)
   proxyKeyframes: {},
@@ -393,13 +519,15 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
       kfs.sort((a, b) => a.frame - b.frame);
       return { proxyKeyframes: { ...s.proxyKeyframes, [proxyId]: kfs } };
     }),
-  removeProxyKeyframe: (proxyId, frame) =>
+  removeProxyKeyframe: (proxyId, frame) => {
+    get().pushHistory();
     set((s) => {
       const track = s.proxyKeyframes[proxyId];
       if (!track) return {};
       const kfs = track.filter((k) => k.frame !== frame);
       return { proxyKeyframes: { ...s.proxyKeyframes, [proxyId]: kfs } };
-    }),
+    });
+  },
 
   // Timeline / playback
   fps: 24,
@@ -435,15 +563,99 @@ export const usePrevisStore = create<PrevisState>((set, get) => ({
   viewMode: "perspective",
   setViewMode: (viewMode) => set({ viewMode }),
 
-  // Generation
-  shotPrompt: "Wide shot, slow dolly in towards character standing under neon lights",
-  setShotPrompt: (shotPrompt) => set({ shotPrompt }),
-  selectedModelId: "minimax_h3",
-  setSelectedModelId: (selectedModelId) => set({ selectedModelId }),
-  activeMotionJob: null,
-  setActiveMotionJob: (activeMotionJob) => set({ activeMotionJob }),
-  resultVideoUrl: null,
-  setResultVideoUrl: (resultVideoUrl) => set({ resultVideoUrl }),
+  // Saved previs recording
   savedPrevisUrl: null,
   setSavedPrevisUrl: (savedPrevisUrl) => set({ savedPrevisUrl }),
+
+  // Gizmo snapping
+  snapEnabled: false,
+  setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
+
+  // Undo/redo (authoring history)
+  past: [],
+  future: [],
+  pushHistory: () =>
+    set((s) => ({
+      past: [...s.past, snapshotState(s)].slice(-HISTORY_LIMIT),
+      future: [],
+    })),
+  undo: () =>
+    set((s) => {
+      if (s.past.length === 0) return {};
+      const prev = s.past[s.past.length - 1];
+      return {
+        future: [snapshotState(s), ...s.future].slice(0, HISTORY_LIMIT),
+        past: s.past.slice(0, -1),
+        ...prev,
+      };
+    }),
+  redo: () =>
+    set((s) => {
+      if (s.future.length === 0) return {};
+      const next = s.future[0];
+      return {
+        past: [...s.past, snapshotState(s)].slice(-HISTORY_LIMIT),
+        future: s.future.slice(1),
+        ...next,
+      };
+    }),
+
+  // Persistence
+  serialize: () => {
+    const s = get();
+    return {
+      version: 1,
+      proxies: s.proxies,
+      proxyKeyframes: s.proxyKeyframes,
+      cameraChannels: s.cameraChannels,
+      trajectory: s.trajectory,
+      durationFrames: s.durationFrames,
+      fps: s.fps,
+      focalLength: s.focalLength,
+      aspectRatio: s.aspectRatio,
+      actionAxisAngle: s.actionAxisAngle,
+      depthMode: s.depthMode,
+      depthRange: s.depthRange,
+      renderResolution: s.renderResolution,
+    };
+  },
+  hydrate: (data) =>
+    set((s) => {
+      const channels = data.cameraChannels ?? emptyCameraChannels();
+      return {
+        proxies: data.proxies ?? s.proxies,
+        proxyKeyframes: data.proxyKeyframes ?? s.proxyKeyframes,
+        cameraChannels: channels,
+        keyframes: channelsToKeyframes(channels),
+        trajectory: data.trajectory ?? s.trajectory,
+        durationFrames: data.durationFrames ?? s.durationFrames,
+        fps: data.fps ?? s.fps,
+        focalLength: data.focalLength ?? s.focalLength,
+        aspectRatio: data.aspectRatio ?? s.aspectRatio,
+        actionAxisAngle: data.actionAxisAngle ?? s.actionAxisAngle,
+        depthMode: data.depthMode ?? s.depthMode,
+        depthRange: data.depthRange ?? s.depthRange,
+        renderResolution: data.renderResolution ?? s.renderResolution,
+        currentFrame: 0,
+        isPlaying: false,
+        past: [],
+        future: [],
+      };
+    }),
+  resetScene: () => {
+    get().pushHistory();
+    const channels = emptyCameraChannels();
+    set({
+      proxies: [],
+      selectedProxyId: null,
+      cameraSelected: false,
+      proxyKeyframes: {},
+      cameraChannels: channels,
+      keyframes: channelsToKeyframes(channels),
+      trajectory: { ...DEFAULT_TRAJECTORY, preset: "custom" },
+      currentFrame: 0,
+      isPlaying: false,
+      savedPrevisUrl: null,
+    });
+  },
 }));

@@ -1571,60 +1571,6 @@ export async function uploadScreenplay(projectId: string, file: File): Promise<S
   return resp.json();
 }
 
-// =============================================================================
-// Motion Previs → Video (V2V / motion-control) generation
-// =============================================================================
-
-export interface MotionShotRequest {
-  /** Recorded previs clip blob from the canvas captureStream pipeline. */
-  motionReferenceBlob: Blob;
-  prompt: string;
-  modelId: string;
-  aspectRatio?: string;
-  focalLength?: number;
-  durationSeconds?: number;
-}
-
-/**
- * Submit a recorded previs motion clip to the backend, which routes it into a
- * video driver's motion-control / video-to-video slot (reference_video_path).
- * Returns a generation job that can be polled with checkMotionShotStatus().
- */
-export async function submitMotionShot(req: MotionShotRequest): Promise<GenerationResponse> {
-  const formData = new FormData();
-  formData.append("motion_reference", req.motionReferenceBlob, "previs_motion.webm");
-  formData.append("prompt", req.prompt);
-  formData.append("model_id", req.modelId);
-  if (req.aspectRatio) formData.append("aspect_ratio", req.aspectRatio);
-  if (req.focalLength) formData.append("focal_length", String(req.focalLength));
-  if (req.durationSeconds) formData.append("duration_seconds", String(req.durationSeconds));
-
-  const resp = await fetch(`${API_BASE}/generate/motion-shot`, {
-    method: "POST",
-    body: formData,
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: "Failed to submit motion shot" }));
-    throw new Error(err.detail || "Failed to submit motion shot");
-  }
-  return resp.json();
-}
-
-/**
- * Poll the status of a previs motion-shot generation job. Reused by
- * useGenerationPolling the same way frame/video jobs are polled.
- */
-export async function checkMotionShotStatus(jobId: string, modelId: string): Promise<GenerationResponse> {
-  const resp = await fetch(
-    `${API_BASE}/generate/motion-shot/${jobId}/status?model_id=${encodeURIComponent(modelId)}`,
-  );
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: "Failed to check motion shot status" }));
-    throw new Error(err.detail || "Failed to check motion shot status");
-  }
-  return resp.json();
-}
-
 /**
  * Render a recorded previs WebM clip to MP4 on the backend using the bundled
  * ffmpeg. The MP4 is stored in the project's video library and can be used as
@@ -1658,6 +1604,38 @@ export async function renderPrevisToMp4(
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: "Failed to render previs" }));
     throw new Error(err.detail || "Failed to render previs to MP4");
+  }
+  return resp.json();
+}
+
+/**
+ * Load the saved previs scene for a project (null when never saved).
+ * The document schema is owned by usePrevisStore (versioned).
+ */
+export async function fetchPrevisScene(
+  projectId: string = "default",
+): Promise<{ scene: import("./usePrevisStore").PrevisScenePayload | null }> {
+  const resp = await fetch(`${API_BASE}/previs/${projectId}`);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Failed to load previs scene" }));
+    throw new Error(err.detail || "Failed to load previs scene");
+  }
+  return resp.json();
+}
+
+/** Persist the previs scene (proxies, camera channels, timeline settings) to the Vault. */
+export async function savePrevisScene(
+  projectId: string,
+  scene: import("./usePrevisStore").PrevisScenePayload,
+): Promise<{ status: string; bytes: number }> {
+  const resp = await fetch(`${API_BASE}/previs/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(scene),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Failed to save previs scene" }));
+    throw new Error(err.detail || "Failed to save previs scene");
   }
   return resp.json();
 }

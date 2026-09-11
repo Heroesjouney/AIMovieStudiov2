@@ -6,8 +6,6 @@ Used by the Asset generation panel and the model selector dropdown.
 
 import json
 import os
-import shutil
-import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
@@ -18,7 +16,7 @@ from core.drivers import (
 )
 from core.drivers.base import (
     ImageGenerationRequest, ImageGenerationResponse, GenerationStatus,
-    VideoGenerationRequest, VideoGenerationMode, AspectRatio,
+    VideoGenerationRequest,
 )
 from core.drivers.lora_utils import fetch_lora_list
 
@@ -464,92 +462,6 @@ async def check_analysis_status(job_id: str):
 
 
 # =============================================================================
-# Motion Previs → Video (V2V / motion-control)
-#
-# Accepts a recorded previs clip captured from the browser canvas and routes it
-# into a video driver's motion-control slot (reference_video_path). The previs
-# clip becomes the camera/motion reference for video-to-video generation
-# (MiniMax H3, LTX Video, Wan Video, Higgsfield Sea Dance, etc.).
-# =============================================================================
-
-PREVIS_INPUT_DIR = VAULT_DIR / "previs_inputs"
-
-
-@router.post("/motion-shot")
-async def generate_motion_shot(
-    prompt: str = Form(...),
-    motion_reference: UploadFile = File(...),
-    model_id: str = Form("minimax_h3"),
-    aspect_ratio: str = Form("16:9"),
-    focal_length: Optional[float] = Form(None),
-    duration_seconds: Optional[float] = Form(None),
-):
-    """Submit a recorded previs motion clip and dispatch it to a video driver.
-
-    The uploaded clip is namespaced by job_id on disk so concurrent recordings
-    (which all arrive as previs_motion.webm) can't clobber each other. The clip
-    is passed as `reference_video_path` with mode=r2v (motion/camera lock).
-    Returns a generation job that can be polled via /generate/motion-shot/{job_id}/status.
-    """
-    driver = get_video_driver(model_id)
-    if not driver:
-        raise HTTPException(status_code=400, detail=f"Unknown video model: {model_id}")
-
-    PREVIS_INPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    job_id = f"job_{uuid.uuid4().hex}"
-    original_name = motion_reference.filename or "previs_motion.webm"
-    file_path = PREVIS_INPUT_DIR / f"{job_id}_{original_name}"
-
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(motion_reference.file, buffer)
-    print(f"[motion-shot] saved previs reference ({os.path.getsize(file_path)} bytes) -> {file_path}")
-
-    try:
-        ar = AspectRatio(aspect_ratio)
-    except ValueError:
-        ar = AspectRatio.LANDSCAPE_16_9
-
-    extra_params: dict = {}
-    if focal_length is not None:
-        extra_params["focal_length_mm"] = focal_length
-
-    gen_req = VideoGenerationRequest(
-        prompt=prompt,
-        mode=VideoGenerationMode.R2V,
-        duration_seconds=duration_seconds if duration_seconds else 5,
-        aspect_ratio=ar,
-        reference_video_path=str(file_path),
-        extra_params=extra_params,
-    )
-
-    response = await driver.generate(gen_req)
-
-    return {
-        **response.model_dump(),
-        "job_id": response.job_id or job_id,
-        "model_id": model_id,
-        "previs_reference_path": str(file_path),
-        "message": "Motion reference video successfully passed to model driver.",
-    }
-
-
-@router.get("/motion-shot/{job_id}/status")
-async def check_motion_shot_status(job_id: str, model_id: str = "minimax_h3"):
-    """Poll the status of a previs motion-shot generation job.
-
-    Returns the underlying video driver's status response (status, video_url,
-    error_message, metadata). Designed to be polled by useGenerationPolling.
-    """
-    driver = get_video_driver(model_id)
-    if not driver:
-        raise HTTPException(status_code=400, detail=f"Unknown video model: {model_id}")
-
-    response = await driver.check_status(job_id)
-    return response.model_dump()
-
-
-# =============================================================================
 # Previs Render — WebM → MP4 conversion (no ComfyUI/AI needed)
 # =============================================================================
 
@@ -626,10 +538,17 @@ async def render_previs_to_mp4(
     # e.g. -vf "scale=-2:720,pad=ceil(iw/2)*2:720:(ow-iw)/2:0" for 720p 16:9.
     res_map = {"480p": 480, "720p": 720, "1080p": 1080}
     target_h = res_map.get(resolution, 720)
-    if aspect_ratio == "2.39:1":
-        target_w = int(round(target_h * 2.39))
-    else:  # 16:9
-        target_w = int(round(target_h * 16 / 9))
+    # Parse aspect ratio string "W:H" → numeric w/h
+    aspect_map = {
+        "1:1": 1.0,
+        "4:3": 4 / 3,
+        "16:9": 16 / 9,
+        "2.35:1": 2.35,
+        "2.39:1": 2.39,
+        "9:16": 9 / 16,
+    }
+    ar = aspect_map.get(aspect_ratio, 16 / 9)
+    target_w = int(round(target_h * ar))
     # Ensure even dimensions (libx264 requirement)
     if target_w % 2: target_w += 1
     if target_h % 2: target_h += 1
