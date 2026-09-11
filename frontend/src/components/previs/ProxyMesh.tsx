@@ -133,8 +133,6 @@ function SetMesh({
         emissiveIntensity={emissiveIntensity}
         roughness={0.85}
         metalness={0.05}
-        transparent
-        opacity={0.92}
       />
       {selected && (
         <lineSegments>

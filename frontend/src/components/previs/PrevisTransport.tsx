@@ -81,20 +81,20 @@ export function PrevisTransport() {
   const hasKeyAtCurrent = cameraSelected ? hasCamKeyAtCurrent : hasProxyKeyAtCurrent;
 
   return (
-    <div className="flex flex-col gap-1 px-3 py-1.5 bg-studio-panel/80 border-t border-studio-border shrink-0 max-h-[45vh] overflow-hidden">
+    <div className="flex flex-col gap-1 px-3 py-1.5 bg-studio-panel border-t border-studio-border shrink-0 max-h-[45vh] overflow-hidden">
       {/* === Row 1: Transport + Scrubber + Timecode === */}
       <div className="flex items-center gap-3 shrink-0">
         <div className="flex items-center gap-1">
-          <button onClick={() => setCurrentFrame(0)} className="p-1.5 rounded-lg text-studio-muted hover:text-studio-text hover:bg-studio-panelHover transition-colors" title="Skip to start">
+          <button onClick={() => setCurrentFrame(0)} className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 transition-colors text-studio-muted" title="Skip to start">
             <SkipBack className="w-3.5 h-3.5" />
           </button>
-          <button onClick={togglePlay} className="p-2 rounded-lg bg-studio-accent hover:bg-studio-accentHover text-white transition-colors shadow-lg" title={isPlaying ? "Pause" : "Play"}>
+          <button onClick={togglePlay} className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-accent bg-studio-accent hover:bg-studio-accentHover text-white transition-colors" title={isPlaying ? "Pause" : "Play"}>
             {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
           </button>
-          <button onClick={handleStop} className="p-1.5 rounded-lg text-studio-muted hover:text-studio-text hover:bg-studio-panelHover transition-colors" title="Stop">
+          <button onClick={handleStop} className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 transition-colors text-studio-muted" title="Stop">
             <Square className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => setCurrentFrame(durationFrames)} className="p-1.5 rounded-lg text-studio-muted hover:text-studio-text hover:bg-studio-panelHover transition-colors" title="Skip to end">
+          <button onClick={() => setCurrentFrame(durationFrames)} className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 transition-colors text-studio-muted" title="Skip to end">
             <SkipForward className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -175,12 +175,12 @@ export function PrevisTransport() {
             <button
               key={p.id}
               onClick={() => applyPreset(p.id)}
-              className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${
+              className={`flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-medium transition-colors ${
                 trajectory.preset === p.id && p.id !== "custom"
-                  ? "bg-studio-accent text-white"
+                  ? "border-studio-accent bg-studio-accent text-white"
                   : p.id === "custom"
-                    ? "bg-studio-panelHover text-studio-muted hover:text-studio-danger"
-                    : "bg-studio-panelHover text-studio-muted hover:text-studio-text"
+                    ? "border-studio-border bg-studio-bg text-studio-muted hover:text-studio-danger hover:border-studio-danger/50"
+                    : "border-studio-border bg-studio-bg text-studio-muted hover:border-studio-accent/50 hover:bg-studio-border/40"
               }`}
               title={p.desc}
             >
@@ -190,7 +190,7 @@ export function PrevisTransport() {
           ))}
         </div>
 
-        <div className="w-px h-5 bg-studio-border" />
+        <div className="w-px h-6 bg-studio-border mx-1" />
 
         {/* Duration */}
         <div className="flex items-center gap-1">
@@ -199,10 +199,10 @@ export function PrevisTransport() {
             <button
               key={d.frames}
               onClick={() => setDurationFrames(d.frames)}
-              className={`px-2 py-1 rounded-md text-[10px] font-medium tabular-nums transition-colors ${
+              className={`px-2 py-1 rounded border text-[10px] font-medium tabular-nums transition-colors ${
                 durationFrames === d.frames
-                  ? "bg-studio-accent/20 text-studio-accent"
-                  : "bg-studio-panelHover text-studio-muted hover:text-studio-text"
+                  ? "border-studio-accent bg-studio-accent/20 text-studio-accent"
+                  : "border-studio-border bg-studio-bg text-studio-muted hover:border-studio-accent/50 hover:bg-studio-border/40"
               }`}
             >
               {d.label}
@@ -219,24 +219,24 @@ export function PrevisTransport() {
               const secs = parseFloat(e.target.value);
               if (!isNaN(secs) && secs > 0) setDurationFrames(Math.round(secs * fps));
             }}
-            className="w-12 px-1.5 py-1 rounded-md bg-studio-panelHover text-studio-text text-[10px] tabular-nums text-center border border-studio-border focus:outline-none focus:border-studio-accent/50"
+            className="w-12 px-1.5 py-1 rounded border border-studio-border bg-studio-bg text-studio-text text-[10px] tabular-nums text-center focus:outline-none focus:border-studio-accent/50"
             title="Custom duration in seconds"
           />
           <span className="text-[8px] text-studio-muted/50">s</span>
         </div>
 
-        <div className="w-px h-5 bg-studio-border" />
+        <div className="w-px h-6 bg-studio-border mx-1" />
 
         {/* Set Keyframe */}
         <button
           onClick={handleSetKeyframe}
           disabled={!cameraSelected && !selectedProxyId}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-semibold transition-colors ${
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[10px] font-semibold transition-colors ${
             !cameraSelected && !selectedProxyId
-              ? "bg-studio-panelHover text-studio-muted/30 cursor-not-allowed"
+              ? "border-studio-border bg-studio-bg text-studio-muted/30 cursor-not-allowed"
               : hasKeyAtCurrent
-                ? "bg-studio-warning/20 text-studio-warning border border-studio-warning/30"
-                : "bg-studio-accent/15 text-studio-accent hover:bg-studio-accent/25 border border-transparent"
+                ? "border-studio-warning/30 bg-studio-warning/20 text-studio-warning"
+                : "border-studio-accent/50 bg-studio-accent/15 text-studio-accent hover:bg-studio-accent/25"
           }`}
           title={hasKeyAtCurrent ? `Update keyframe at f${currentFrameRounded}` : "Set keyframe at current frame"}
         >
@@ -252,7 +252,7 @@ export function PrevisTransport() {
               if (cameraSelected) removeKeyframeAtFrame(currentFrameRounded);
               else if (selectedProxyId) removeProxyKeyframe(selectedProxyId, currentFrameRounded);
             }}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium text-studio-danger/70 hover:text-studio-danger hover:bg-studio-danger/10 transition-colors"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg text-studio-danger/70 hover:text-studio-danger hover:border-studio-danger/50 hover:bg-studio-border/40 transition-colors"
             title="Delete keyframe at current frame"
           >
             <Trash2 className="w-3 h-3" />
