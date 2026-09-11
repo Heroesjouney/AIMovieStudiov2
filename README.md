@@ -54,7 +54,7 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 
 Block out camera moves in a real-time 3D stage before spending generation credits. Fly the camera Unreal-style, keyframe on a multitrack timeline, render to MP4, and reuse the clip as a motion reference.
 
-![3D Camera Previs Demo](docs/previs_demo.mp4)
+> **Watch the demo:** [3D Camera Previs on YouTube](https://www.youtube.com/watch?v=REPLACE_WITH_VIDEO_ID)
 
 ---
 
