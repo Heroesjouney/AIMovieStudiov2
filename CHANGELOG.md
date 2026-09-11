@@ -18,6 +18,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### 3D Camera Previs & Motion Reference
+- **3D Previs Stage** (`frontend/src/components/previs/`) — Interactive browser-based 3D stage for blocking out camera moves before spending generation credits. Includes proxy primitives (characters, cubes, spheres, cylinders, cones, planes, torus) with transform gizmos, ground grid with distance markers, and world axis vectors.
+- **Dual Viewport** — Perspective editor view (center) + live "through-the-lens" shot view (right) that renders from the previs camera's perspective and updates in real time.
+- **Multitrack Keyframe Timeline** (`PrevisTransport.tsx`) — After Effects / Unreal Sequencer-style timeline with a camera track plus per-object tracks, diamond keyframes, and a shared playhead. Duration presets (2s/4s/6s/10s/15s) plus a custom duration input (up to 120s).
+- **Unreal-style Camera Fly Mode** (`EditorScene.tsx` `CameraFlyController`) — Press **C** to toggle between Perspective and Camera viewport modes. In Camera mode, the editor viewport becomes the camera's view with letterboxed framing matching the selected aspect ratio. Hold **RMB** + drag to look, **WASD** to move, **Q/E** for elevation, mouse wheel to dolly, **K** to drop a keyframe. Movement writes the current frame's keyframe in real time.
+- **Trajectory Splines** (`TrajectoryVisual.tsx`) — Camera path + FOV frustum visualization that updates live as keyframes change. Keyframe markers are clickable to delete.
+- **Proxy Pivot Fix** — Removed doubled transform application in `ProxyMesh.tsx` so gizmo handles sit at the visual center of each proxy (was offsetting position/rotation/scale twice).
+- **Camera Playback Fix** — The camera marker now animates along the trajectory during playback even when selected (previously skipped when `cameraSelected` was true, blocking playback animation). The gizmo is hidden during playback to avoid fighting the trajectory.
+- **Previs Render to MP4** (`POST /api/generate/previs/render`) — Browser canvas `captureStream` → `MediaRecorder` (WebM) → backend transcode via bundled `imageio_ffmpeg` to H.264/AAC MP4 (`libx264`, `-preset fast`, `-crf 23`, `-movflags +faststart`, `-pix_fmt yuv420p`). No GPU or API key required. Saved to `backend/assets/{project_id}/videos/`.
+- **Project ID Sync** — `timeline.projectId` is now synchronized from the URL parameter on project load so previs renders save to the correct project (was stuck at `"default"`).
+- **Library Preview** — Uploaded/rendered videos in `MediaLibrary.tsx` now have a Play button that opens an autoplaying, looping video modal.
+- **Camera Settings** (`PrevisInspector.tsx`) — Focal length selector (24mm / 35mm / 50mm / 85mm), aspect ratio (16:9 / 2.39:1), render resolution (480p / 720p / 1080p), and depth pass toggle with adjustable depth range slider.
+- **Depth Pass** (`ViewfinderScene.tsx`) — Custom linear depth shader (replaces `THREE.MeshDepthMaterial`) that maps view-space distance linearly across `[0, depthRange]` — white at camera, black at `depthRange` meters. Adjustable range slider (2–40m) so the gradient covers the scene. Affects the rendered MP4, producing a depth-reference clip for downstream video-to-video models.
+- **Viewport Letterboxing** — In Camera mode, the editor canvas is scissored to the target aspect ratio with CSS letterbox bars so the user sees the exact framing the camera will capture.
+
 #### Audio System Overhaul
 
 ##### ComfyUI Audio Driver

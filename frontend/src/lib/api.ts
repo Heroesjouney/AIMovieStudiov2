@@ -1570,3 +1570,94 @@ export async function uploadScreenplay(projectId: string, file: File): Promise<S
   }
   return resp.json();
 }
+
+// =============================================================================
+// Motion Previs → Video (V2V / motion-control) generation
+// =============================================================================
+
+export interface MotionShotRequest {
+  /** Recorded previs clip blob from the canvas captureStream pipeline. */
+  motionReferenceBlob: Blob;
+  prompt: string;
+  modelId: string;
+  aspectRatio?: string;
+  focalLength?: number;
+  durationSeconds?: number;
+}
+
+/**
+ * Submit a recorded previs motion clip to the backend, which routes it into a
+ * video driver's motion-control / video-to-video slot (reference_video_path).
+ * Returns a generation job that can be polled with checkMotionShotStatus().
+ */
+export async function submitMotionShot(req: MotionShotRequest): Promise<GenerationResponse> {
+  const formData = new FormData();
+  formData.append("motion_reference", req.motionReferenceBlob, "previs_motion.webm");
+  formData.append("prompt", req.prompt);
+  formData.append("model_id", req.modelId);
+  if (req.aspectRatio) formData.append("aspect_ratio", req.aspectRatio);
+  if (req.focalLength) formData.append("focal_length", String(req.focalLength));
+  if (req.durationSeconds) formData.append("duration_seconds", String(req.durationSeconds));
+
+  const resp = await fetch(`${API_BASE}/generate/motion-shot`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Failed to submit motion shot" }));
+    throw new Error(err.detail || "Failed to submit motion shot");
+  }
+  return resp.json();
+}
+
+/**
+ * Poll the status of a previs motion-shot generation job. Reused by
+ * useGenerationPolling the same way frame/video jobs are polled.
+ */
+export async function checkMotionShotStatus(jobId: string, modelId: string): Promise<GenerationResponse> {
+  const resp = await fetch(
+    `${API_BASE}/generate/motion-shot/${jobId}/status?model_id=${encodeURIComponent(modelId)}`,
+  );
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Failed to check motion shot status" }));
+    throw new Error(err.detail || "Failed to check motion shot status");
+  }
+  return resp.json();
+}
+
+/**
+ * Render a recorded previs WebM clip to MP4 on the backend using the bundled
+ * ffmpeg. The MP4 is stored in the project's video library and can be used as
+ * a reference clip or motion reference. Does NOT require ComfyUI or any AI
+ * model — this is a pure video transcode.
+ *
+ * @param blob    Recorded WebM blob from the viewfinder canvas.
+ * @param projectId   Project ID for library storage.
+ * @param resolution  Target resolution ("480p" | "720p" | "1080p"). ffmpeg
+ *                    scales the WebM to this height while preserving aspect
+ *                    ratio. Default "720p".
+ * @param aspectRatio Target aspect ratio ("16:9" | "2.39:1"). ffmpeg pads/
+ *                    crops to this ratio. Default "16:9".
+ */
+export async function renderPrevisToMp4(
+  blob: Blob,
+  projectId: string = "default",
+  resolution: string = "720p",
+  aspectRatio: string = "16:9",
+): Promise<{ filename: string; video_url: string; size_bytes: number; duration_seconds: number | null; format: string }> {
+  const formData = new FormData();
+  const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+  formData.append("file", blob, `previs_recording.${ext}`);
+  formData.append("project_id", projectId);
+  formData.append("resolution", resolution);
+  formData.append("aspect_ratio", aspectRatio);
+  const resp = await fetch(`${API_BASE}/generate/previs/render`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: "Failed to render previs" }));
+    throw new Error(err.detail || "Failed to render previs to MP4");
+  }
+  return resp.json();
+}

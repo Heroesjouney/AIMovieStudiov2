@@ -50,6 +50,12 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 
 ![AI Movie Studio 2 - Project Workspace](docs/update-screenplay.png)
 
+### 🎥 3D Camera Previs (Work in Progress)
+
+Block out camera moves in a real-time 3D stage before spending generation credits. Fly the camera Unreal-style, keyframe on a multitrack timeline, render to MP4, and reuse the clip as a motion reference.
+
+<video src="docs/previs_demo.mp4" controls muted width="100%"></video>
+
 ---
 
 ## 📋 Table of Contents
@@ -97,8 +103,9 @@ You don't need to be a developer to use it. If you can use a web browser, you ca
 - **⚙️ Settings Panel** - A built-in settings panel (gear icon in header) for managing cloud API keys, uploading models to ComfyUI, and registering custom workflows — no code changes or `.env` editing required.
 - **🔧 Custom Workflows** - Build workflows in ComfyUI, export as JSON, and upload them through the Settings panel. Custom workflows appear as new models in all dropdowns with full LoRA support. Driver dropdowns auto-refresh after registering or deleting workflows — no page reload needed.
 - **🔍 Workflow Model Analysis** - When uploading a custom workflow, the app automatically analyzes the JSON and lists all required models (checkpoints, LoRAs, VAEs, CLIP, UNet, ControlNet, etc.). Each model is checked against your ComfyUI instance — models already present show a green "In ComfyUI" badge, and missing models can be uploaded directly to the correct subdirectory from the same UI.
+- **🎥 3D Camera Previs** *(Experimental)* - A browser-based 3D previs stage for blocking out camera moves before generating. Drop in proxy characters and props, keyframe the camera on a multitrack timeline (After Effects / Unreal Sequencer-style), fly the camera Unreal-style (press C to enter Camera mode, hold RMB + WASD to pilot), and render the viewfinder to MP4 via bundled ffmpeg. Rendered clips are saved to the project video library for reuse as motion references in the Camera Director. Includes focal length, aspect ratio (16:9 / 2.39:1), resolution (480p / 720p / 1080p), and a linear depth pass with adjustable range.
 
-> 🚀 **Active Development:** We are currently building Phase 2 (3D Camera Trajectories & Promptless Spatial Controls). [Check out the full Roadmap below ↓](#roadmap)
+> 🚀 **Active Development:** We are currently building Phase 2 (3D Camera Previs & Motion Reference Workflows). [Check out the full Roadmap below ↓](#roadmap)
 
 ---
 
@@ -768,10 +775,23 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 ---
 
 ### 🎬 Phase 2: Directorial & Spatial Control (Promptless Workflows)
-- [ ] **3D Viewport Camera Trajectories** — Map R3F camera paths (Dolly, Arc, Crane) to camera matrix conditionings (CameraCtrl/IC-LoRA)
+
+#### 3D Camera Previs & Motion Reference — *In Progress*
+- [x] **3D Previs Stage** — Interactive 3D stage with proxy primitives (characters, cubes, spheres, cylinders, cones, planes, torus) and transform gizmos
+- [x] **Dual Viewport** — Perspective editor view + live "through-the-lens" shot view that updates as you move the camera
+- [x] **Camera Keyframing** — Multitrack timeline (After Effects / Unreal Sequencer-style) with camera + per-object tracks, diamond keyframes, and a shared playhead
+- [x] **Unreal-style Fly Mode** — Press C to enter Camera mode, hold RMB + WASD to pilot the camera, mouse to look, Q/E for elevation, K to drop a keyframe
+- [x] **Trajectory Splines** — Camera path + FOV frustum visualization that updates live as you build the move
+- [x] **Previs Render to MP4** — Browser canvas capture → bundled ffmpeg transcode → saved to project video library (no GPU, no API key needed)
+- [x] **Camera Settings** — Focal length, aspect ratio (16:9 / 2.39:1), resolution (480p / 720p / 1080p)
+- [x] **Depth Pass** — Linear depth map render (white = near, black = far) with adjustable range slider
+- [x] **Library Integration** — Rendered previs clips appear in the project video library for reuse as motion references
+- [ ] **Camera Trajectory → AI Conditioning** — Map R3F camera paths (Dolly, Arc, Crane) to camera matrix conditionings (CameraCtrl/IC-LoRA)
 - [ ] **View Frustum Actor Auto-Injection** — Detect 3D actors in the camera cone and automatically inject their LoRAs/IP-Adapters into ComfyUI
+
+#### Spatial & Continuity Tools — *Planned*
 - [ ] **A/B Continuity Wipe & Onion-Skinning** — Overlay adjacent shot frames with split-screen wipes to verify scale, positioning, and eyelines
-- [ ] **Director’s Inpainting & Retake Canvas** — Draw spatial masks directly on frames to re-roll expressions, props, or background regions
+- [ ] **Director's Inpainting & Retake Canvas** — Draw spatial masks directly on frames to re-roll expressions, props, or background regions
 
 ---
 

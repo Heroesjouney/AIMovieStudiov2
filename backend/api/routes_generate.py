@@ -6,15 +6,20 @@ Used by the Asset generation panel and the model selector dropdown.
 
 import json
 import os
+import shutil
+import uuid
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List
 
 from core.drivers import (
-    get_image_driver, list_image_drivers, list_video_drivers, list_audio_drivers,
+    get_image_driver, get_video_driver, list_image_drivers, list_video_drivers, list_audio_drivers,
 )
-from core.drivers.base import ImageGenerationRequest, ImageGenerationResponse, GenerationStatus
+from core.drivers.base import (
+    ImageGenerationRequest, ImageGenerationResponse, GenerationStatus,
+    VideoGenerationRequest, VideoGenerationMode, AspectRatio,
+)
 from core.drivers.lora_utils import fetch_lora_list
 
 router = APIRouter()
@@ -456,3 +461,215 @@ async def check_analysis_status(job_id: str):
 
     response = await driver.check_analysis_status(job_id)
     return response.model_dump()
+
+
+# =============================================================================
+# Motion Previs → Video (V2V / motion-control)
+#
+# Accepts a recorded previs clip captured from the browser canvas and routes it
+# into a video driver's motion-control slot (reference_video_path). The previs
+# clip becomes the camera/motion reference for video-to-video generation
+# (MiniMax H3, LTX Video, Wan Video, Higgsfield Sea Dance, etc.).
+# =============================================================================
+
+PREVIS_INPUT_DIR = VAULT_DIR / "previs_inputs"
+
+
+@router.post("/motion-shot")
+async def generate_motion_shot(
+    prompt: str = Form(...),
+    motion_reference: UploadFile = File(...),
+    model_id: str = Form("minimax_h3"),
+    aspect_ratio: str = Form("16:9"),
+    focal_length: Optional[float] = Form(None),
+    duration_seconds: Optional[float] = Form(None),
+):
+    """Submit a recorded previs motion clip and dispatch it to a video driver.
+
+    The uploaded clip is namespaced by job_id on disk so concurrent recordings
+    (which all arrive as previs_motion.webm) can't clobber each other. The clip
+    is passed as `reference_video_path` with mode=r2v (motion/camera lock).
+    Returns a generation job that can be polled via /generate/motion-shot/{job_id}/status.
+    """
+    driver = get_video_driver(model_id)
+    if not driver:
+        raise HTTPException(status_code=400, detail=f"Unknown video model: {model_id}")
+
+    PREVIS_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    job_id = f"job_{uuid.uuid4().hex}"
+    original_name = motion_reference.filename or "previs_motion.webm"
+    file_path = PREVIS_INPUT_DIR / f"{job_id}_{original_name}"
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(motion_reference.file, buffer)
+    print(f"[motion-shot] saved previs reference ({os.path.getsize(file_path)} bytes) -> {file_path}")
+
+    try:
+        ar = AspectRatio(aspect_ratio)
+    except ValueError:
+        ar = AspectRatio.LANDSCAPE_16_9
+
+    extra_params: dict = {}
+    if focal_length is not None:
+        extra_params["focal_length_mm"] = focal_length
+
+    gen_req = VideoGenerationRequest(
+        prompt=prompt,
+        mode=VideoGenerationMode.R2V,
+        duration_seconds=duration_seconds if duration_seconds else 5,
+        aspect_ratio=ar,
+        reference_video_path=str(file_path),
+        extra_params=extra_params,
+    )
+
+    response = await driver.generate(gen_req)
+
+    return {
+        **response.model_dump(),
+        "job_id": response.job_id or job_id,
+        "model_id": model_id,
+        "previs_reference_path": str(file_path),
+        "message": "Motion reference video successfully passed to model driver.",
+    }
+
+
+@router.get("/motion-shot/{job_id}/status")
+async def check_motion_shot_status(job_id: str, model_id: str = "minimax_h3"):
+    """Poll the status of a previs motion-shot generation job.
+
+    Returns the underlying video driver's status response (status, video_url,
+    error_message, metadata). Designed to be polled by useGenerationPolling.
+    """
+    driver = get_video_driver(model_id)
+    if not driver:
+        raise HTTPException(status_code=400, detail=f"Unknown video model: {model_id}")
+
+    response = await driver.check_status(job_id)
+    return response.model_dump()
+
+
+# =============================================================================
+# Previs Render — WebM → MP4 conversion (no ComfyUI/AI needed)
+# =============================================================================
+
+def _get_ffmpeg_exe() -> str:
+    """Get the path to the bundled ffmpeg binary from imageio_ffmpeg."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="ffmpeg not available — imageio_ffmpeg package not installed",
+        )
+
+
+def _probe_duration(ffmpeg_exe: str, video_path: str) -> Optional[float]:
+    """Extract video duration in seconds by parsing ffmpeg's stderr output."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            [ffmpeg_exe, "-i", video_path, "-hide_banner"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stderr.split("\n"):
+            if "Duration:" in line:
+                dur = line.split("Duration:")[1].split(",")[0].strip()
+                h, m, s = dur.split(":")
+                return int(h) * 3600 + int(m) * 60 + float(s)
+    except Exception:
+        pass
+    return None
+
+
+@router.post("/previs/render")
+async def render_previs_to_mp4(
+    file: UploadFile = File(..., description="Recorded previs WebM clip"),
+    project_id: str = Form(default="default", description="Project ID"),
+    resolution: str = Form(default="720p", description="Target resolution: 480p, 720p, 1080p"),
+    aspect_ratio: str = Form(default="16:9", description="Target aspect ratio: 16:9 or 2.39:1"),
+):
+    """Convert a recorded previs WebM clip to MP4 (H.264/AAC) and store it in
+    the project's video library.
+
+    Uses the bundled ffmpeg from imageio_ffmpeg — no system ffmpeg installation
+    required. The resulting MP4 is universally compatible (browsers, video
+    editors, AI video models) and can be used as a reference clip on the
+    timeline or as a motion reference for generation.
+    """
+    import tempfile
+    import subprocess
+    import time
+
+    ffmpeg_exe = _get_ffmpeg_exe()
+
+    # Read the uploaded WebM into a temp file
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file upload")
+
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+        tmp.write(content)
+        tmp_webm = tmp.name
+
+    # Output MP4 in the project's video directory
+    videos_dir = VAULT_DIR / project_id / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = int(time.time())
+    output_name = f"previs_{timestamp}.mp4"
+    output_path = videos_dir / output_name
+
+    # Build the scaling filter — scale to target height while preserving aspect
+    # ratio, then pad to the exact target aspect ratio (centered, black bars).
+    # e.g. -vf "scale=-2:720,pad=ceil(iw/2)*2:720:(ow-iw)/2:0" for 720p 16:9.
+    res_map = {"480p": 480, "720p": 720, "1080p": 1080}
+    target_h = res_map.get(resolution, 720)
+    if aspect_ratio == "2.39:1":
+        target_w = int(round(target_h * 2.39))
+    else:  # 16:9
+        target_w = int(round(target_h * 16 / 9))
+    # Ensure even dimensions (libx264 requirement)
+    if target_w % 2: target_w += 1
+    if target_h % 2: target_h += 1
+    # scale to fit within target, then pad to exact size (centered, black bars)
+    vf = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2"
+
+    try:
+        cmd = [
+            ffmpeg_exe, "-y", "-i", tmp_webm,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            error_tail = result.stderr[-800:] if result.stderr else "unknown error"
+            raise HTTPException(
+                status_code=500,
+                detail=f"ffmpeg conversion failed: {error_tail}",
+            )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="ffmpeg conversion timed out (180s)")
+    finally:
+        if os.path.exists(tmp_webm):
+            os.unlink(tmp_webm)
+
+    duration_seconds = _probe_duration(ffmpeg_exe, str(output_path))
+    size_bytes = output_path.stat().st_size
+
+    print(f"[previs/render] converted {len(content)} bytes WebM -> {size_bytes} bytes MP4 ({target_w}x{target_h}, {duration_seconds:.2f}s) -> {output_path}")
+
+    return {
+        "filename": output_name,
+        "video_url": f"/assets/{project_id}/videos/{output_name}",
+        "size_bytes": size_bytes,
+        "duration_seconds": duration_seconds,
+        "format": "mp4",
+        "width": target_w,
+        "height": target_h,
+    }

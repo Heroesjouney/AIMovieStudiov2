@@ -120,7 +120,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   const {
     assets, setAssets, selectedAssetId, setSelectedAssetId,
     addTimelineClip, addAudioTrack, timeline, removeTimelineClipsBySourceId,
-    setTimelineProjectId, audioLibraryRefreshToken,
+    setTimelineProjectId, audioLibraryRefreshToken, videoLibraryRefreshToken,
     scenes, selectedShotId, setSelectedShotId,
     shots: storeShots, setShots: setStoreShots,
   } = useStudioStore();
@@ -249,6 +249,13 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
       void loadAudioFiles();
     }
   }, [audioLibraryRefreshToken, loadAudioFiles]);
+
+  // Reload videos when refresh token changes (e.g. after previs save)
+  useEffect(() => {
+    if (videoLibraryRefreshToken > 0) {
+      void loadVideoAssets();
+    }
+  }, [videoLibraryRefreshToken, loadVideoAssets]);
 
   const typeFiltered = filter === "all" ? assets : assets.filter((a) => a.type === filter);
   const selectedAsset = assets.find((a) => a.id === selectedAssetId);
@@ -769,6 +776,13 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
                           <p className="text-xs text-studio-text truncate">{video.filename}</p>
                           <p className="text-[10px] text-studio-muted">{(video.size_bytes / 1024 / 1024).toFixed(1)} MB{video.duration_seconds ? ` · ${video.duration_seconds.toFixed(1)}s` : ""}</p>
                         </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPreviewTake({ path: getVideoAssetUrl(video.video_url), id: video.filename, model_id: "uploaded", shotName: video.filename }); }}
+                          className="p-0.5 rounded hover:bg-studio-accent/20 text-studio-muted hover:text-studio-accent opacity-100 transition-all shrink-0"
+                          title="Preview video"
+                        >
+                          <Play className="w-3 h-3" />
+                        </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDeleteVideoAsset(video); }}
                           className="p-0.5 rounded hover:bg-red-500/20 text-studio-muted hover:text-red-400 opacity-100 transition-all shrink-0"

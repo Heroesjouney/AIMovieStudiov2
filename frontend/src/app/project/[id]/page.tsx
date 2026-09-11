@@ -8,8 +8,9 @@ import { AssetLibrary } from "@/components/library/MediaLibrary";
 import { ShotComposer } from "@/components/shots/ShotComposer";
 import { InspectorPanel } from "@/components/studio/InspectorPanel";
 import { TimelineEditor } from "@/components/timeline/TimelineEditor";
+import { PrevisStage } from "@/components/previs/PrevisStage";
 import { UserMenu } from "@/components/UserMenu";
-import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles, Video, ChevronDown, ChevronUp, Settings, Upload } from "lucide-react";
+import { Film, Image, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles, Video, ChevronDown, ChevronUp, Settings, Upload, Move3d } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { useRouter } from "next/navigation";
@@ -23,6 +24,7 @@ export default function ProjectWorkspacePage() {
   const { user, loading: authLoading } = useAuth();
   const {
     setDrivers, setAssets, setShots, setScenes,
+    setTimelineProjectId,
     timelineDockOpen, setTimelineDockOpen,
     activeInspector, setSidebarMode, sidebarMode,
     shots, selectedShotId, setSelectedShotId, setActiveInspector,
@@ -36,6 +38,7 @@ export default function ProjectWorkspacePage() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [storyboardCollapsed, setStoryboardCollapsed] = useState(false);
   const [timelineDockHeight, setTimelineDockHeight] = useState(45); // percentage
+  const [dockTab, setDockTab] = useState<"timeline" | "previs">("timeline");
   const dragRef = useRef<HTMLDivElement | null>(null);
 
   // Derive sidebar mode from inspector + dock state
@@ -51,11 +54,33 @@ export default function ProjectWorkspacePage() {
     if (!timelineDockOpen && storyboardCollapsed) setStoryboardCollapsed(false);
   }, [timelineDockOpen, storyboardCollapsed]);
 
-  // Toggle timeline dock — auto-collapse storyboard when opening, restore when closing
+  // Open the bottom dock to a specific tab (timeline or previs).
+  // Collapse the storyboard to a thumbnail strip so the dock gets full height
+  // (matches the original timeline dock open behavior).
+  const openDock = (tab: "timeline" | "previs") => {
+    setDockTab(tab);
+    setTimelineDockOpen(true);
+    setStoryboardCollapsed(true);
+  };
+
+  // Toggle timeline dock — closes if already on the timeline tab, else opens to it
   const handleTimelineToggle = () => {
-    const willOpen = !timelineDockOpen;
-    setTimelineDockOpen(willOpen);
-    setStoryboardCollapsed(willOpen);
+    if (timelineDockOpen && dockTab === "timeline") {
+      setTimelineDockOpen(false);
+      setStoryboardCollapsed(false);
+    } else {
+      openDock("timeline");
+    }
+  };
+
+  // Toggle previs dock — closes if already on the previs tab, else opens to it
+  const handlePrevisToggle = () => {
+    if (timelineDockOpen && dockTab === "previs") {
+      setTimelineDockOpen(false);
+      setStoryboardCollapsed(false);
+    } else {
+      openDock("previs");
+    }
   };
 
   // Drag-to-resize for timeline dock
@@ -109,6 +134,9 @@ export default function ProjectWorkspacePage() {
   }, [user, authLoading, router]);
 
   useEffect(() => {
+    // Keep timeline.projectId in sync with the URL so components that read
+    // from the store (e.g. PrevisInspector) use the correct project.
+    setTimelineProjectId(projectId);
     const init = async () => {
       try {
         const [drivers, assets, shots, scenes] = await Promise.all([
@@ -157,14 +185,28 @@ export default function ProjectWorkspacePage() {
           <button
             onClick={handleTimelineToggle}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
-              timelineDockOpen
+              timelineDockOpen && dockTab === "timeline"
                 ? "bg-studio-accent text-white"
                 : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
             }`}
           >
             <Video className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Timeline</span>
-            {timelineDockOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+            {timelineDockOpen && dockTab === "timeline" ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+          </button>
+
+          {/* Previs dock toggle */}
+          <button
+            onClick={handlePrevisToggle}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+              timelineDockOpen && dockTab === "previs"
+                ? "bg-studio-accent text-white"
+                : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+            }`}
+          >
+            <Move3d className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Previs</span>
+            {timelineDockOpen && dockTab === "previs" ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
           </button>
 
           <div className="w-px h-5 bg-studio-border" />
@@ -337,7 +379,7 @@ export default function ProjectWorkspacePage() {
                 </div>
               )}
 
-              {/* Timeline dock (collapsible bottom, resizable) */}
+              {/* Bottom dock — tabs: Timeline / Previs (collapsible, resizable) */}
               {timelineDockOpen && (
                 <div
                   className={`border-t border-studio-border animate-fade-in overflow-hidden flex flex-col ${storyboardCollapsed ? "flex-1" : ""}`}
@@ -350,8 +392,42 @@ export default function ProjectWorkspacePage() {
                       className="h-1.5 bg-studio-border hover:bg-studio-accent/40 cursor-row-resize shrink-0 transition-colors"
                     />
                   )}
+
+                  {/* Dock tab bar */}
+                  <div className="flex items-center gap-0.5 px-2 pt-1 pb-1 bg-studio-panel/50 border-b border-studio-border shrink-0">
+                    <button
+                      onClick={() => setDockTab("timeline")}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg transition-all ${
+                        dockTab === "timeline"
+                          ? "bg-studio-accent text-white"
+                          : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+                      }`}
+                    >
+                      <Video className="w-3 h-3" />
+                      Timeline
+                    </button>
+                    <button
+                      onClick={() => setDockTab("previs")}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg transition-all ${
+                        dockTab === "previs"
+                          ? "bg-studio-accent text-white"
+                          : "text-studio-muted hover:text-studio-text hover:bg-studio-panelHover"
+                      }`}
+                    >
+                      <Move3d className="w-3 h-3" />
+                      Previs
+                    </button>
+                  </div>
+
+                  {/* Dock content — single instance, swapped by tab */}
                   <div className="flex-1 overflow-hidden min-h-0">
-                    <TimelineEditor projectId={projectId} />
+                    {dockTab === "timeline" ? (
+                      <TimelineEditor projectId={projectId} />
+                    ) : (
+                      <div className="h-full p-2">
+                        <PrevisStage />
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

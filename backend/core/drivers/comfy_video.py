@@ -689,6 +689,7 @@ class ComfyVideoDriver(VideoDriver):
                     if resp.status != 200:
                         error_text = await resp.text()
                         self._jobs[job_id]["status"] = GenerationStatus.FAILED
+                        self._jobs[job_id]["error_message"] = f"ComfyUI error: {error_text}"
                         return VideoGenerationResponse(
                             job_id=job_id,
                             status=GenerationStatus.FAILED,
@@ -700,10 +701,11 @@ class ComfyVideoDriver(VideoDriver):
                     self._jobs[job_id]["status"] = GenerationStatus.PROCESSING
         except Exception as e:
             self._jobs[job_id]["status"] = GenerationStatus.FAILED
+            self._jobs[job_id]["error_message"] = f"Failed to connect to ComfyUI at {self.comfy_url}: {str(e)}"
             return VideoGenerationResponse(
                 job_id=job_id,
                 status=GenerationStatus.FAILED,
-                error_message=f"Failed to connect to ComfyUI: {str(e)}",
+                error_message=f"Failed to connect to ComfyUI at {self.comfy_url}: {str(e)}",
             )
 
         return VideoGenerationResponse(

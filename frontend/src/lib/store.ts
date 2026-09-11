@@ -43,6 +43,7 @@ interface StudioState {
   timeline: TimelineState;
   activeAudioTrackId: string;
   audioLibraryRefreshToken: number;
+  videoLibraryRefreshToken: number;
   
   // Actions
   setAssets: (assets: AssetResponse[]) => void;
@@ -78,6 +79,7 @@ interface StudioState {
   removeTimelineClipsBySourceId: (sourceId: string) => void;
   unlinkClipGroup: (clipId: string) => void;
   bumpAudioLibraryRefresh: () => void;
+  bumpVideoLibraryRefresh: () => void;
 
   // Undo/Redo
   undoStack: TimelineState[];
@@ -197,6 +199,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   },
   activeAudioTrackId: "a1",
   audioLibraryRefreshToken: 0,
+  videoLibraryRefreshToken: 0,
 
   setAssets: (assets) => set({ assets }),
   setShots: (shots) => set({ shots }),
@@ -627,6 +630,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   bumpAudioLibraryRefresh: () =>
     set((state) => ({ audioLibraryRefreshToken: state.audioLibraryRefreshToken + 1 })),
+
+  bumpVideoLibraryRefresh: () =>
+    set((state) => ({ videoLibraryRefreshToken: state.videoLibraryRefreshToken + 1 })),
 
   // --- Undo/Redo ---
   undo: () => {
