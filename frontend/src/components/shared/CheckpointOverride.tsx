@@ -43,7 +43,19 @@ export function CheckpointOverride({ value, onChange, compact }: CheckpointOverr
     );
   }
 
-  if (models.length === 0) return null;
+  if (models.length === 0) {
+    return (
+      <div>
+        <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1">
+          <Box className="w-3 h-3" />
+          Model Override
+        </label>
+        <p className="text-[10px] text-studio-muted/50">
+          No models found. Set your ComfyUI <span className="text-studio-accent">Models Directory</span> in Settings (gear icon).
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>

@@ -72,6 +72,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [comfyAuth, setComfyAuth] = useState("");
   const [comfyRemote, setComfyRemote] = useState(false);
   const [comfyModelsDir, setComfyModelsDir] = useState("");
+  const [comfyModelsDirAutoDetected, setComfyModelsDirAutoDetected] = useState(false);
   const [comfyLorasDir, setComfyLorasDir] = useState("");
   const [comfyCheckpointsDir, setComfyCheckpointsDir] = useState("");
   const [comfyExtraModelDirs, setComfyExtraModelDirs] = useState<string[]>([]);
@@ -150,6 +151,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       setComfyAuth(cfg.auth_token || "");
       setComfyRemote(cfg.is_remote);
       setComfyModelsDir(cfg.models_dir || "");
+      setComfyModelsDirAutoDetected(cfg.models_dir_auto_detected || false);
       setComfyLorasDir(cfg.loras_dir || "");
       setComfyCheckpointsDir(cfg.checkpoints_dir || "");
       setComfyExtraModelDirs(cfg.extra_model_dirs || []);
@@ -470,15 +472,23 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 <div>
                   <label className="block text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1">
                     Models Directory <span className="normal-case opacity-50">(local installs — path to ComfyUI/models)</span>
+                    {comfyModelsDirAutoDetected && (
+                      <span className="ml-1.5 px-1.5 py-0.5 text-[9px] rounded-full bg-yellow-500/20 text-yellow-400 normal-case font-medium">
+                        Auto-detected
+                      </span>
+                    )}
                   </label>
                   <input
                     value={comfyModelsDir}
-                    onChange={(e) => setComfyModelsDir(e.target.value)}
-                    placeholder="D:\AI_Master\ComfyUI-Easy-Install\ComfyUI-Easy-Install\ComfyUI\models"
+                    onChange={(e) => { setComfyModelsDir(e.target.value); setComfyModelsDirAutoDetected(false); }}
+                    placeholder="D:\AI_Master\ComfyUI\models"
                     className="w-full bg-studio-panel border border-studio-border rounded-lg px-2.5 py-1.5 text-xs focus:border-studio-accent focus:outline-none font-mono"
                   />
                   <p className="text-[10px] text-studio-muted/60 mt-1">
                     Set this to your ComfyUI <code className="text-studio-accent">models</code> folder so LoRA and model uploads go to the right place. Leave empty for remote/cloud servers.
+                    {comfyModelsDirAutoDetected && (
+                      <span className="text-yellow-400/80"> We found this path automatically — click Save to confirm, or change it if needed.</span>
+                    )}
                   </p>
                 </div>
 

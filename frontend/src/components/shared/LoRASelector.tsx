@@ -173,9 +173,12 @@ export function LoRASelector({ selected, onChange, compact }: LoRASelectorProps)
             {/* List */}
             <div className="overflow-y-auto flex-1">
               {available.length === 0 ? (
-                <p className="px-3 py-3 text-[10px] text-studio-muted text-center">
-                  No LoRAs found. Click the upload button to add one.
-                </p>
+                <div className="px-3 py-3 text-[10px] text-studio-muted text-center space-y-1">
+                  <p>No LoRAs found.</p>
+                  <p className="text-studio-muted/60">
+                    Set your ComfyUI <span className="text-studio-accent">Models Directory</span> in Settings (gear icon) so the app can find your LoRAs.
+                  </p>
+                </div>
               ) : filtered.length === 0 ? (
                 <p className="px-3 py-2 text-[10px] text-studio-muted text-center">
                   No LoRAs match &quot;{search}&quot;

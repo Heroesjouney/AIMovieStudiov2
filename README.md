@@ -68,6 +68,7 @@ Block out camera moves in a real-time 3D stage before spending generation credit
 - [LoRA Support](#-lora-support)
 - [Model Override](#-model-override)
 - [Settings & Configuration](#-settings--configuration)
+- [Continuing Videos](#-continuing-videos-seamless-transitions)
 - [Custom Workflows](#-custom-comfyui-workflows)
 - [Available Models](#-available-image-models)
 - [Environment Variables](#-environment-variables)
@@ -375,10 +376,21 @@ Once the app is running in your browser:
    - Navigate between shots with next/prev buttons
 7. **Reorder & duplicate** - Drag shot cards to reorder them. Use the duplicate button to experiment with different prompts.
 8. **Generate video** - Switch to the Camera Director tab to turn frames into video clips (text-to-video or image-to-video with camera movement).
-9. **Assemble & export** - Arrange shots on the timeline, add dialogue and audio, then export to XML for your editing software.
-10. **Apply LoRAs** - In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand **Advanced Settings** to add LoRAs with adjustable strength sliders. Upload new LoRAs directly from the UI. LoRAs are preserved when regenerating shots.
-11. **Manage settings** - Click the **gear icon** (⚙) in the header to open the Settings panel where you can:
+9. **Continue from a previous video** - To seamlessly continue a video from a previous take:
+   - Select the shot that has the video you want to continue from
+   - The shot's **last frame** is automatically extracted and available as a continuation point
+   - Enable **"Auto-continue from previous shot's last frame"** in the Camera Director to use it as the first frame for the next generation
+   - Or click the **Continue** button (↪) on any generated video to set its last frame as the first frame for a new generation
+   - The app passes `last_frame_path` to the video driver, which uses it for first+last frame interpolation
+   - This creates a seamless transition — the new video starts where the previous one ended
+   - **Supported models:** LTX Video 2.3 (FLF2V mode), Wan Video, and any model with `first_last_frame` capability
+   - **Long Take Mode** *(Experimental)* — For multi-segment continuous shots, enable Long Take mode to chain multiple keyframe segments with automatic interpolation and ffmpeg stitching
+10. **Assemble & export** - Arrange shots on the timeline, add dialogue and audio, then export to XML for your editing software.
+11. **Apply LoRAs** - In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand **Advanced Settings** to add LoRAs with adjustable strength sliders. Upload new LoRAs directly from the UI. LoRAs are preserved when regenerating shots.
+12. **Override models** - In any generation surface, expand **Advanced Settings** and use the **Model Override** dropdown to swap the base model (checkpoint/UNet) in the workflow — useful for switching to a smaller/faster model without editing workflow JSON.
+13. **Manage settings** - Click the **gear icon** (⚙) in the header to open the Settings panel where you can:
     - Link cloud API keys (Fal.ai, Replicate)
+    - Configure ComfyUI server URL, auth token, and model paths
     - Upload model files to ComfyUI
     - Register custom ComfyUI workflows (with automatic model analysis and missing-model upload)
     - Driver dropdowns auto-refresh after workflow changes — no page reload needed
@@ -483,6 +495,55 @@ Upload checkpoint models (`.safetensors`, `.ckpt`, `.pt`) directly to ComfyUI's 
 - Target directory resolved from `COMFY_CHECKPOINTS_DIR`, `COMFY_MODELS_DIR`, or `COMFY_DIR` env vars
 
 > 💡 Models are stored in ComfyUI's directory — our app just queries ComfyUI's API to list them. No duplication.
+
+---
+
+## 🎞️ Continuing Videos (Seamless Transitions)
+
+AI Movie Studio 2 lets you seamlessly continue a video from where a previous take ended. This is useful for:
+- Extending a shot that was too short
+- Continuing a character's motion across multiple clips
+- Creating longer sequences by chaining segments
+
+### How to Continue from a Previous Video
+
+**Method 1: Auto-continue (easiest)**
+1. Generate a video in the Camera Director
+2. The app automatically extracts the **last frame** from the generated video
+3. Select the next shot (or the same shot for a retake)
+4. Enable **"Auto-continue from previous shot's last frame"** in the Camera Director
+5. Generate — the new video starts where the previous one ended
+
+**Method 2: Manual Continue button**
+1. Generate a video in the Camera Director
+2. Hover over the generated video — a **Continue** button (↪) appears
+3. Click it — the video's last frame is set as the first frame for the next generation
+4. Adjust the prompt if needed, then generate
+
+**Method 3: Long Take Mode (multi-segment)**
+1. Enable **Long Take Mode** in the Camera Director (Experimental)
+2. Define keyframe segments by image, prompt, or both
+3. The backend generates missing images via text-to-image
+4. Interpolates between keyframe pairs using first-last-frame-to-video (FLF2V)
+5. Stitches segments together with ffmpeg into one continuous clip
+
+### How It Works
+
+- The app extracts the last frame from the generated video and stores it as `last_frame_path` on the shot
+- When continuing, the last frame is passed as `first_frame_path` to the video driver
+- The driver uses it for first+last frame interpolation (FLF2V)
+- The new video begins from that frame, creating a seamless transition
+
+### Supported Models
+
+| Model | Continue Support | Mode |
+| ----- | ---------------- | ---- |
+| **LTX Video 2.3** | ✅ Full | FLF2V (first-last frame) |
+| **Wan Video** | ✅ Full | First-last frame |
+| **MiniMax H3** | ⚠️ Limited | I2V only (first frame, no last frame) |
+| **Fal Seedance** | ⚠️ Limited | I2V only (first frame, no last frame) |
+
+> 💡 For the best seamless continuation, use **LTX Video 2.3** or **Wan Video** — they support true first+last frame interpolation.
 
 ---
 
@@ -782,6 +843,12 @@ Two ways: (1) Build a workflow in ComfyUI, export as API JSON, and register it v
 
 **How do I add LoRAs?**
 In any generation surface (Generate tab, Shot tab, Camera tab, Shot Create panel, Retake panel), expand Advanced Settings. Use the **LoRA selector** to add LoRAs and the **Model Override** dropdown to swap the base model. You can upload `.safetensors` LoRA files directly from the UI — they're saved to ComfyUI's `models/loras/` directory. LoRAs and model overrides are preserved when regenerating shots. See [LoRA Support](#-lora-support) and [Model Override](#-model-override) for details.
+
+**My LoRAs and models don't show up in the dropdowns. How do I fix this?**
+The app needs to know where your ComfyUI `models` folder is. Open Settings (gear icon ⚙) → **ComfyUI Server** → set **Models Directory** to your ComfyUI `models` path (e.g., `D:\ComfyUI\models`). The app auto-detects common install locations on startup, but if your ComfyUI is in a non-standard path, you'll need to set it manually. Once set, LoRAs appear in the LoRA selector and models appear in the Model Override dropdown — whether ComfyUI is running or offline. See [Settings & Configuration](#-settings--configuration) for details.
+
+**How do I continue a video from a previous take?**
+The app automatically extracts the last frame from each generated video. To continue: (1) enable **"Auto-continue from previous shot's last frame"** in the Camera Director, or (2) click the **Continue** button (↪) on any generated video to use its last frame as the first frame for the next generation. This creates a seamless transition — the new video starts where the previous one ended. For multi-segment continuous shots, use **Long Take Mode** (Experimental). Best results with LTX Video 2.3 or Wan Video (first+last frame support). See [Continuing Videos](#-continuing-videos-seamless-transitions) for details.
 
 **How do I set API keys without editing .env?**
 Click the gear icon (⚙) in the header to open the Settings panel. You can add, update, and remove Fal.ai and Replicate API keys from there. Keys are stored in `backend/assets/settings.json` and loaded at backend startup.

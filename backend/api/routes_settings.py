@@ -49,6 +49,40 @@ def _save_settings(data: dict):
     SETTINGS_FILE.write_text(json.dumps(data, indent=2))
 
 
+def _auto_detect_models_dir() -> Optional[str]:
+    """Try to find a ComfyUI models directory in common install locations."""
+    home = Path.home()
+    candidates = [
+        # Windows common paths
+        Path("C:/ComfyUI/models"),
+        Path("D:/ComfyUI/models"),
+        Path("D:/AI_Master/ComfyUI-Easy-Install/ComfyUI-Easy-Install/ComfyUI/models"),
+        # User home
+        home / "ComfyUI" / "models",
+        home / "Documents" / "ComfyUI" / "models",
+        # Relative to backend (portable install)
+        Path(__file__).parent.parent.parent / "ComfyUI" / "models",
+        Path(__file__).parent.parent / "ComfyUI" / "models",
+        # Common drive letters (Windows)
+        Path("C:/Users") / os.getenv("USERNAME", "") / "ComfyUI" / "models",
+    ]
+    # Also check COMFY_DIR env var
+    comfy_dir = os.getenv("COMFY_DIR", "")
+    if comfy_dir:
+        candidates.append(Path(comfy_dir) / "models")
+        candidates.append(Path(comfy_dir))
+
+    for candidate in candidates:
+        try:
+            if candidate.exists() and candidate.is_dir():
+                # Verify it has at least one model subdirectory
+                if any((candidate / sub).is_dir() for sub in ("loras", "checkpoints", "unet", "diffusion_models")):
+                    return str(candidate)
+        except (OSError, PermissionError):
+            continue
+    return None
+
+
 def load_api_keys_into_env():
     """Load saved API keys and ComfyUI config into environment variables at startup."""
     settings = _load_settings()
@@ -64,10 +98,20 @@ def load_api_keys_into_env():
         print(f"[Settings] Loaded ComfyUI URL from settings.json: {comfy_config['url']}")
     if comfy_config.get("auth_token"):
         os.environ["COMFY_AUTH_TOKEN"] = comfy_config["auth_token"]
-    if comfy_config.get("models_dir"):
-        models_dir = comfy_config["models_dir"]
+
+    # Models directory — use saved value, then env var, then auto-detect
+    models_dir = comfy_config.get("models_dir") or os.getenv("COMFY_MODELS_DIR", "")
+    if not models_dir:
+        detected = _auto_detect_models_dir()
+        if detected:
+            models_dir = detected
+            print(f"[Settings] Auto-detected ComfyUI models dir: {models_dir}")
+    if models_dir:
         os.environ["COMFY_MODELS_DIR"] = models_dir
-        print(f"[Settings] Loaded ComfyUI models dir from settings.json: {models_dir}")
+        if not comfy_config.get("models_dir"):
+            print(f"[Settings] Using models dir: {models_dir} (auto-detected — set in Settings to override)")
+        else:
+            print(f"[Settings] Loaded ComfyUI models dir from settings.json: {models_dir}")
     if comfy_config.get("loras_dir"):
         os.environ["COMFY_LORAS_DIR"] = comfy_config["loras_dir"]
         print(f"[Settings] Loaded ComfyUI loras dir from settings.json: {comfy_config['loras_dir']}")
@@ -160,14 +204,23 @@ async def get_comfy_config():
     """Return the current ComfyUI server configuration."""
     settings = _load_settings()
     comfy = settings.get("comfy_config", {})
+    # If models_dir not saved, check env (may be auto-detected) or auto-detect now
+    models_dir = comfy.get("models_dir", "")
+    if not models_dir:
+        models_dir = os.getenv("COMFY_MODELS_DIR", "")
+    if not models_dir:
+        detected = _auto_detect_models_dir()
+        if detected:
+            models_dir = detected
     return {
         "url": comfy.get("url", os.getenv("COMFY_URL", "http://127.0.0.1:8188")),
         "auth_token": comfy.get("auth_token", ""),
         "is_remote": comfy.get("is_remote", False),
-        "models_dir": comfy.get("models_dir", os.getenv("COMFY_MODELS_DIR", "")),
+        "models_dir": models_dir,
         "loras_dir": comfy.get("loras_dir", os.getenv("COMFY_LORAS_DIR", "")),
         "checkpoints_dir": comfy.get("checkpoints_dir", os.getenv("COMFY_CHECKPOINTS_DIR", "")),
         "extra_model_dirs": comfy.get("extra_model_dirs", []),
+        "models_dir_auto_detected": not bool(comfy.get("models_dir")) and bool(models_dir),
     }
 
 

@@ -267,6 +267,7 @@ export interface ComfyConfig {
   loras_dir: string;
   checkpoints_dir: string;
   extra_model_dirs: string[];
+  models_dir_auto_detected?: boolean;
 }
 
 export async function getComfyConfig(): Promise<ComfyConfig> {
