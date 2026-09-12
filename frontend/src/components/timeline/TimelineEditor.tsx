@@ -39,6 +39,15 @@ import {
   Headphones,
   VolumeX,
   Pencil,
+  SkipBack,
+  SkipForward,
+  ChevronLeft,
+  ChevronRight,
+  Repeat,
+  ZoomIn,
+  ZoomOut,
+  Settings,
+  Sliders,
 } from "lucide-react";
 import type { TransitionType, TimelineClip } from "@/lib/api";
 import { WaveformDisplay, ThumbnailStrip } from "./ClipVisuals";
@@ -143,6 +152,9 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   // Playhead center mode
   const [playheadCenter, setPlayheadCenter] = useState(false);
 
+  // Loop playback
+  const [loopPlayback, setLoopPlayback] = useState(false);
+
   // Export presets
   const [exportPreset, setExportPreset] = useState<"source" | "720p" | "1080p" | "4k">("source");
 
@@ -186,7 +198,15 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   const dissolvePrevAudioRef = useRef<HTMLAudioElement | null>(null);
   const [isDissolveNextReady, setIsDissolveNextReady] = useState(false);
   const [isDissolvePrevReady, setIsDissolvePrevReady] = useState(false);
-  const [isDissolveCompositing, setIsDissolveCompositing] = useState(false);
+  const [isDissolveCompositing, setIsDissolveCompositing] = useState(false); // kept for audio effect deps; use isCompositing for video
+  // Tracks whether the base video has finished loading/seeking after a
+  // source switch at the cut. Compositing stays on until this is true,
+  // preventing a tail flash if the base hasn't caught up yet.
+  const [baseReadyAfterCut, setBaseReadyAfterCut] = useState(true);
+  // When the base video starts clip B with a dissolve offset (overlap model),
+  // this tracks how many seconds the base video is ahead of the timeline
+  // position.  handleTimeUpdate subtracts this when computing the playhead.
+  const playbackOffsetRef = useRef(0);
   const playingAudioClipIdByTrackRef = useRef<Record<string, string | null>>({});
   const timelineCanvasRef = useRef<HTMLDivElement | null>(null);
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
@@ -387,7 +407,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       const progress = timeInClip / clip.transitionIn.durationSeconds;
       const opacity = 1 - progress;
       const color = clip.transitionIn.type === "fade_white" ? "white" : "black";
-      return { color, opacity };
+      return { color, opacity, type: "fade" as const };
     }
 
     // Check transition out (fade to black/white at end)
@@ -397,7 +417,32 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         const progress = timeFromEnd / clip.transitionOut.durationSeconds;
         const opacity = 1 - progress;
         const color = clip.transitionOut.type === "fade_white" ? "white" : "black";
-        return { color, opacity };
+        return { color, opacity, type: "fade" as const };
+      }
+    }
+
+    // Wipe transitions (transition in: reveal clip from one side)
+    if (clip.transitionIn && (clip.transitionIn.type === "wipe_left" || clip.transitionIn.type === "wipe_right")) {
+      if (timeInClip < clip.transitionIn.durationSeconds) {
+        const progress = timeInClip / clip.transitionIn.durationSeconds;
+        // wipe_left: black bar shrinks from left (clip reveals left-to-right)
+        // wipe_right: black bar shrinks from right (clip reveals right-to-left)
+        const widthPercent = (1 - progress) * 100;
+        const side = clip.transitionIn.type === "wipe_left" ? "left" : "right";
+        return { color: "black", opacity: 1, type: "wipe" as const, widthPercent, side };
+      }
+    }
+
+    // Wipe transitions (transition out: hide clip to one side)
+    if (clip.transitionOut && (clip.transitionOut.type === "wipe_left" || clip.transitionOut.type === "wipe_right")) {
+      const timeFromEnd = clipDuration - timeInClip;
+      if (timeFromEnd < clip.transitionOut.durationSeconds) {
+        const progress = timeFromEnd / clip.transitionOut.durationSeconds;
+        // wipe_left out: black bar grows from left (clip disappears left-to-right)
+        // wipe_right out: black bar grows from right (clip disappears right-to-left)
+        const widthPercent = (1 - progress) * 100;
+        const side = clip.transitionOut.type === "wipe_left" ? "left" : "right";
+        return { color: "black", opacity: 1, type: "wipe" as const, widthPercent, side };
       }
     }
 
@@ -552,17 +597,37 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     isDissolveNextReady &&
     isDissolvePrevReady;
 
+  // Compute base visibility inline (not via useEffect) so the base and
+  // overlay swap on the SAME render.  This avoids a 1-frame black gap at
+  // the dissolve tail where the overlay has disappeared but the base hasn't
+  // been told to show yet.
+  //
+  // The "latched compositing" state is tracked via a ref so it updates
+  // synchronously during render (no 1-render delay from useEffect).
+  const compositingLatchRef = useRef(false);
+  // Latch on: as soon as we should composite, latch on
+  if (shouldCompositeNow) compositingLatchRef.current = true;
+  // Latch off: when dissolve is over AND base is ready
+  if (!dissolveActive && baseReadyAfterCut) compositingLatchRef.current = false;
+  // Safety: if dissolve is over but base never ready, force off after 2s
   useEffect(() => {
-    // Avoid flicker: once both overlays are ready and the dissolve is active,
-    // keep compositing mode enabled until the dissolve window ends.
-    if (shouldCompositeNow) {
-      setIsDissolveCompositing(true);
-      return;
+    if (!dissolveActive && !baseReadyAfterCut) {
+      const t = window.setTimeout(() => setBaseReadyAfterCut(true), 2000);
+      return () => window.clearTimeout(t);
     }
-    if (!dissolveActive) {
-      setIsDissolveCompositing(false);
-    }
-  }, [dissolveActive, shouldCompositeNow]);
+  }, [dissolveActive, baseReadyAfterCut]);
+
+  const isCompositing = compositingLatchRef.current;
+
+  // Sync state for audio effect dependencies (refs don't trigger re-renders)
+  useEffect(() => {
+    setIsDissolveCompositing(isCompositing);
+  }, [isCompositing]);
+
+  const baseVisible =
+    !hideBaseAroundCut &&
+    !shouldCompositeNow &&
+    (!isCompositing || (!dissolveActive && baseReadyAfterCut));
 
   const lastDissolveActiveRef = useRef(false);
   useEffect(() => {
@@ -571,7 +636,6 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     // to avoid a 1-frame flash/jump.
     const wasActive = lastDissolveActiveRef.current;
     lastDissolveActiveRef.current = dissolveActive;
-    if (isPlayingSequence) return;
     if (!wasActive || dissolveActive) return;
 
     const v = videoRef.current;
@@ -594,17 +658,37 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     const targetTime =
       typeof maxMediaTime === "number" ? Math.min(targetTimeRaw, Math.max(0, maxMediaTime - 0.01)) : targetTimeRaw;
 
-    const nextSrc = clip.sourceUrl;
-    const currentSrc = v.src;
-    const resolvedNextSrc = nextSrc.startsWith("http") ? nextSrc : new URL(nextSrc, window.location.origin).href;
-    if (currentSrc !== resolvedNextSrc) {
-      v.src = nextSrc;
-      v.load();
-    }
-    try {
-      v.currentTime = Math.max(0, targetTime);
-    } catch {
-      // ignore
+    if (!isPlayingSequence) {
+      // Scrubbing: full re-sync (switch source + seek)
+      const nextSrc = clip.sourceUrl;
+      const currentSrc = v.src;
+      const resolvedNextSrc = nextSrc.startsWith("http") ? nextSrc : new URL(nextSrc, window.location.origin).href;
+      if (currentSrc !== resolvedNextSrc) {
+        v.src = nextSrc;
+        v.load();
+      }
+      try {
+        v.currentTime = Math.max(0, targetTime);
+      } catch {
+        // ignore
+      }
+      playbackOffsetRef.current = 0;
+    } else {
+      // Playback: the base video started clip B with a dissolve offset
+      // (seekOffset = outDur).  The offset persists for the entire clip B
+      // because the base video is always outDur ahead of the timeline
+      // position (overlap model).  Do NOT reset it here — that would cause
+      // the playhead to jump forward by outDur.
+      // Just correct any drift from the expected position.
+      const expectedTime = targetTime + playbackOffsetRef.current;
+      const drift = Math.abs((v.currentTime ?? 0) - expectedTime);
+      if (drift > 0.04) {
+        try {
+          v.currentTime = Math.max(0, expectedTime);
+        } catch {
+          // ignore
+        }
+      }
     }
   }, [dissolveActive, isPlayingSequence, playheadSeconds, v1?.clips, videoLayout]);
 
@@ -1120,6 +1204,30 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         togglePlaySequenceRef.current();
         return;
       }
+      // Frame step (left/right arrows)
+      if (e.key === "ArrowLeft" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        e.preventDefault();
+        const fps = timeline.fps || 24;
+        seekToTimelineTimeRef.current(Math.max(0, playheadSecondsRef.current - 1 / fps));
+        return;
+      }
+      if (e.key === "ArrowRight" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        e.preventDefault();
+        const fps = timeline.fps || 24;
+        seekToTimelineTimeRef.current(Math.min(totalSeconds, playheadSecondsRef.current + 1 / fps));
+        return;
+      }
+      // Home / End - go to start / end
+      if (e.key === "Home" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        seekToTimelineTimeRef.current(0);
+        return;
+      }
+      if (e.key === "End" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        seekToTimelineTimeRef.current(totalSeconds);
+        return;
+      }
       // I/O for in/out points (trim selected clip)
       if (e.key === "i" && !e.ctrlKey && !e.metaKey && selectedClipId && selectedTrackType) {
         e.preventDefault();
@@ -1200,6 +1308,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
       const v = videoRef.current;
       v.pause();
+      setBaseReadyAfterCut(false);
       v.src = clip.sourceUrl;
       v.load();
 
@@ -1230,7 +1339,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   // Audio mixing is handled by syncAllAudioAtTime()
 
   const startPlaybackFromIndex = useCallback(
-    async (index: number, startAtSeconds?: number) => {
+    async (index: number, startAtSeconds?: number, seekOffset?: number) => {
       const clip = v1?.clips[index];
       if (!clip) return;
 
@@ -1367,6 +1476,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         const newSrc = clip.sourceUrl.startsWith("http") ? clip.sourceUrl : new URL(clip.sourceUrl, window.location.origin).href;
         
         if (currentSrc !== newSrc) {
+          setBaseReadyAfterCut(false);
           v.src = clip.sourceUrl;
           v.load();
 
@@ -1393,7 +1503,9 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
         }
 
         const offsetSeconds = layout ? Math.max(0, startTimelineSeconds - layout.start) : 0;
-        const rawStartAt = clip.trimInSeconds + offsetSeconds;
+        const seekOff = seekOffset ?? 0;
+        playbackOffsetRef.current = seekOff;
+        const rawStartAt = clip.trimInSeconds + offsetSeconds + seekOff;
 
         const mediaCeiling =
           typeof clip.trimOutSeconds === "number"
@@ -1514,7 +1626,10 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
     let currentTimelineTime = playheadSeconds;
     if (layout) {
       const local = Math.max(0, videoRef.current.currentTime - clip.trimInSeconds);
-      currentTimelineTime = Math.min(layout.end, layout.start + local);
+      // Subtract the dissolve offset so the playhead tracks the timeline
+      // position, not the base video's internal position.  The base video
+      // may be seekOffset seconds ahead of the timeline (overlap model).
+      currentTimelineTime = Math.min(layout.end, layout.start + local - playbackOffsetRef.current);
       setPlayheadSeconds(currentTimelineTime);
     }
 
@@ -1561,12 +1676,27 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
           imagePlaybackTimerRef.current = requestAnimationFrame(audioTick);
           return;
         }
-        stopPlayback();
+        if (loopPlayback && v1 && v1.clips.length > 0) {
+          stopPlayback();
+          seekToTimelineTimeRef.current(0);
+          void startPlaybackFromIndex(0);
+        } else {
+          stopPlayback();
+        }
         return;
       }
-      void startPlaybackFromIndex(nextIndex);
+      // If there's a dissolve at this cut, the overlay has been showing the
+      // next clip starting outDur before the cut (overlap model).  Pass the
+      // dissolve offset so the base video starts at the same position the
+      // overlay is showing, preventing a frame jump at the dissolve tail.
+      const nextClip = v1?.clips[nextIndex];
+      const dissolveOffset =
+        clip.transitionOut?.type === "dissolve" && nextClip?.transitionIn?.type === "dissolve"
+          ? (clip.transitionOut?.durationSeconds ?? 0)
+          : 0;
+      void startPlaybackFromIndex(nextIndex, undefined, dissolveOffset > 0 ? dissolveOffset : undefined);
     }
-  }, [audioLayout, isPlayingSequence, playheadSeconds, playingIndex, startPlaybackFromIndex, stopPlayback, syncAllAudioAtTime, updateVideoMuteForTime, v1?.clips, v1?.clips.length, videoLayout]);
+  }, [audioLayout, isPlayingSequence, loopPlayback, playheadSeconds, playingIndex, startPlaybackFromIndex, stopPlayback, syncAllAudioAtTime, updateVideoMuteForTime, v1, v1?.clips, v1?.clips.length, videoLayout]);
 
   const formatTime = (seconds: number) => {
     const s = Math.max(0, Math.floor(seconds));
@@ -1705,6 +1835,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       if (!isSameSrc) {
         lastPreviewVideoSrcRef.current = nextSrc;
         lastSeekTimeRef.current = targetTime;
+        setBaseReadyAfterCut(false);
         let applied = false;
         const applySeek = () => {
           if (applied) return;
@@ -1744,6 +1875,17 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   useEffect(() => {
     seekToTimelineTimeRef.current = seekToTimelineTime;
   }, [seekToTimelineTime]);
+
+  // Frame step: move playhead by exactly one frame
+  const frameStep = useCallback(
+    (direction: 1 | -1) => {
+      const fps = timeline.fps || 24;
+      const frameDur = 1 / fps;
+      const next = Math.max(0, Math.min(totalSeconds, playheadSecondsRef.current + direction * frameDur));
+      seekToTimelineTime(next);
+    },
+    [seekToTimelineTime, timeline.fps, totalSeconds]
+  );
 
   useEffect(() => {
     playheadSecondsRef.current = playheadSeconds;
@@ -1953,6 +2095,12 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
             // ignore
           }
         }
+        // Wait one animation frame so the browser actually paints the seeked
+        // frame to the compositor before we mark the overlay as "ready".
+        // Without this, the base video hides on the same tick the seeked
+        // event fires, but the overlay's first frame isn't visible yet —
+        // causing a 1-frame flash at the dissolve head.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         setReady(true);
       };
 
@@ -1972,7 +2120,10 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       // Same source: avoid toggling ready state (can cause visible flashing).
       // Just seek directly if drift is noticeable.
       const drift = Math.abs((v.currentTime ?? 0) - targetTime);
-      const driftThreshold = isPlayingSequence ? 0.2 : 0.05;
+      // Tight threshold during playback to keep overlay in sync with base.
+      // 0.2s drift (the old value) is 5-6 frames at 30fps — a visible jump
+      // at the dissolve head when compositing takes over from the base.
+      const driftThreshold = 0.05;
       if (drift > driftThreshold) {
         try {
           v.currentTime = targetTime;
@@ -2406,31 +2557,25 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                   style={
                     previewMode === "video" && (nextOverlay || prevOverlay)
                       ? {
-                          opacity:
-                            (() => {
-                              // Only hard-hide the base right at the cut when we have a stable composite.
-                              // Otherwise we risk showing a black/dim frame if overlays aren't ready yet.
-                              if (hideBaseAroundCut && shouldCompositeNow) return 0;
-
-                              // During compositing, rely exclusively on the two overlay videos.
-                              // This prevents a "restart" at the cut caused by the base video switching sources.
-                              if (shouldCompositeNow || isDissolveCompositing) return 0;
-
-                              const nextOk = !!(nextOverlay && isDissolveNextReady && nextOverlay.active);
-                              const prevOk = !!(prevOverlay && isDissolvePrevReady && prevOverlay.active);
-                              if (!nextOk && !prevOk) return 1;
-
-                              const nextOp = nextOk && nextOverlay ? nextOverlay.opacity : 0;
-                              const prevOp = prevOk && prevOverlay ? prevOverlay.opacity : 0;
-                              return Math.max(0, Math.min(1, 1 - nextOp - prevOp));
-                            })(),
+                          opacity: baseVisible ? 1 : 0,
                           willChange: "opacity",
-                          transition: hideBaseAroundCut && shouldCompositeNow ? "none" : "opacity 80ms linear",
+                          transition: "none",
                         }
                       : undefined
                   }
                   controls={false}
                   onTimeUpdate={handleTimeUpdate}
+                  onCanPlay={() => {
+                    // Wait one animation frame so the browser actually paints the
+                    // frame before we mark the base as ready.  Without this, the
+                    // overlay disappears on the same tick onCanPlay fires, but the
+                    // base's first frame isn't visible yet — causing a 1-frame
+                    // black flash at the dissolve tail.
+                    requestAnimationFrame(() => setBaseReadyAfterCut(true));
+                  }}
+                  onSeeked={() => {
+                    requestAnimationFrame(() => setBaseReadyAfterCut(true));
+                  }}
                   onEnded={() => {
                     if (!isPlayingSequence || playingIndex === null) return;
                     const nextIndex = playingIndex + 1;
@@ -2438,7 +2583,14 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                       stopPlayback();
                       return;
                     }
-                    void startPlaybackFromIndex(nextIndex);
+                    // Pass dissolve offset if there's a dissolve at this cut
+                    const curClip = v1?.clips[playingIndex];
+                    const nextClip = v1?.clips[nextIndex];
+                    const dissolveOffset =
+                      curClip?.transitionOut?.type === "dissolve" && nextClip?.transitionIn?.type === "dissolve"
+                        ? (curClip.transitionOut?.durationSeconds ?? 0)
+                        : 0;
+                    void startPlaybackFromIndex(nextIndex, undefined, dissolveOffset > 0 ? dissolveOffset : undefined);
                   }}
                 />
                 {/* Cross-dissolve overlay videos (next + prev) */}
@@ -2448,9 +2600,8 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                       ref={dissolveNextVideoRef}
                       className="absolute inset-0 w-full h-full pointer-events-none"
                       style={{
-                        opacity: isDissolveNextReady && nextOverlay?.active ? (nextOverlay?.opacity ?? 0) : 0,
+                        opacity: !baseVisible && (isDissolveNextReady || !dissolveActive) ? (nextOverlay?.opacity ?? 1) : 0,
                         willChange: "opacity",
-                        transition: "opacity 80ms linear",
                       }}
                       controls={false}
                       muted
@@ -2460,9 +2611,8 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                       ref={dissolvePrevVideoRef}
                       className="absolute inset-0 w-full h-full pointer-events-none"
                       style={{
-                        opacity: isDissolvePrevReady && prevOverlay?.active ? (prevOverlay?.opacity ?? 0) : 0,
+                        opacity: !baseVisible && (isDissolvePrevReady || !dissolveActive) ? (prevOverlay?.opacity ?? 0) : 0,
                         willChange: "opacity",
-                        transition: "opacity 80ms linear",
                       }}
                       controls={false}
                       muted
@@ -2477,8 +2627,8 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                     className="absolute inset-0 w-full h-full object-contain"
                   />
                 )}
-                {/* Transition fade overlay */}
-                {transitionOverlay && (
+                {/* Transition overlay (fade or wipe) */}
+                {transitionOverlay && transitionOverlay.type === "fade" && (
                   <div
                     className="absolute inset-0 pointer-events-none transition-opacity duration-75"
                     style={{
@@ -2487,56 +2637,105 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                     }}
                   />
                 )}
+                {transitionOverlay && transitionOverlay.type === "wipe" && (
+                  <div
+                    className="absolute top-0 bottom-0 pointer-events-none"
+                    style={{
+                      backgroundColor: "black",
+                      [transitionOverlay.side]: 0,
+                      width: `${transitionOverlay.widthPercent}%`,
+                    }}
+                  />
+                )}
               </div>
 
-              <div className="mt-3 flex items-center gap-3">
-                <button
-                  className="px-2 py-1 rounded bg-studio-border hover:bg-studio-border/80 text-xs"
-                  onClick={() => {
-                    stopPlayback();
-                    seekToTimelineTime(0);
-                  }}
-                  title="Go to start"
-                >
-                  |&lt;
-                </button>
+              {/* Professional transport bar */}
+              <div className="mt-3 space-y-2">
+                {/* Top row: timecode | transport buttons | duration */}
+                <div className="flex items-center justify-between gap-3">
+                  {/* Left: current timecode + auto-save */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div
+                      className="text-xs font-mono text-studio-text bg-studio-bg px-2 py-1 rounded border border-studio-border tabular-nums tracking-wider"
+                      title="SMPTE timecode"
+                    >
+                      {formatSMPTE(playheadSeconds)}
+                    </div>
+                    <div className="text-[10px] text-studio-muted flex items-center gap-1">
+                      {autoSaveState === "saving" && (<><Loader2 className="w-3 h-3 animate-spin" /> Saving...</>)}
+                      {autoSaveState === "saved" && <span className="text-green-400">Saved</span>}
+                    </div>
+                  </div>
 
-                <div className="text-xs text-studio-muted w-20 text-right font-mono" title="SMPTE timecode">{formatSMPTE(playheadSeconds)}</div>
+                  {/* Center: transport buttons */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      className="inline-flex items-center justify-center h-8 w-8 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-studio-muted"
+                      onClick={() => { stopPlayback(); seekToTimelineTime(0); }}
+                      disabled={!v1 || v1.clips.length === 0}
+                      title="Go to start (Home)"
+                    >
+                      <SkipBack className="w-4 h-4" />
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center h-8 w-8 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30"
+                      onClick={() => frameStep(-1)}
+                      disabled={!v1 || v1.clips.length === 0}
+                      title="Previous frame (Left Arrow)"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center h-10 w-10 rounded-full bg-studio-accent text-white hover:bg-studio-accent/90 transition-colors disabled:opacity-40 disabled:hover:bg-studio-accent shadow-sm"
+                      onClick={togglePlaySequence}
+                      disabled={!v1 || v1.clips.length === 0}
+                      title={isPlayingSequence ? "Pause (Space)" : "Play (Space)"}
+                    >
+                      {isPlayingSequence ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center h-8 w-8 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30"
+                      onClick={() => frameStep(1)}
+                      disabled={!v1 || v1.clips.length === 0}
+                      title="Next frame (Right Arrow)"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center h-8 w-8 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-studio-muted"
+                      onClick={() => { stopPlayback(); seekToTimelineTime(totalSeconds); }}
+                      disabled={!v1 || v1.clips.length === 0}
+                      title="Go to end (End)"
+                    >
+                      <SkipForward className="w-4 h-4" />
+                    </button>
+                    {/* Loop toggle */}
+                    <button
+                      className={"inline-flex items-center justify-center h-8 w-8 rounded-md transition-colors " + (loopPlayback ? "text-studio-accent bg-studio-accent/15" : "text-studio-muted hover:text-studio-text hover:bg-studio-border/40")}
+                      onClick={() => setLoopPlayback((v) => !v)}
+                      title="Loop playback"
+                    >
+                      <Repeat className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
 
-                {/* Auto-save indicator */}
-                <div className="text-[10px] text-studio-muted flex items-center gap-1">
-                  {autoSaveState === "saving" && <><Loader2 className="w-3 h-3 animate-spin" /> Saving...</>}
-                  {autoSaveState === "saved" && <span className="text-green-400">Saved</span>}
+                  {/* Right: total duration */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="text-xs font-mono text-studio-muted tabular-nums">{formatTime(totalSeconds)}</div>
+                  </div>
                 </div>
 
+                {/* Bottom row: scrub slider */}
                 <input
                   type="range"
                   min={0}
                   max={Math.max(totalSeconds, 0.01)}
                   step={0.01}
                   value={playheadSeconds}
-                  onMouseDown={() => {
-                    stopPlayback();
-                  }}
-                  onChange={(e) => {
-                    stopPlayback();
-                    seekToTimelineTime(Number(e.target.value) || 0);
-                  }}
-                  className="flex-1"
+                  onMouseDown={() => { stopPlayback(); }}
+                  onChange={(e) => { stopPlayback(); seekToTimelineTime(Number(e.target.value) || 0); }}
+                  className="w-full accent-studio-accent"
                 />
-
-                <div className="text-xs text-studio-muted w-14">{formatTime(totalSeconds)}</div>
-
-                <button
-                  className="px-2 py-1 rounded bg-studio-border hover:bg-studio-border/80 text-xs"
-                  onClick={() => {
-                    stopPlayback();
-                    seekToTimelineTime(totalSeconds);
-                  }}
-                  title="Go to end"
-                >
-                  &gt;|
-                </button>
               </div>
             </div>
           </div>
@@ -2544,44 +2743,33 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
         <div className="flex-1 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 flex flex-col">
-            <div className="p-3 border-b border-studio-border bg-studio-panel flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Film className="w-4 h-4 text-studio-muted" />
-                <span className="text-sm font-medium">Sequence</span>
-
-                <button
-                  onClick={togglePlaySequence}
-                  disabled={!v1 || v1.clips.length === 0}
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 disabled:opacity-50 disabled:hover:bg-studio-bg disabled:hover:border-studio-border transition-colors"
-                  title={isPlayingSequence ? "Pause" : "Play"}
-                >
-                  {isPlayingSequence ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                </button>
-
-                {/* Divider */}
-                <div className="w-px h-6 bg-studio-border mx-1" />
-
+            <div className="px-3 py-2 border-b border-studio-border bg-studio-panel flex items-center justify-between gap-2">
+              {/* Left: Edit tools */}
+              <div className="flex items-center gap-1">
                 {/* Undo/Redo */}
                 <button
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 disabled:opacity-30 transition-colors"
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-studio-muted"
                   onClick={() => undo()}
                   disabled={undoStack.length === 0}
                   title="Undo (Ctrl+Z)"
                 >
-                  <Undo2 className="w-3.5 h-3.5" />
+                  <Undo2 className="w-4 h-4" />
                 </button>
                 <button
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 disabled:opacity-30 transition-colors"
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-studio-muted"
                   onClick={() => redo()}
                   disabled={redoStack.length === 0}
                   title="Redo (Ctrl+Y)"
                 >
-                  <Redo2 className="w-3.5 h-3.5" />
+                  <Redo2 className="w-4 h-4" />
                 </button>
+
+                {/* Divider */}
+                <div className="w-px h-5 bg-studio-border mx-1" />
 
                 {/* Razor/Split */}
                 <button
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 disabled:opacity-30 transition-colors"
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-studio-muted"
                   onClick={() => {
                     if (selectedClipId && selectedTrackType) {
                       splitClipAtPlayhead(selectedTrackType, selectedClipId, playheadSeconds);
@@ -2590,59 +2778,59 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                   disabled={!selectedClipId}
                   title="Split clip at playhead (S)"
                 >
-                  <Scissors className="w-3.5 h-3.5" />
-                </button>
-
-                {/* Snap toggle */}
-                <button
-                  className={"inline-flex items-center justify-center h-7 w-7 rounded border transition-colors " + (snapEnabled ? "border-studio-accent bg-studio-accent/20 text-studio-accent" : "border-studio-border bg-studio-bg text-studio-muted hover:border-studio-accent/50 hover:bg-studio-border/40")}
-                  onClick={() => setSnapEnabled((v) => !v)}
-                  title="Toggle snap-to-grid (N)"
-                >
-                  <Magnet className="w-3.5 h-3.5" />
+                  <Scissors className="w-4 h-4" />
                 </button>
 
                 {/* Copy/Paste */}
                 <button
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 disabled:opacity-30 transition-colors"
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-studio-muted"
                   onClick={() => handleCopyClip()}
                   disabled={!selectedClipId}
                   title="Copy clip (Ctrl+C)"
                 >
-                  <Copy className="w-3.5 h-3.5" />
+                  <Copy className="w-4 h-4" />
                 </button>
                 <button
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 disabled:opacity-30 transition-colors"
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-studio-muted"
                   onClick={() => handlePasteClip()}
                   disabled={!clipboardClip}
                   title="Paste clip (Ctrl+V)"
                 >
-                  <ClipboardPaste className="w-3.5 h-3.5" />
+                  <ClipboardPaste className="w-4 h-4" />
                 </button>
 
                 {/* Divider */}
-                <div className="w-px h-6 bg-studio-border mx-1" />
+                <div className="w-px h-5 bg-studio-border mx-1" />
+
+                {/* Snap toggle */}
+                <button
+                  className={"inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors " + (snapEnabled ? "text-studio-accent bg-studio-accent/15" : "text-studio-muted hover:text-studio-text hover:bg-studio-border/40")}
+                  onClick={() => setSnapEnabled((v) => !v)}
+                  title="Toggle snap-to-grid (N)"
+                >
+                  <Magnet className="w-4 h-4" />
+                </button>
 
                 {/* Transitions dropdown */}
                 <div className="relative">
                   <button
-                    className="inline-flex items-center gap-1 h-7 px-2 rounded border border-studio-border bg-studio-bg hover:border-purple-400/50 hover:bg-studio-border/40 transition-colors text-xs text-studio-muted"
+                    className="inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors text-xs"
                     onClick={() => setShowTransitionsMenu((v) => !v)}
                     title="Transitions (drag onto a clip)"
                   >
-                    <Blend className="w-3.5 h-3.5 text-purple-400" />
+                    <Blend className="w-4 h-4 text-purple-400" />
                     Transition
                   </button>
                   {showTransitionsMenu && (
                     <>
                       <div className="fixed inset-0 z-30" style={{ pointerEvents: draggingTransition ? "none" : "auto" }} onClick={() => setShowTransitionsMenu(false)} />
-                      <div className="absolute top-8 left-0 z-40 bg-studio-panel border border-studio-border rounded-md shadow-lg py-1 min-w-[140px]">
+                      <div className="absolute top-8 left-0 z-40 bg-studio-panel border border-studio-border rounded-md shadow-lg py-1 min-w-[200px]">
                         {([
-                          { type: "fade_black" as TransitionType, label: "Fade Black", color: "bg-gray-800", Icon: Moon },
-                          { type: "fade_white" as TransitionType, label: "Fade White", color: "bg-gray-100", Icon: Sun },
-                          { type: "dissolve" as TransitionType, label: "Dissolve", color: "bg-purple-600", Icon: Blend },
-                          { type: "wipe_left" as TransitionType, label: "Wipe Left", color: "bg-blue-600", Icon: ArrowLeft },
-                          { type: "wipe_right" as TransitionType, label: "Wipe Right", color: "bg-blue-600", Icon: ArrowRight },
+                          { type: "fade_black" as TransitionType, label: "Fade to Black", desc: "Classic film fade", color: "bg-gray-800", Icon: Moon },
+                          { type: "fade_white" as TransitionType, label: "Fade to White", desc: "Bright flash transition", color: "bg-gray-200", Icon: Sun },
+                          { type: "dissolve" as TransitionType, label: "Cross Dissolve", desc: "Smooth blend between clips", color: "bg-purple-600", Icon: Blend },
+                          { type: "wipe_left" as TransitionType, label: "Wipe Left", desc: "Reveal from right to left", color: "bg-blue-600", Icon: ArrowLeft },
+                          { type: "wipe_right" as TransitionType, label: "Wipe Right", desc: "Reveal from left to right", color: "bg-blue-600", Icon: ArrowRight },
                         ]).map((t) => (
                           <div
                             key={t.type}
@@ -2656,79 +2844,58 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                               setDraggingTransition(null);
                               setShowTransitionsMenu(false);
                             }}
-                            title={`Drag ${t.label} onto a clip`}
-                            className={`flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-studio-border/40 cursor-grab active:cursor-grabbing ${t.type === "fade_white" ? "text-gray-700" : "text-white"}`}
+                            title={"Drag \"" + t.label + "\" onto a clip edge"}
+                            className="flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-studio-border/40 cursor-grab active:cursor-grabbing border-b border-studio-border/30 last:border-b-0"
                           >
-                            <div className={`flex items-center justify-center w-5 h-5 rounded ${t.color}`}>
-                              <t.Icon className="w-3 h-3" />
+                            <div className={"flex items-center justify-center w-6 h-6 rounded " + t.color + " flex-shrink-0"}>
+                              <t.Icon className={"w-3.5 h-3.5 " + (t.type === "fade_white" ? "text-gray-700" : "text-white")} />
                             </div>
-                            {t.label}
+                            <div className="flex flex-col">
+                              <span className="text-studio-text font-medium leading-tight">{t.label}</span>
+                              <span className="text-[10px] text-studio-muted leading-tight">{t.desc}</span>
+                            </div>
                           </div>
                         ))}
+                        <div className="px-3 py-1.5 text-[10px] text-studio-muted border-t border-studio-border/30">
+                          Drop on left half = transition in - right half = transition out
+                        </div>
                       </div>
                     </>
                   )}
                 </div>
+              </div>
+
+              {/* Right: View + Export */}
+              <div className="flex items-center gap-2">
+                {/* Playback error */}
+                {playbackError && <div className="text-[11px] text-red-400 max-w-[240px] truncate" title={playbackError}>{playbackError}</div>}
 
                 {/* Divider */}
-                <div className="w-px h-6 bg-studio-border mx-1" />
+                <div className="w-px h-5 bg-studio-border mx-1" />
 
-                {/* Fullscreen preview */}
-                <button
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 transition-colors"
-                  onClick={() => setFullscreenPreview(true)}
-                  title="Fullscreen preview"
+                {/* Format selector */}
+                <select
+                  className="h-7 px-2 rounded-md bg-studio-bg border border-studio-border text-xs text-studio-muted hover:border-studio-accent/50 transition-colors cursor-pointer"
+                  value={selectedTimelineFormat.id}
+                  onChange={(e) => {
+                    const fmt = TIMELINE_FORMATS.find((f) => f.id === e.target.value);
+                    if (fmt) setTimelineFormat({ aspectRatio: fmt.aspectRatio, width: fmt.width, height: fmt.height });
+                  }}
+                  title="Timeline format"
                 >
-                  <Maximize2 className="w-3.5 h-3.5" />
-                </button>
+                  {TIMELINE_FORMATS.map((f) => (
+                    <option key={f.id} value={f.id}>{f.label} ({f.width}x{f.height})</option>
+                  ))}
+                </select>
 
-                {/* Playhead center mode */}
-                <button
-                  className={"inline-flex items-center justify-center h-7 w-7 rounded border transition-colors " + (playheadCenter ? "border-studio-accent bg-studio-accent/20 text-studio-accent" : "border-studio-border bg-studio-bg text-studio-muted hover:border-studio-accent/50 hover:bg-studio-border/40")}
-                  onClick={() => setPlayheadCenter((v) => !v)}
-                  title="Toggle playhead center mode (scroll timeline under playhead)"
-                >
-                  <RectangleHorizontal className="w-3.5 h-3.5" />
-                </button>
-
-                {/* Keyboard shortcuts */}
-                <button
-                  className="inline-flex items-center justify-center h-7 w-7 rounded border border-studio-border bg-studio-bg hover:border-studio-accent/50 hover:bg-studio-border/40 transition-colors"
-                  onClick={() => setShowShortcutsPanel(true)}
-                  title="Keyboard shortcuts (?)"
-                >
-                  <KeyboardIcon className="w-3.5 h-3.5" />
-                </button>
-
-                {playbackError && <div className="text-[11px] text-red-400 max-w-[320px]">{playbackError}</div>}
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-xs text-studio-muted">{formatTime(totalSeconds)}</div>
-
-                <div className="flex items-center gap-2">
+                {/* Zoom controls */}
+                <div className="flex items-center gap-0.5">
                   <button
-                    className="inline-flex items-center justify-center h-8 w-8 rounded-md bg-studio-bg border border-studio-border hover:border-studio-accent/60 hover:bg-studio-border/40 transition-colors"
-                    onClick={() => {
-                      const idx = TIMELINE_FORMATS.findIndex((f) => f.id === selectedTimelineFormat.id);
-                      const next = TIMELINE_FORMATS[(Math.max(-1, idx) + 1) % TIMELINE_FORMATS.length];
-                      setTimelineFormat({
-                        aspectRatio: next.aspectRatio,
-                        width: next.width,
-                        height: next.height,
-                      });
-                    }}
-                    title={`Format: ${selectedTimelineFormat.label} (${selectedTimelineFormat.width}×${selectedTimelineFormat.height})\nClick to change`}
-                  >
-                    <SelectedFormatIcon className="w-4 h-4 text-studio-muted" />
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    className="px-2 py-1 rounded bg-studio-border hover:bg-studio-border/80 text-xs"
+                    className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors"
                     onClick={() => setPxPerSecond((v) => Math.max(2, v - 10))}
+                    title="Zoom out"
                   >
-                    -
+                    <ZoomOut className="w-4 h-4" />
                   </button>
                   <input
                     type="range"
@@ -2737,19 +2904,54 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                     step={5}
                     value={pxPerSecond}
                     onChange={(e) => setPxPerSecond(Number(e.target.value) || 30)}
-                    className="w-28"
+                    className="w-20"
+                    title="Zoom level"
                   />
                   <button
-                    className="px-2 py-1 rounded bg-studio-border hover:bg-studio-border/80 text-xs"
+                    className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors"
                     onClick={() => setPxPerSecond((v) => Math.min(200, v + 10))}
+                    title="Zoom in"
                   >
-                    +
+                    <ZoomIn className="w-4 h-4" />
                   </button>
                 </div>
 
+                {/* Divider */}
+                <div className="w-px h-5 bg-studio-border mx-1" />
+
+                {/* Fullscreen preview */}
+                <button
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors"
+                  onClick={() => setFullscreenPreview(true)}
+                  title="Fullscreen preview"
+                >
+                  <Maximize2 className="w-4 h-4" />
+                </button>
+
+                {/* Playhead center mode */}
+                <button
+                  className={"inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors " + (playheadCenter ? "text-studio-accent bg-studio-accent/15" : "text-studio-muted hover:text-studio-text hover:bg-studio-border/40")}
+                  onClick={() => setPlayheadCenter((v) => !v)}
+                  title="Toggle playhead center mode"
+                >
+                  <RectangleHorizontal className="w-4 h-4" />
+                </button>
+
+                {/* Keyboard shortcuts */}
+                <button
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-studio-muted hover:text-studio-text hover:bg-studio-border/40 transition-colors"
+                  onClick={() => setShowShortcutsPanel(true)}
+                  title="Keyboard shortcuts (?)"
+                >
+                  <KeyboardIcon className="w-4 h-4" />
+                </button>
+
+                {/* Divider */}
+                <div className="w-px h-5 bg-studio-border mx-1" />
+
                 {/* Export preset */}
                 <select
-                  className="h-7 px-1 rounded bg-studio-bg border border-studio-border text-xs text-studio-muted hover:border-studio-accent/50 transition-colors"
+                  className="h-7 px-2 rounded-md bg-studio-bg border border-studio-border text-xs text-studio-muted hover:border-studio-accent/50 transition-colors cursor-pointer"
                   value={exportPreset}
                   onChange={(e) => setExportPreset(e.target.value as typeof exportPreset)}
                   title="Export quality preset"
@@ -2770,7 +2972,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                   {renderStatus === "processing" || renderStatus === "pending" ? (
                     <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Rendering...</>
                   ) : (
-                    <><Clapperboard className="w-3.5 h-3.5" /> Render MP4</>
+                    <><Clapperboard className="w-3.5 h-3.5" /> Render</>
                   )}
                 </button>
                 {renderResultUrl && renderStatus === "completed" && (
@@ -2785,12 +2987,11 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                 )}
                 {renderError && (
                   <span
-                    className="text-[10px] text-red-400 max-w-[400px] truncate cursor-help"
+                    className="text-[10px] text-red-400 max-w-[200px] truncate cursor-help"
                     title={renderError}
                     onClick={() => { try { navigator.clipboard.writeText(renderError); } catch {} }}
                   >
-                    {renderError.slice(0, 100)}
-                    {renderError.length > 100 ? "… (click to copy)" : ""}
+                    {renderError.slice(0, 80)}{renderError.length > 80 ? "..." : ""}
                   </span>
                 )}
               </div>
@@ -3076,9 +3277,9 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                           <div
                             key={`dissolve-${prevClip.id}-${currClip.id}`}
                             className={
-                              "absolute bg-orange-500 rounded flex items-center justify-center z-30 shadow-lg border-2 " +
-                              (isSelectedTransition ? "border-white" : "border-orange-300") +
-                              (isSelectedTransition ? " opacity-100" : " opacity-60 hover:opacity-90")
+                              "absolute bg-purple-600 rounded flex items-center justify-center z-30 shadow-lg border-2 " +
+                              (isSelectedTransition ? "border-white" : "border-purple-300") +
+                              (isSelectedTransition ? " opacity-100" : " opacity-70 hover:opacity-100")
                             }
                             style={{
                               left: junctionX - (outDur * pxPerSecond),
@@ -3087,7 +3288,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                               height: 28,
                               transform: "translateY(50%)",
                             }}
-                            title={`Cross Dissolve (out ${outDur.toFixed(1)}s / in ${inDur.toFixed(1)}s) - drag center to slide, drag edges to resize, double-click to remove`}
+                            title={`Cross Dissolve (out ${outDur.toFixed(1)}s / in ${inDur.toFixed(1)}s) — click to select, then drag center to slide, drag edges to resize, double-click to remove`}
                             onClick={(e) => {
                               e.stopPropagation();
                               if (e.detail === 1) {
@@ -3105,7 +3306,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                             <div
                               className={
                                 "absolute left-0 top-0 h-full w-2 " +
-                                (isSelectedTransition ? "cursor-ew-resize bg-orange-300/60 hover:bg-orange-200/80" : "pointer-events-none")
+                                (isSelectedTransition ? "cursor-ew-resize bg-purple-400/60 hover:bg-purple-300/80" : "pointer-events-none")
                               }
                               onMouseDown={(e) => {
                                 e.stopPropagation();
@@ -3198,7 +3399,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                             <div
                               className={
                                 "absolute right-0 top-0 h-full w-2 " +
-                                (isSelectedTransition ? "cursor-ew-resize bg-orange-300/60 hover:bg-orange-200/80" : "pointer-events-none")
+                                (isSelectedTransition ? "cursor-ew-resize bg-purple-400/60 hover:bg-purple-300/80" : "pointer-events-none")
                               }
                               onMouseDown={(e) => {
                                 e.stopPropagation();
@@ -3476,26 +3677,12 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                             </div>
 
                             {isSelected && (
-                              <div className="absolute bottom-0 left-0 right-0 h-4 bg-black/40 flex items-center justify-between px-1">
+                              <div className="absolute bottom-0 left-0 right-0 h-4 bg-black/40 flex items-center justify-between px-1 pointer-events-none">
                                 <div className="text-[10px] text-white/80 flex items-center gap-1">
                                   In {formatTime(clip.trimInSeconds)} Out {typeof clip.trimOutSeconds === "number" ? formatTime(clip.trimOutSeconds) : "end"}
-                                  <select
-                                    className="ml-1 bg-studio-bg text-[10px] text-white/80 border border-studio-border rounded px-0.5"
-                                    value={clip.speed || 1}
-                                    onMouseDown={(e) => e.stopPropagation()}
-                                    onChange={(e) => {
-                                      e.stopPropagation();
-                                      updateTimelineClip("video", clip.id, { speed: Number(e.target.value) });
-                                    }}
-                                    title="Clip speed"
-                                  >
-                                    <option value={0.25}>0.25x</option>
-                                    <option value={0.5}>0.5x</option>
-                                    <option value={1}>1x</option>
-                                    <option value={1.5}>1.5x</option>
-                                    <option value={2}>2x</option>
-                                    <option value={4}>4x</option>
-                                  </select>
+                                  {clip.speed && clip.speed !== 1 && (
+                                    <span className="ml-1 text-purple-300 font-medium">{clip.speed}x</span>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-1">
                                   {clip.groupId && (
@@ -3597,12 +3784,18 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                               (() => {
                                 const transitionKey = `in:${clip.id}`;
                                 const isSelectedTransition = selectedTransitionKey === transitionKey;
+                                const tColor = clip.transitionIn!.type === "fade_black" ? "bg-gray-800 border-gray-600"
+                                  : clip.transitionIn!.type === "fade_white" ? "bg-gray-200 border-gray-400"
+                                  : clip.transitionIn!.type === "dissolve" ? "bg-purple-600 border-purple-300"
+                                  : clip.transitionIn!.type === "wipe_left" || clip.transitionIn!.type === "wipe_right" ? "bg-blue-600 border-blue-300"
+                                  : "bg-orange-500 border-orange-300";
+                                const tBorder = isSelectedTransition ? "border-white" : tColor.split(" ")[1];
                                 return (
                               <div
                                 className={
-                                  "absolute bg-orange-500 rounded flex items-center justify-center z-20 shadow-md border-2 " +
-                                  (isSelectedTransition ? "border-white" : "border-orange-300") +
-                                  (isSelectedTransition ? " opacity-100" : " opacity-60 hover:opacity-90") +
+                                  `absolute ${tColor.split(" ")[0]} rounded flex items-center justify-center z-20 shadow-md border-2 ` +
+                                  tBorder +
+                                  (isSelectedTransition ? " opacity-100" : " opacity-70 hover:opacity-100") +
                                   " cursor-ew-resize"
                                 }
                                 style={{ 
@@ -3612,7 +3805,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                   width: Math.max(20, clip.transitionIn.durationSeconds * pxPerSecond * 0.6),
                                   height: 26,
                                 }}
-                                title={`${clip.transitionIn.type.replace("_", " ")} (${clip.transitionIn.durationSeconds.toFixed(1)}s) - drag to resize`}
+                                title={`${clip.transitionIn.type.replace("_", " ")} (${clip.transitionIn.durationSeconds.toFixed(1)}s) — click to select, then drag to resize, double-click to remove`}
                                 onMouseDown={(e) => {
                                   e.stopPropagation();
                                   if (!isSelectedTransition) {
@@ -3655,6 +3848,10 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                 <span className="text-[7px] text-white font-bold uppercase tracking-tight">
                                   {clip.transitionIn.type === "dissolve" ? (
                                     <Blend className="w-3 h-3 text-white" />
+                                  ) : clip.transitionIn.type === "wipe_left" ? (
+                                    <ArrowLeft className="w-3 h-3 text-white" />
+                                  ) : clip.transitionIn.type === "wipe_right" ? (
+                                    <ArrowRight className="w-3 h-3 text-white" />
                                   ) : (
                                     clip.transitionIn.type.replace("fade_", "").charAt(0).toUpperCase()
                                   )}
@@ -3677,12 +3874,18 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                               (() => {
                                 const transitionKey = `out:${clip.id}`;
                                 const isSelectedTransition = selectedTransitionKey === transitionKey;
+                                const tColor = clip.transitionOut!.type === "fade_black" ? "bg-gray-800 border-gray-600"
+                                  : clip.transitionOut!.type === "fade_white" ? "bg-gray-200 border-gray-400"
+                                  : clip.transitionOut!.type === "dissolve" ? "bg-purple-600 border-purple-300"
+                                  : clip.transitionOut!.type === "wipe_left" || clip.transitionOut!.type === "wipe_right" ? "bg-blue-600 border-blue-300"
+                                  : "bg-orange-500 border-orange-300";
+                                const tBorder = isSelectedTransition ? "border-white" : tColor.split(" ")[1];
                                 return (
                               <div
                                 className={
-                                  "absolute bg-orange-500 rounded flex items-center justify-center z-20 shadow-md border-2 " +
-                                  (isSelectedTransition ? "border-white" : "border-orange-300") +
-                                  (isSelectedTransition ? " opacity-100" : " opacity-60 hover:opacity-90") +
+                                  `absolute ${tColor.split(" ")[0]} rounded flex items-center justify-center z-20 shadow-md border-2 ` +
+                                  tBorder +
+                                  (isSelectedTransition ? " opacity-100" : " opacity-70 hover:opacity-100") +
                                   " cursor-ew-resize"
                                 }
                                 style={{ 
@@ -3692,7 +3895,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                   width: Math.max(20, clip.transitionOut.durationSeconds * pxPerSecond * 0.6),
                                   height: 26,
                                 }}
-                                title={`${clip.transitionOut.type.replace("_", " ")} (${clip.transitionOut.durationSeconds.toFixed(1)}s) - drag to resize, double-click to remove`}
+                                title={`${clip.transitionOut.type.replace("_", " ")} (${clip.transitionOut.durationSeconds.toFixed(1)}s) — click to select, then drag to resize, double-click to remove`}
                                 onMouseDown={(e) => {
                                   e.stopPropagation();
                                   if (!isSelectedTransition) {
@@ -3737,6 +3940,10 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                 <span className="text-[7px] text-white font-bold uppercase tracking-tight">
                                   {clip.transitionOut.type === "dissolve" ? (
                                     <Blend className="w-3 h-3 text-white" />
+                                  ) : clip.transitionOut.type === "wipe_left" ? (
+                                    <ArrowLeft className="w-3 h-3 text-white" />
+                                  ) : clip.transitionOut.type === "wipe_right" ? (
+                                    <ArrowRight className="w-3 h-3 text-white" />
                                   ) : (
                                     clip.transitionOut.type.replace("fade_", "").charAt(0).toUpperCase()
                                   )}
@@ -3993,22 +4200,12 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                                 </div>
 
                                 {isSelected && (
-                                  <div className="absolute bottom-0 left-0 right-0 h-4 bg-black/40 flex items-center justify-between px-1">
+                                  <div className="absolute bottom-0 left-0 right-0 h-4 bg-black/40 flex items-center justify-between px-1 pointer-events-none">
                                     <div className="text-[10px] text-white/80 flex items-center gap-1">
                                       In {formatTime(clip.trimInSeconds)} Out {typeof clip.trimOutSeconds === "number" ? formatTime(clip.trimOutSeconds) : "end"}
-                                      <input
-                                        type="range"
-                                        min={0}
-                                        max={1}
-                                        step={0.05}
-                                        value={clip.volume ?? 1}
-                                        className="ml-1 w-12 h-1"
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                        onChange={(e) => {
-                                          updateTimelineClip("audio", clip.id, { volume: Number(e.target.value) });
-                                        }}
-                                        title="Clip volume"
-                                      />
+                                      {typeof clip.volume === "number" && clip.volume !== 1 && (
+                                        <span className="ml-1 text-sky-300 font-medium">{Math.round(clip.volume * 100)}%</span>
+                                      )}
                                     </div>
                                     <div className="flex items-center gap-1">
                                       {clip.groupId && (
@@ -4290,7 +4487,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                 setContextMenu(null);
               }}
             >
-              <Film className="w-3 h-3" /> Rename
+              <Pencil className="w-3 h-3" /> Rename
             </button>
             <button
               className="w-full text-left px-3 py-1.5 text-xs hover:bg-studio-border/40 flex items-center gap-2"
@@ -4302,7 +4499,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
                 setContextMenu(null);
               }}
             >
-              <Film className="w-3 h-3" /> Properties
+              <Sliders className="w-3 h-3" /> Properties
             </button>
           </div>
         </>
@@ -4319,6 +4516,10 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
             <div className="space-y-1.5 text-xs">
               {[
                 ["Space", "Play / Pause"],
+                ["Left Arrow", "Previous frame"],
+                ["Right Arrow", "Next frame"],
+                ["Home", "Go to start"],
+                ["End", "Go to end"],
                 ["J", "Seek backward 5s"],
                 ["K", "Play / Pause"],
                 ["L", "Seek forward 5s"],
@@ -4376,167 +4577,247 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
               />
             )}
           </div>
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/60 text-xs font-mono">{formatSMPTE(playheadSeconds)}</div>
+          {/* Fullscreen transport controls */}
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-6 pb-4 pt-8">
+            <div className="flex items-center justify-between gap-4 mb-2">
+              <div className="text-white/80 text-xs font-mono tabular-nums tracking-wider">{formatSMPTE(playheadSeconds)}</div>
+              <div className="flex items-center gap-1">
+                <button
+                  className="inline-flex items-center justify-center h-9 w-9 rounded-md text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                  onClick={(e) => { e.stopPropagation(); stopPlayback(); seekToTimelineTime(0); }}
+                  title="Go to start"
+                >
+                  <SkipBack className="w-4 h-4" />
+                </button>
+                <button
+                  className="inline-flex items-center justify-center h-9 w-9 rounded-md text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                  onClick={(e) => { e.stopPropagation(); frameStep(-1); }}
+                  title="Previous frame"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  className="inline-flex items-center justify-center h-11 w-11 rounded-full bg-white text-black hover:bg-white/90 transition-colors shadow-lg"
+                  onClick={(e) => { e.stopPropagation(); togglePlaySequence(); }}
+                  title={isPlayingSequence ? "Pause" : "Play"}
+                >
+                  {isPlayingSequence ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                </button>
+                <button
+                  className="inline-flex items-center justify-center h-9 w-9 rounded-md text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                  onClick={(e) => { e.stopPropagation(); frameStep(1); }}
+                  title="Next frame"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <button
+                  className="inline-flex items-center justify-center h-9 w-9 rounded-md text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                  onClick={(e) => { e.stopPropagation(); stopPlayback(); seekToTimelineTime(totalSeconds); }}
+                  title="Go to end"
+                >
+                  <SkipForward className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="text-white/50 text-xs font-mono tabular-nums">{formatTime(totalSeconds)}</div>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(totalSeconds, 0.01)}
+              step={0.01}
+              value={playheadSeconds}
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => { e.stopPropagation(); stopPlayback(); }}
+              onChange={(e) => { stopPlayback(); seekToTimelineTime(Number(e.target.value) || 0); }}
+              className="w-full accent-white"
+            />
+          </div>
         </div>
       )}
 
       {/* Clip Properties Panel */}
       {showPropertiesPanel && selectedClip && (
         <div className="fixed right-0 top-0 bottom-0 z-40 w-72 bg-studio-panel border-l border-studio-border overflow-y-auto shadow-xl">
-          <div className="flex items-center justify-between p-3 border-b border-studio-border">
-            <h3 className="text-sm font-medium text-studio-accent">Clip Properties</h3>
-            <button className="text-studio-muted hover:text-studio-accent" onClick={() => setShowPropertiesPanel(false)}>✕</button>
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-studio-border sticky top-0 bg-studio-panel z-10">
+            <div className="flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-studio-accent" />
+              <h3 className="text-sm font-medium">Clip Properties</h3>
+            </div>
+            <button className="text-studio-muted hover:text-studio-accent transition-colors" onClick={() => setShowPropertiesPanel(false)}>
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
           </div>
-          <div className="p-3 space-y-3 text-xs">
-            <div>
-              <label className="text-studio-muted block mb-1">Name</label>
-              <input
-                className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1 text-white"
-                value={selectedClip.name}
-                onChange={(e) => {
-                  if (selectedTrackType) renameClip(selectedTrackType, selectedClip.id, e.target.value);
-                }}
-              />
-            </div>
-            <div>
-              <label className="text-studio-muted block mb-1">Source Type</label>
-              <div className="text-white">{selectedClip.sourceType}</div>
-            </div>
-            <div>
-              <label className="text-studio-muted block mb-1">Source URL</label>
-              <div className="text-studio-muted truncate" title={selectedClip.sourceUrl}>{selectedClip.sourceUrl}</div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
+          <div className="p-3 space-y-4 text-xs">
+
+            {/* Section: Info */}
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wider text-studio-muted font-medium">Info</div>
               <div>
-                <label className="text-studio-muted block mb-1">Start</label>
-                <div className="text-white font-mono">{formatTime(selectedClip.startTime)}</div>
+                <label className="text-studio-muted block mb-1">Name</label>
+                <input
+                  className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1.5 text-white focus:border-studio-accent/50 focus:outline-none transition-colors"
+                  value={selectedClip.name}
+                  onChange={(e) => {
+                    if (selectedTrackType) renameClip(selectedTrackType, selectedClip.id, e.target.value);
+                  }}
+                />
               </div>
               <div>
-                <label className="text-studio-muted block mb-1">Duration</label>
-                <div className="text-white font-mono">
-                  {typeof selectedClip.trimOutSeconds === "number" && selectedClip.trimOutSeconds > (selectedClip.trimInSeconds ?? 0)
-                    ? formatTime(selectedClip.trimOutSeconds - (selectedClip.trimInSeconds ?? 0))
-                    : typeof selectedClip.mediaDurationSeconds === "number"
-                      ? formatTime(selectedClip.mediaDurationSeconds)
-                      : "—"}
+                <label className="text-studio-muted block mb-1">Source</label>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-white">{selectedClip.sourceType}</span>
+                  <span className="text-studio-muted truncate" title={selectedClip.sourceUrl}>{selectedClip.sourceUrl.split('/').pop() || selectedClip.sourceUrl}</span>
                 </div>
               </div>
-              <div>
-                <label className="text-studio-muted block mb-1">Trim In</label>
-                <div className="text-white font-mono">{formatTime(selectedClip.trimInSeconds)}</div>
-              </div>
-              <div>
-                <label className="text-studio-muted block mb-1">Trim Out</label>
-                <div className="text-white font-mono">{typeof selectedClip.trimOutSeconds === "number" ? formatTime(selectedClip.trimOutSeconds) : "end"}</div>
-              </div>
             </div>
-            {selectedTrackType === "video" && (
-              <div>
-                <label className="text-studio-muted block mb-1">Speed</label>
-                <select
-                  className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1 text-white"
-                  value={selectedClip.speed || 1}
-                  onChange={(e) => {
-                    if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { speed: Number(e.target.value) });
-                  }}
-                >
-                  <option value={0.25}>0.25x</option>
-                  <option value={0.5}>0.5x</option>
-                  <option value={1}>1x (Normal)</option>
-                  <option value={1.5}>1.5x</option>
-                  <option value={2}>2x</option>
-                  <option value={4}>4x</option>
-                </select>
-              </div>
-            )}
-            <div>
-              <label className="text-studio-muted block mb-1">Volume</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={selectedClip.volume ?? 1}
-                  onChange={(e) => {
-                    if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { volume: Number(e.target.value) });
-                  }}
-                  className="flex-1"
-                />
-                <span className="text-white font-mono w-10 text-right">{Math.round((selectedClip.volume ?? 1) * 100)}%</span>
-              </div>
-            </div>
-            {selectedTrackType === "audio" && (
+
+            {/* Section: Time */}
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wider text-studio-muted font-medium">Time</div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-studio-muted block mb-1">Fade In</label>
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.1}
-                      className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1 text-white font-mono"
-                      value={selectedClip.fadeInSeconds ?? 0}
-                      onChange={(e) => updateTimelineClip("audio", selectedClip.id, { fadeInSeconds: Math.max(0, Number(e.target.value) || 0) })}
-                    />
-                    <span className="text-studio-muted">s</span>
+                  <label className="text-studio-muted block mb-1">Start</label>
+                  <div className="text-white font-mono bg-studio-bg border border-studio-border rounded px-2 py-1.5">{formatTime(selectedClip.startTime)}</div>
+                </div>
+                <div>
+                  <label className="text-studio-muted block mb-1">Duration</label>
+                  <div className="text-white font-mono bg-studio-bg border border-studio-border rounded px-2 py-1.5">
+                    {typeof selectedClip.trimOutSeconds === "number" && selectedClip.trimOutSeconds > (selectedClip.trimInSeconds ?? 0)
+                      ? formatTime(selectedClip.trimOutSeconds - (selectedClip.trimInSeconds ?? 0))
+                      : typeof selectedClip.mediaDurationSeconds === "number"
+                        ? formatTime(selectedClip.mediaDurationSeconds)
+                        : "\u2014"}
                   </div>
                 </div>
                 <div>
-                  <label className="text-studio-muted block mb-1">Fade Out</label>
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.1}
-                      className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1 text-white font-mono"
-                      value={selectedClip.fadeOutSeconds ?? 0}
-                      onChange={(e) => updateTimelineClip("audio", selectedClip.id, { fadeOutSeconds: Math.max(0, Number(e.target.value) || 0) })}
-                    />
-                    <span className="text-studio-muted">s</span>
+                  <label className="text-studio-muted block mb-1">Trim In</label>
+                  <div className="text-white font-mono bg-studio-bg border border-studio-border rounded px-2 py-1.5">{formatTime(selectedClip.trimInSeconds)}</div>
+                </div>
+                <div>
+                  <label className="text-studio-muted block mb-1">Trim Out</label>
+                  <div className="text-white font-mono bg-studio-bg border border-studio-border rounded px-2 py-1.5">{typeof selectedClip.trimOutSeconds === "number" ? formatTime(selectedClip.trimOutSeconds) : "end"}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Section: Playback */}
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wider text-studio-muted font-medium">Playback</div>
+              {selectedTrackType === "video" && (
+                <div>
+                  <label className="text-studio-muted block mb-1">Speed</label>
+                  <select
+                    className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1.5 text-white focus:border-studio-accent/50 focus:outline-none transition-colors"
+                    value={selectedClip.speed || 1}
+                    onChange={(e) => {
+                      if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { speed: Number(e.target.value) });
+                    }}
+                  >
+                    <option value={0.25}>0.25x</option>
+                    <option value={0.5}>0.5x</option>
+                    <option value={1}>1x (Normal)</option>
+                    <option value={1.5}>1.5x</option>
+                    <option value={2}>2x</option>
+                    <option value={4}>4x</option>
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="text-studio-muted block mb-1">Volume</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={selectedClip.volume ?? 1}
+                    onChange={(e) => {
+                      if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { volume: Number(e.target.value) });
+                    }}
+                    className="flex-1 accent-studio-accent"
+                  />
+                  <span className="text-white font-mono w-10 text-right">{Math.round((selectedClip.volume ?? 1) * 100)}%</span>
+                </div>
+              </div>
+              {selectedTrackType === "audio" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-studio-muted block mb-1">Fade In</label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1.5 text-white font-mono focus:border-studio-accent/50 focus:outline-none transition-colors"
+                        value={selectedClip.fadeInSeconds ?? 0}
+                        onChange={(e) => updateTimelineClip("audio", selectedClip.id, { fadeInSeconds: Math.max(0, Number(e.target.value) || 0) })}
+                      />
+                      <span className="text-studio-muted">s</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-studio-muted block mb-1">Fade Out</label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        className="w-full bg-studio-bg border border-studio-border rounded px-2 py-1.5 text-white font-mono focus:border-studio-accent/50 focus:outline-none transition-colors"
+                        value={selectedClip.fadeOutSeconds ?? 0}
+                        onChange={(e) => updateTimelineClip("audio", selectedClip.id, { fadeOutSeconds: Math.max(0, Number(e.target.value) || 0) })}
+                      />
+                      <span className="text-studio-muted">s</span>
+                    </div>
                   </div>
                 </div>
+              )}
+            </div>
+
+            {/* Section: Transitions */}
+            {(selectedClip.transitionIn || selectedClip.transitionOut) && (
+              <div className="space-y-2">
+                <div className="text-[10px] uppercase tracking-wider text-studio-muted font-medium">Transitions</div>
+                {selectedClip.transitionIn && (
+                  <div className="flex items-center justify-between bg-studio-bg border border-studio-border rounded px-2 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white capitalize">{selectedClip.transitionIn.type.replace("_", " ")}</span>
+                      <span className="text-studio-muted font-mono">{selectedClip.transitionIn.durationSeconds.toFixed(1)}s</span>
+                    </div>
+                    <button
+                      className="text-red-400 hover:text-red-300 transition-colors"
+                      onClick={() => { if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { transitionIn: null }); }}
+                      title="Remove transition in"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+                {selectedClip.transitionOut && (
+                  <div className="flex items-center justify-between bg-studio-bg border border-studio-border rounded px-2 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white capitalize">{selectedClip.transitionOut.type.replace("_", " ")}</span>
+                      <span className="text-studio-muted font-mono">{selectedClip.transitionOut.durationSeconds.toFixed(1)}s</span>
+                    </div>
+                    <button
+                      className="text-red-400 hover:text-red-300 transition-colors"
+                      onClick={() => { if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { transitionOut: null }); }}
+                      title="Remove transition out"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
-            {selectedClip.transitionIn && (
-              <div>
-                <label className="text-studio-muted block mb-1">Transition In</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-white capitalize">{selectedClip.transitionIn.type.replace("_", " ")}</span>
-                  <span className="text-studio-muted font-mono">{selectedClip.transitionIn.durationSeconds.toFixed(1)}s</span>
-                  <button
-                    className="ml-auto text-red-400 hover:text-red-300"
-                    onClick={() => { if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { transitionIn: null }); }}
-                    title="Remove transition"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            )}
-            {selectedClip.transitionOut && (
-              <div>
-                <label className="text-studio-muted block mb-1">Transition Out</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-white capitalize">{selectedClip.transitionOut.type.replace("_", " ")}</span>
-                  <span className="text-studio-muted font-mono">{selectedClip.transitionOut.durationSeconds.toFixed(1)}s</span>
-                  <button
-                    className="ml-auto text-red-400 hover:text-red-300"
-                    onClick={() => { if (selectedTrackType) updateTimelineClip(selectedTrackType, selectedClip.id, { transitionOut: null }); }}
-                    title="Remove transition"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            )}
+
+            {/* Section: Linked Group */}
             {selectedClip.groupId && (
-              <div>
-                <label className="text-studio-muted block mb-1">Linked Group</label>
-                <div className="flex items-center gap-2">
+              <div className="space-y-2">
+                <div className="text-[10px] uppercase tracking-wider text-studio-muted font-medium">Linked Group</div>
+                <div className="flex items-center justify-between bg-studio-bg border border-studio-border rounded px-2 py-1.5">
                   <span className="text-white font-mono">{selectedClip.groupId}</span>
                   <button
-                    className="ml-auto text-red-400 hover:text-red-300 text-[10px]"
+                    className="text-red-400 hover:text-red-300 text-[10px] transition-colors"
                     onClick={() => unlinkClipGroup(selectedClip.id)}
                   >
                     Unlink
