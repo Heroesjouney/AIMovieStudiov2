@@ -338,6 +338,22 @@ async def register_workflow(req: RegisterWorkflowRequest):
     workflow_path.write_text(json.dumps(req.workflow_json, indent=2))
     print(f"[Workflows] Saved workflow JSON to {workflow_path}")
 
+    # Auto-detect capabilities from workflow JSON
+    wf_json = req.workflow_json
+    supports_megapixels = False
+    if isinstance(wf_json, dict):
+        for nid, nd in wf_json.items():
+            if not isinstance(nd, dict):
+                continue
+            ct = nd.get("class_type", "")
+            if ct in ("ImageScaleToTotalPixels", "ResolutionSelector"):
+                supports_megapixels = True
+                break
+            inputs = nd.get("inputs", {})
+            if isinstance(inputs, dict) and "megapixels" in inputs:
+                supports_megapixels = True
+                break
+
     # Register in settings.json
     settings = _load_settings()
     if "custom_workflows" not in settings:
@@ -350,6 +366,7 @@ async def register_workflow(req: RegisterWorkflowRequest):
         "supported_features": req.supported_features,
         "workflow_file": f"{driver_id}.json",
         "supports_loras": True,
+        "supports_megapixels": supports_megapixels,
     }
 
     # Update or append

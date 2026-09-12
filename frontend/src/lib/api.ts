@@ -25,6 +25,7 @@ export interface DriverInfo {
   max_total_references?: number;
   resolution_tiers?: string[];
   supports_loras?: boolean;
+  supports_megapixels?: boolean;
 }
 
 export interface DriversList {

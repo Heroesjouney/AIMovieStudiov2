@@ -162,6 +162,7 @@ class DriverInfo(BaseModel):
     max_total_references: int = 4
     resolution_tiers: List[str] = Field(default_factory=lambda: ["native"])
     supports_loras: bool = False
+    supports_megapixels: bool = False
 
 
 # =============================================================================

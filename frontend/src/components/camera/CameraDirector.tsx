@@ -32,6 +32,7 @@ import {
 import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
 import { CheckpointOverride } from "@/components/shared/CheckpointOverride";
 import { StepsCfgControl } from "@/components/shared/StepsCfgControl";
+import { MegapixelsControl } from "@/components/shared/MegapixelsControl";
 
 // =============================================================================
 // Constants
@@ -256,6 +257,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Steps & CFG overrides
   const [userSteps, setUserSteps] = useState<number | null>(null);
   const [userCfg, setUserCfg] = useState<number | null>(null);
+  const [userMegapixels, setUserMegapixels] = useState<number | null>(null);
 
   // Long Take mode
   const [longTakeMode, setLongTakeMode] = useState(false);
@@ -735,7 +737,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         aspect_ratio: aspectRatio,
         camera_movement: caps.supportsCameraControl ? { preset: cameraMovement, intensity: 1.0 } : undefined,
         extra_params: {
-          megapixels: RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
+          megapixels: userMegapixels ?? RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
           ...(loras.length > 0 ? { loras } : {}),
           ...(userSteps !== null ? { steps: userSteps } : {}),
           ...(userCfg !== null ? { cfg: userCfg } : {}),
@@ -955,7 +957,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       aspect_ratio: aspectRatio,
       extra_params: {
         ...(mode === "ia2v" ? { enhance_prompt: enhancePrompt } : {}),
-        megapixels: RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
+        megapixels: userMegapixels ?? RESOLUTION_OPTIONS.find((r) => r.id === resolutionQuality)?.megapixels ?? 0.4,
         ...(loras.length > 0 ? { loras } : {}),
         ...(userSteps !== null ? { steps: userSteps } : {}),
         ...(userCfg !== null ? { cfg: userCfg } : {}),
@@ -1857,6 +1859,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 cfg={userCfg}
                 onStepsChange={setUserSteps}
                 onCfgChange={setUserCfg}
+              />
+
+              {/* Resolution (megapixels) */}
+              <MegapixelsControl
+                megapixels={userMegapixels}
+                onChange={setUserMegapixels}
+                disabled={!videoDrivers.find((d: any) => d.driver_id === selectedModelId)?.supports_megapixels}
               />
 
               {/* LoRAs */}

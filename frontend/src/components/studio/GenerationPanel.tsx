@@ -5,6 +5,7 @@ import { useStudioStore } from "@/lib/store";
 import { generateImage, checkGenerationStatus, saveGeneratedToAsset, fetchAssets } from "@/lib/api";
 import { LoRASelector, type LoRASelection } from "@/components/shared/LoRASelector";
 import { StepsCfgControl } from "@/components/shared/StepsCfgControl";
+import { MegapixelsControl } from "@/components/shared/MegapixelsControl";
 import { CheckpointOverride } from "@/components/shared/CheckpointOverride";
 import {
   Sparkles, Loader2, Save, Download, Check, RotateCcw,
@@ -102,6 +103,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   // Steps & CFG overrides
   const [userSteps, setUserSteps] = useState<number | null>(null);
   const [userCfg, setUserCfg] = useState<number | null>(null);
+  const [userMegapixels, setUserMegapixels] = useState<number | null>(null);
 
   // Prompt history
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -223,6 +225,7 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
       }
       if (userSteps !== null) extraParams.steps = userSteps;
       if (userCfg !== null) extraParams.cfg = userCfg;
+      if (userMegapixels !== null) extraParams.megapixels = userMegapixels;
       const response = await generateImage(
         finalPrompt,
         selectedImageDriver,
@@ -619,6 +622,13 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
               cfg={userCfg}
               onStepsChange={setUserSteps}
               onCfgChange={setUserCfg}
+            />
+
+            {/* Resolution (megapixels) */}
+            <MegapixelsControl
+              megapixels={userMegapixels}
+              onChange={setUserMegapixels}
+              disabled={!currentDriver?.supports_megapixels}
             />
 
             {/* LoRAs */}

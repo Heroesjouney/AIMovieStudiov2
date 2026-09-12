@@ -200,7 +200,7 @@ class ComfyImageDriver(ImageDriver):
         print(f"[ComfyImageDriver]   composited {len(local_paths)} refs (base+overlay) into {target_width}x{target_height} -> {output_path}")
         return output_path
 
-    def _inject_params(self, workflow: dict, prompt: str, negative: str, width: int, height: int, seed: Optional[int], reference_path: Optional[str] = None, denoise: Optional[float] = None, reference_image_paths: Optional[List[str]] = None, user_cfg: Optional[float] = None, user_steps: Optional[int] = None) -> dict:
+    def _inject_params(self, workflow: dict, prompt: str, negative: str, width: int, height: int, seed: Optional[int], reference_path: Optional[str] = None, denoise: Optional[float] = None, reference_image_paths: Optional[List[str]] = None, user_cfg: Optional[float] = None, user_steps: Optional[int] = None, user_megapixels: Optional[float] = None) -> dict:
         """Inject generation parameters into a ComfyUI workflow template."""
         wf = json.loads(json.dumps(workflow))  # Deep copy
         actual_seed = seed if seed is not None else int(time.time()) % (2**32)
@@ -252,12 +252,14 @@ class ComfyImageDriver(ImageDriver):
                 # are tuned for the Lightning + multi-angles LoRA combo.
                 # Only override if user explicitly provides values.
                 if self._model_id == "qwen_image_edit":
-                    if user_cfg is not None and "cfg" in inputs:
-                        inputs["cfg"] = user_cfg
-                        print(f"[ComfyImageDriver]   user override: cfg={user_cfg}")
-                    if user_steps is not None and "steps" in inputs:
-                        inputs["steps"] = user_steps
-                        print(f"[ComfyImageDriver]   user override: steps={user_steps}")
+                    pass  # defaults are fine, user overrides applied below
+                # Apply user step/cfg overrides to ALL models
+                if user_cfg is not None and "cfg" in inputs:
+                    inputs["cfg"] = user_cfg
+                    print(f"[ComfyImageDriver]   user override: cfg={user_cfg}")
+                if user_steps is not None and "steps" in inputs:
+                    inputs["steps"] = user_steps
+                    print(f"[ComfyImageDriver]   user override: steps={user_steps}")
             elif ct == "RandomNoise":
                 if "noise_seed" in inputs:
                     inputs["noise_seed"] = actual_seed
@@ -294,8 +296,12 @@ class ComfyImageDriver(ImageDriver):
 
             # Image scale for Z-Image
             elif ct == "ImageScaleToTotalPixels":
-                if "megapixels" in inputs and isinstance(inputs["megapixels"], str):
-                    inputs["megapixels"] = 1.0
+                if "megapixels" in inputs:
+                    if user_megapixels is not None:
+                        inputs["megapixels"] = user_megapixels
+                        print(f"[ComfyImageDriver]   user override: megapixels={user_megapixels}")
+                    elif isinstance(inputs["megapixels"], str):
+                        inputs["megapixels"] = 1.0
 
         # Inject reference images into LoadImage nodes
         if ref_paths:
@@ -418,6 +424,7 @@ class ComfyImageDriver(ImageDriver):
             reference_image_paths=uploaded_refs if uploaded_refs else None,
             user_cfg=request.extra_params.get("cfg"),
             user_steps=request.extra_params.get("steps"),
+            user_megapixels=request.extra_params.get("megapixels"),
         )
 
         # Inject LoRAs if provided

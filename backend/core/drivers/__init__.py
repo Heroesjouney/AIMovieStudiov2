@@ -201,6 +201,7 @@ def list_image_drivers() -> List[DriverInfo]:
                     category=DriverCategory.LOCAL,
                     supported_features=wf.get("supported_features", ["text_to_image"]),
                     supports_loras=wf.get("supports_loras", True),
+                    supports_megapixels=wf.get("supports_megapixels", False),
                 ))
     except Exception:
         pass
@@ -243,6 +244,7 @@ def list_video_drivers() -> List[DriverInfo]:
         max_total_references=12,
         resolution_tiers=["native", "fast"],
         supports_loras=True,
+        supports_megapixels=True,
     ))
     # Cloud - Fal.ai
     if os.getenv("FAL_KEY"):
@@ -293,6 +295,7 @@ def list_video_drivers() -> List[DriverInfo]:
                     category=DriverCategory.LOCAL,
                     supported_features=wf.get("supported_features", ["text_to_video"]),
                     supports_loras=wf.get("supports_loras", True),
+                    supports_megapixels=wf.get("supports_megapixels", False),
                 ))
     except Exception:
         pass

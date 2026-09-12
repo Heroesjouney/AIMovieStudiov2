@@ -16,6 +16,7 @@ import { ShotFrameLinker } from "../shared/ShotFrameLinker";
 import { ModelSelector } from "../shared/ModelSelector";
 import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
 import { StepsCfgControl } from "../shared/StepsCfgControl";
+import { MegapixelsControl } from "../shared/MegapixelsControl";
 import { CheckpointOverride } from "../shared/CheckpointOverride";
 import { Lightbox } from "../shared/Lightbox";
 import { MultiAnglePanel } from "./MultiAnglePanel";
@@ -50,6 +51,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
   // Steps & CFG overrides
   const [userSteps, setUserSteps] = useState<number | null>(null);
   const [userCfg, setUserCfg] = useState<number | null>(null);
+  const [userMegapixels, setUserMegapixels] = useState<number | null>(null);
 
   // Sync prompt when navigating between shots
   useEffect(() => {
@@ -106,6 +108,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       }
       if (userSteps !== null) extraParams.steps = userSteps;
       if (userCfg !== null) extraParams.cfg = userCfg;
+      if (userMegapixels !== null) extraParams.megapixels = userMegapixels;
       const resp = await generateShotFrame(
         shot.id, prompt, selectedImageDriver,
         negativePrompt || undefined, genWidth, genHeight, undefined,
@@ -336,6 +339,12 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
                     onStepsChange={setUserSteps}
                     onCfgChange={setUserCfg}
                     compact
+                  />
+                  <MegapixelsControl
+                    megapixels={userMegapixels}
+                    onChange={setUserMegapixels}
+                    compact
+                    disabled={!imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_megapixels}
                   />
                   {imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_loras && (
                     <div>

@@ -418,7 +418,7 @@ class ComfyVideoDriver(VideoDriver):
                 if "value" not in inputs and "string" not in inputs:
                     inputs["value"] = ""
 
-            # --- Seed ---
+            # --- Seed + steps/cfg for standard samplers ---
             if ct == "KSampler" or ct in ("KSamplerAdvanced", "LTXVSampler", "MinimaxH3Sampler"):
                 if request.seed is not None:
                     inputs["seed"] = request.seed
@@ -431,6 +431,33 @@ class ComfyVideoDriver(VideoDriver):
                     inputs["steps"] = user_steps
                 if user_cfg is not None and "cfg" in inputs:
                     inputs["cfg"] = user_cfg
+
+            # --- LTX Video 2.3: steps/cfg on LTXVImgToVideo / LTXVImgToVideoInplace ---
+            if ct in ("LTXVImgToVideo", "LTXVImgToVideoInplace"):
+                if request.seed is not None:
+                    inputs["seed"] = request.seed
+                else:
+                    inputs["seed"] = int(time.time()) % (2**32)
+                user_steps = request.extra_params.get("steps") if request.extra_params else None
+                user_cfg = request.extra_params.get("cfg") if request.extra_params else None
+                if user_steps is not None and "steps" in inputs:
+                    inputs["steps"] = user_steps
+                    print(f"[ComfyVideoDriver]   user override: steps={user_steps}")
+                if user_cfg is not None and "cfg" in inputs:
+                    inputs["cfg"] = user_cfg
+                    print(f"[ComfyVideoDriver]   user override: cfg={user_cfg}")
+
+            # --- MiniMax H3 / Flux2: steps on BasicScheduler, cfg on BasicGuider ---
+            if ct == "BasicScheduler":
+                user_steps = request.extra_params.get("steps") if request.extra_params else None
+                if user_steps is not None and "steps" in inputs:
+                    inputs["steps"] = user_steps
+                    print(f"[ComfyVideoDriver]   user override: steps={user_steps} (BasicScheduler)")
+            if ct == "BasicGuider":
+                user_cfg = request.extra_params.get("cfg") if request.extra_params else None
+                if user_cfg is not None and "cfg" in inputs:
+                    inputs["cfg"] = user_cfg
+                    print(f"[ComfyVideoDriver]   user override: cfg={user_cfg} (BasicGuider)")
 
             # --- MiniMax H3: seed is in RandomNoise node ---
             if ct == "RandomNoise":

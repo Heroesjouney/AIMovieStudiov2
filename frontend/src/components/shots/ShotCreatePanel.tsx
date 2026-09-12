@@ -19,6 +19,7 @@ import { ShotFrameLinker } from "../shared/ShotFrameLinker";
 import { ModelSelector } from "../shared/ModelSelector";
 import { LoRASelector, type LoRASelection } from "../shared/LoRASelector";
 import { CheckpointOverride } from "../shared/CheckpointOverride";
+import { MegapixelsControl } from "../shared/MegapixelsControl";
 import { useGenerationPolling } from "@/lib/useGenerationPolling";
 import {
   wouldCrossLine, suggestReverse,
@@ -97,6 +98,7 @@ export function ShotCreatePanel({
   const [advSteps, setAdvSteps] = useState("");
   const [loras, setLoras] = useState<LoRASelection[]>([]);
   const [checkpointOverride, setCheckpointOverride] = useState("");
+  const [userMegapixels, setUserMegapixels] = useState<number | null>(null);
 
   const poll = useGenerationPolling();
 
@@ -147,6 +149,7 @@ export function ShotCreatePanel({
       const extraParams: Record<string, any> = {};
       if (loras.length > 0) extraParams.loras = loras;
       if (checkpointOverride) extraParams.checkpoint_override = checkpointOverride;
+      if (userMegapixels !== null) extraParams.megapixels = userMegapixels;
 
       const resp = await generateShotFrame(
         shot.id, fullPrompt, selectedImageDriver,
@@ -525,6 +528,16 @@ export function ShotCreatePanel({
               value={checkpointOverride}
               onChange={setCheckpointOverride}
               compact
+            />
+          </div>
+
+          {/* Resolution (megapixels) */}
+          <div className="mt-3">
+            <MegapixelsControl
+              megapixels={userMegapixels}
+              onChange={setUserMegapixels}
+              compact
+              disabled={!imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_megapixels}
             />
           </div>
         </div>
