@@ -162,12 +162,13 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
 
       return await new Promise<string>((resolve) => {
         let analysisPollErrors = 0;
-        const pollInterval = setInterval(async () => {
+        let analysisTimer: ReturnType<typeof setTimeout> | null = null;
+        const pollOnce = async () => {
           try {
             const statusResp = await checkAnalysisStatus(response.job_id);
             analysisPollErrors = 0;
             if (statusResp.status === "completed") {
-              clearInterval(pollInterval);
+              analysisTimer = null;
               const desc = statusResp.metadata?.description || "";
               setCharDescription(desc);
               if (desc) {
@@ -180,23 +181,28 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
               }
               setAnalyzing(false);
               resolve(desc);
+              return;
             } else if (statusResp.status === "failed") {
-              clearInterval(pollInterval);
+              analysisTimer = null;
               setError(statusResp.error_message || "Failed to analyze character");
               setAnalyzing(false);
               resolve("");
+              return;
             }
           } catch (pollErr) {
             analysisPollErrors++;
             console.warn("[AssetDetailPanel] analysis poll error:", pollErr);
             if (analysisPollErrors >= 5) {
-              clearInterval(pollInterval);
+              analysisTimer = null;
               setError("Lost connection to backend while polling.");
               setAnalyzing(false);
               resolve("");
+              return;
             }
           }
-        }, 2000);
+          analysisTimer = setTimeout(pollOnce, 2000);
+        };
+        analysisTimer = setTimeout(pollOnce, 2000);
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to analyze character");
@@ -249,12 +255,13 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
       }
 
       let sheetPollErrors = 0;
-      const pollInterval = setInterval(async () => {
+      let sheetTimer: ReturnType<typeof setTimeout> | null = null;
+      const pollOnce = async () => {
         try {
           const statusResp = await checkGenerationStatus(response.job_id, isTurnaroundPro ? "qwen_image_edit" : selectedDriver);
           sheetPollErrors = 0;
           if (statusResp.status === "completed") {
-            clearInterval(pollInterval);
+            sheetTimer = null;
             const images = statusResp.image_urls || [];
             setResultImages(images);
             setStatus("");
@@ -284,11 +291,13 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
                 setSavingIndex(null);
               }
             }
+            return;
           } else if (statusResp.status === "failed") {
-            clearInterval(pollInterval);
+            sheetTimer = null;
             setError(statusResp.error_message || "Sheet generation failed");
             setGenerating(false);
             setProgressViews({ completed: 0, total: 0 });
+            return;
           } else {
             const meta = statusResp.metadata;
             if (meta?.completed_views !== undefined && meta?.total_views !== undefined) {
@@ -302,13 +311,16 @@ export function AssetDetailPanel({ projectId, asset }: Props) {
           sheetPollErrors++;
           console.warn("[AssetDetailPanel] sheet poll error:", pollErr);
           if (sheetPollErrors >= 5) {
-            clearInterval(pollInterval);
+            sheetTimer = null;
             setError("Lost connection to backend while polling. The sheet may still be generating — refresh later.");
             setGenerating(false);
             setProgressViews({ completed: 0, total: 0 });
+            return;
           }
         }
-      }, 2000);
+        sheetTimer = setTimeout(pollOnce, 2000);
+      };
+      sheetTimer = setTimeout(pollOnce, 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate sheet");
       setGenerating(false);

@@ -24,6 +24,7 @@ VAULT_DIR = Path(__file__).parent.parent / "assets"
 
 # In-memory job store (persists for server lifetime)
 _audio_jobs: Dict[str, dict] = {}
+_audio_status_inflight: set[str] = set()
 
 
 class AudioJobRequest(BaseModel):
@@ -245,16 +246,28 @@ async def get_audio_job_status(job_id: str):
     job = _audio_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Audio job not found")
+    if job_id in _audio_status_inflight:
+        return {**job, "status": "processing"}
 
-    # If the job is still processing, poll the driver for updates
+    # If the job is still processing, poll the driver for updates.
+    # Mark the job as "finalizing" before the download so concurrent polls
+    # don't re-enter the download/transition block (defense against
+    # overlapping frontend poll requests during the audio download window).
     if job.get("status") == "processing":
         req_data = job.get("request", {})
         generator = req_data.get("generator", "fish_speech")
         driver = get_audio_driver(generator)
         if driver:
+            _audio_status_inflight.add(job_id)
             try:
                 response = await driver.check_status(job_id)
                 if response.status.value == "completed":
+                    # Transition to "finalizing" before the download so a
+                    # concurrent poll doesn't re-enter this block and download
+                    # the same file twice. Subsequent polls see status
+                    # "finalizing" and skip the driver check, returning the
+                    # in-progress state until the download finishes.
+                    job["status"] = "finalizing"
                     # Download the audio to the vault
                     remote_url = response.audio_url
                     if remote_url and remote_url.startswith("http"):
@@ -291,9 +304,17 @@ async def get_audio_job_status(job_id: str):
                     job["updated_at"] = datetime.utcnow().isoformat()
                 # If still processing, don't update — the next poll will check again
             except Exception as e:
+                if job.get("status") == "finalizing":
+                    job["status"] = "failed"
+                    job["error_message"] = f"Failed to finalize audio: {e}"
+                    job["updated_at"] = datetime.utcnow().isoformat()
                 print(f"[routes_audio] status poll error: {e}")
+            finally:
+                if job.get("status") == "finalizing":
+                    job["status"] = "processing"
+                _audio_status_inflight.discard(job_id)
 
-    return job
+    return dict(job)
 
 
 # =============================================================================

@@ -251,10 +251,14 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
     if (!speechJob) return;
     if (speechJob.status === "completed" || speechJob.status === "failed") return;
     
+    let active = true;
     let speechPollErrors = 0;
-    const pollInterval = setInterval(async () => {
+    let speechTimer: ReturnType<typeof setTimeout> | null = null;
+    const pollOnce = async () => {
+      if (!active) return;
       try {
         const status = await getAudioStatus(speechJob.jobId);
+        if (!active) return;
         speechPollErrors = 0;
         
         setSpeechJob({
@@ -264,11 +268,13 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
           videoUrl: status.video_url || null,
           errorMessage: status.error_message || null,
         });
+        if (status.status === "completed" || status.status === "failed") return;
       } catch (err) {
+        if (!active) return;
         speechPollErrors++;
-        console.error("Failed to poll audio status:", err);
+        console.error("Failed to poll speech status:", err);
         if (speechPollErrors >= 5) {
-          clearInterval(pollInterval);
+          speechTimer = null;
           setSpeechJob({
             jobId: speechJob.jobId,
             status: "failed",
@@ -276,21 +282,28 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
             videoUrl: null,
             errorMessage: "Lost connection to backend while polling.",
           });
+          return;
         }
       }
-    }, 1000);
+      speechTimer = setTimeout(pollOnce, 1000);
+    };
+    speechTimer = setTimeout(pollOnce, 1000);
     
-    return () => clearInterval(pollInterval);
-  }, [speechJob]);
+    return () => { active = false; if (speechTimer !== null) clearTimeout(speechTimer); };
+  }, [speechJob?.jobId, speechJob?.status === "completed" || speechJob?.status === "failed"]);
 
   useEffect(() => {
     if (!musicJob) return;
     if (musicJob.status === "completed" || musicJob.status === "failed") return;
 
+    let active = true;
     let musicPollErrors = 0;
-    const pollInterval = setInterval(async () => {
+    let musicTimer: ReturnType<typeof setTimeout> | null = null;
+    const pollOnce = async () => {
+      if (!active) return;
       try {
         const status = await getAudioStatus(musicJob.jobId);
+        if (!active) return;
         musicPollErrors = 0;
         setMusicJob({
           jobId: musicJob.jobId,
@@ -299,11 +312,13 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
           videoUrl: status.video_url || null,
           errorMessage: status.error_message || null,
         });
+        if (status.status === "completed" || status.status === "failed") return;
       } catch (err) {
+        if (!active) return;
         musicPollErrors++;
-        console.error("Failed to poll audio status:", err);
+        console.error("Failed to poll music status:", err);
         if (musicPollErrors >= 5) {
-          clearInterval(pollInterval);
+          musicTimer = null;
           setMusicJob({
             jobId: musicJob.jobId,
             status: "failed",
@@ -311,12 +326,15 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
             videoUrl: null,
             errorMessage: "Lost connection to backend while polling.",
           });
+          return;
         }
       }
-    }, 1000);
+      musicTimer = setTimeout(pollOnce, 1000);
+    };
+    musicTimer = setTimeout(pollOnce, 1000);
 
-    return () => clearInterval(pollInterval);
-  }, [musicJob]);
+    return () => { active = false; if (musicTimer !== null) clearTimeout(musicTimer); };
+  }, [musicJob?.jobId, musicJob?.status === "completed" || musicJob?.status === "failed"]);
 
   useEffect(() => {
     if (!speechJob) return;
@@ -348,10 +366,14 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
   useEffect(() => {
     if (!foleyJob || foleyJob.status === "completed" || foleyJob.status === "failed") return;
 
+    let active = true;
     let foleyPollErrors = 0;
-    const pollInterval = setInterval(async () => {
+    let foleyTimer: ReturnType<typeof setTimeout> | null = null;
+    const pollOnce = async () => {
+      if (!active) return;
       try {
         const status = await getAudioStatus(foleyJob.jobId);
+        if (!active) return;
         foleyPollErrors = 0;
         setFoleyJob({
           jobId: foleyJob.jobId,
@@ -360,11 +382,13 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
           videoUrl: status.video_url || null,
           errorMessage: status.error_message || null,
         });
+        if (status.status === "completed" || status.status === "failed") return;
       } catch (err) {
+        if (!active) return;
         foleyPollErrors++;
         console.error("Failed to poll foley status:", err);
         if (foleyPollErrors >= 5) {
-          clearInterval(pollInterval);
+          foleyTimer = null;
           setFoleyJob({
             jobId: foleyJob.jobId,
             status: "failed",
@@ -372,12 +396,15 @@ export function DialoguePanel({ projectId = "default" }: DialoguePanelProps) {
             videoUrl: null,
             errorMessage: "Lost connection to backend while polling.",
           });
+          return;
         }
       }
-    }, 2000);
+      foleyTimer = setTimeout(pollOnce, 2000);
+    };
+    foleyTimer = setTimeout(pollOnce, 2000);
 
-    return () => clearInterval(pollInterval);
-  }, [foleyJob]);
+    return () => { active = false; if (foleyTimer !== null) clearTimeout(foleyTimer); };
+  }, [foleyJob?.jobId, foleyJob?.status === "completed" || foleyJob?.status === "failed"]);
 
   useEffect(() => {
     if (!foleyJob) return;

@@ -828,6 +828,7 @@ export interface LongTakeRequest {
   camera_movement?: { preset: string; intensity: number };
   extra_params?: Record<string, any>;
   skip_continuity?: boolean;
+  reference_image_paths?: string[];
 }
 
 export interface LongTakeResponse {
@@ -867,6 +868,7 @@ export async function generateLongTake(req: LongTakeRequest): Promise<LongTakeRe
       camera_movement: req.camera_movement,
       extra_params: req.extra_params || {},
       skip_continuity: req.skip_continuity ?? false,
+      reference_image_paths: req.reference_image_paths || [],
     }),
   });
   if (!resp.ok) {

@@ -208,6 +208,7 @@ class LongTakeRequest(BaseModel):
     camera_movement: Optional[Dict[str, Any]] = Field(None, description="Camera movement preset applied to each segment")
     extra_params: Dict[str, Any] = Field(default_factory=dict, description="Model-specific extra params (e.g. steps, cfg)")
     skip_continuity: bool = Field(default=False)
+    reference_image_paths: List[str] = Field(default_factory=list, description="Additional reference images (subject/scene/style lock) passed to every segment")
 
     @model_validator(mode="after")
     def validate_keyframes(self):

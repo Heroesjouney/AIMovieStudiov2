@@ -168,6 +168,7 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
   const [renderResultUrl, setRenderResultUrl] = useState<string | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const renderPollRef = useRef<number | null>(null);
+  const renderGenerationRef = useRef(0);
 
   const [trimmingClip, setTrimmingClip] = useState<
     | {
@@ -304,49 +305,54 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
       setRenderError("Timeline is empty. Add clips before rendering.");
       return;
     }
+    const generation = ++renderGenerationRef.current;
+    const isCurrent = () => renderGenerationRef.current === generation;
+    if (renderPollRef.current !== null) window.clearTimeout(renderPollRef.current);
+    renderPollRef.current = null;
     setRenderStatus("pending");
     setRenderError(null);
     setRenderResultUrl(null);
     try {
       // Save timeline first
       await saveTimeline(projectId, timeline as any);
+      if (!isCurrent()) return;
       const job = await startTimelineRender(projectId, exportPreset);
+      if (!isCurrent()) return;
       setRenderStatus(job.status as any);
 
       // Poll for status
-      if (renderPollRef.current) window.clearInterval(renderPollRef.current);
+      if (renderPollRef.current) window.clearTimeout(renderPollRef.current);
       let renderPollErrors = 0;
-      renderPollRef.current = window.setInterval(async () => {
+      const pollOnce = async () => {
+        if (!isCurrent()) return;
         try {
           const status = await getTimelineRenderStatus(projectId, job.job_id);
+          if (!isCurrent()) return;
           renderPollErrors = 0;
           setRenderStatus(status.status as any);
           if (status.status === "completed") {
+            renderPollRef.current = null;
             setRenderResultUrl(status.video_url);
-            if (renderPollRef.current) {
-              window.clearInterval(renderPollRef.current);
-              renderPollRef.current = null;
-            }
           } else if (status.status === "failed") {
+            renderPollRef.current = null;
             setRenderError(status.error_message || "Render failed");
-            if (renderPollRef.current) {
-              window.clearInterval(renderPollRef.current);
-              renderPollRef.current = null;
-            }
           }
         } catch (pollErr) {
+          if (!isCurrent()) return;
           renderPollErrors++;
           if (renderPollErrors >= 5) {
+            renderPollRef.current = null;
             setRenderStatus("failed");
             setRenderError("Lost connection to backend while polling render status.");
-            if (renderPollRef.current) {
-              window.clearInterval(renderPollRef.current);
-              renderPollRef.current = null;
-            }
           }
         }
-      }, 2000);
+        if (isCurrent() && renderPollRef.current !== null) {
+          renderPollRef.current = window.setTimeout(pollOnce, 2000);
+        }
+      };
+      renderPollRef.current = window.setTimeout(pollOnce, 2000);
     } catch (err) {
+      if (!isCurrent()) return;
       setRenderStatus("failed");
       setRenderError(err instanceof Error ? err.message : "Failed to start render");
     }
@@ -354,8 +360,9 @@ export function TimelineEditor({ projectId = "default" }: TimelineEditorProps) {
 
   useEffect(() => {
     return () => {
+      renderGenerationRef.current++;
       if (renderPollRef.current) {
-        window.clearInterval(renderPollRef.current);
+        window.clearTimeout(renderPollRef.current);
         renderPollRef.current = null;
       }
       // Clean up playback and scrub RAF loops on unmount

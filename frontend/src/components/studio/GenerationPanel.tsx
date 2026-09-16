@@ -112,7 +112,20 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   // Generation elapsed timer
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const elapsedRef = useRef<number | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (pollRef.current !== null) clearTimeout(pollRef.current);
+      pollRef.current = null;
+      if (elapsedRef.current !== null) window.clearInterval(elapsedRef.current);
+      elapsedRef.current = null;
+    };
+  }, []);
 
   // Lightbox
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -151,41 +164,55 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
     setStatus("Resuming image status check...");
     startElapsedTimer();
 
+    const generation = ++pollGenerationRef.current;
+    const isCurrent = () => mountedRef.current && pollGenerationRef.current === generation
+      && useStudioStore.getState().activeImageJob?.job_id === job.job_id;
     let pollErrors = 0;
-    pollRef.current = setInterval(async () => {
+    const pollOnce = async () => {
+      if (!isCurrent()) return;
       try {
         const statusResp = await checkGenerationStatus(job.job_id, job.model_id);
+        if (!isCurrent()) return;
         pollErrors = 0;
         if (statusResp.status === "completed") {
-          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          pollRef.current = null;
           setResultImages(statusResp.image_urls || []);
           setStatus("Completed!");
           stopElapsedTimer();
           setGenerating(false);
           setActiveImageJob(null);
+          return;
         } else if (statusResp.status === "failed") {
-          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          pollRef.current = null;
           setError(statusResp.error_message || "Generation failed");
           stopElapsedTimer();
           setGenerating(false);
           setActiveImageJob(null);
+          return;
         } else {
           setStatus(statusResp.status === "in_queue" ? "In queue..." : "Processing...");
         }
       } catch (err) {
+        if (!isCurrent()) return;
         pollErrors++;
         if (pollErrors >= 5) {
-          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          pollRef.current = null;
           setError("Lost connection to backend while polling.");
           stopElapsedTimer();
           setGenerating(false);
           setActiveImageJob(null);
+          return;
         }
       }
-    }, 2000);
+      if (isCurrent()) pollRef.current = setTimeout(pollOnce, 2000);
+    };
+    pollRef.current = setTimeout(pollOnce, 2000);
 
     return () => {
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      if (pollGenerationRef.current !== generation) return;
+      pollGenerationRef.current++;
+      if (pollRef.current !== null) clearTimeout(pollRef.current);
+      pollRef.current = null;
       stopElapsedTimer();
     };
   }, []);
@@ -195,6 +222,10 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
       setError("Please enter a prompt");
       return;
     }
+    const generation = ++pollGenerationRef.current;
+    const isCurrent = () => mountedRef.current && pollGenerationRef.current === generation;
+    if (pollRef.current !== null) clearTimeout(pollRef.current);
+    pollRef.current = null;
     setGenerating(true);
     setError(null);
     setResultImages([]);
@@ -237,7 +268,9 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
         Object.keys(extraParams).length > 0 ? extraParams : undefined,
       );
 
+      if (pollGenerationRef.current !== generation) return;
       if (response.status === "failed") {
+        if (!isCurrent()) return;
         setError(response.error_message || "Generation failed");
         stopElapsedTimer();
         setGenerating(false);
@@ -245,41 +278,51 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
       }
 
       setActiveImageJob({ job_id: response.job_id, model_id: selectedImageDriver });
+      if (!isCurrent()) return;
 
       let genPollErrors = 0;
-      pollRef.current = setInterval(async () => {
+      const pollOnce = async () => {
+        if (!isCurrent()) return;
         try {
           const statusResp = await checkGenerationStatus(response.job_id, selectedImageDriver);
+          if (!isCurrent()) return;
           genPollErrors = 0;
           if (statusResp.status === "completed") {
-            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+            pollRef.current = null;
             setResultImages(statusResp.image_urls || []);
             setStatus("Completed!");
             stopElapsedTimer();
             setGenerating(false);
             setActiveImageJob(null);
+            return;
           } else if (statusResp.status === "failed") {
-            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+            pollRef.current = null;
             setError(statusResp.error_message || "Generation failed");
             stopElapsedTimer();
             setGenerating(false);
             setActiveImageJob(null);
+            return;
           } else {
             setStatus(statusResp.status === "in_queue" ? "In queue..." : "Processing...");
           }
         } catch (pollErr) {
+          if (!isCurrent()) return;
           genPollErrors++;
           console.warn("[GenerationPanel] poll error:", pollErr);
           if (genPollErrors >= 5) {
-            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+            pollRef.current = null;
             setError("Lost connection to backend while polling. The image may still be generating — refresh later.");
             stopElapsedTimer();
             setGenerating(false);
             setActiveImageJob(null);
+            return;
           }
         }
-      }, 2000);
+        if (isCurrent()) pollRef.current = setTimeout(pollOnce, 2000);
+      };
+      pollRef.current = setTimeout(pollOnce, 2000);
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : "Failed to generate");
       stopElapsedTimer();
       setGenerating(false);
@@ -299,7 +342,8 @@ export function GenerationPanel({ projectId }: { projectId: string }) {
   }, [generating, prompt]);
 
   const handleReset = () => {
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    pollGenerationRef.current++;
+    if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null; }
     stopElapsedTimer();
     setActiveImageJob(null);
     setPrompt("");

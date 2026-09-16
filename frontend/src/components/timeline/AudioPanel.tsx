@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useStudioStore } from "@/lib/store";
 import { generateTTS, fetchAudioFiles } from "@/lib/api";
 import { Loader2, Play, Music, Plus } from "lucide-react";
@@ -14,18 +14,33 @@ export function AudioPanel({ projectId }: { projectId: string }) {
   const [audioFiles, setAudioFiles] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollGenerationRef = useRef(0);
+
   useEffect(() => {
-    fetchAudioFiles(projectId).then(setAudioFiles).catch(() => {});
+    let active = true;
+    fetchAudioFiles(projectId).then((files) => { if (active) setAudioFiles(files); }).catch(() => {});
+    return () => {
+      active = false;
+      pollGenerationRef.current++;
+      if (pollRef.current !== null) clearTimeout(pollRef.current);
+      pollRef.current = null;
+    };
   }, [projectId]);
 
   const handleGenerate = async () => {
     if (!text.trim()) return;
+    const generation = ++pollGenerationRef.current;
+    const isCurrent = () => pollGenerationRef.current === generation;
+    if (pollRef.current !== null) clearTimeout(pollRef.current);
+    pollRef.current = null;
     setGenerating(true);
     setError(null);
     setStatus("Generating speech...");
 
     try {
       const resp = await generateTTS(text, language, selectedAudioDriver);
+      if (!isCurrent()) return;
       if (resp.status === "failed") {
         setError(resp.error_message || "TTS failed");
         setGenerating(false);
@@ -33,33 +48,48 @@ export function AudioPanel({ projectId }: { projectId: string }) {
       }
 
       let ttsPollErrors = 0;
-      const interval = setInterval(async () => {
+      const pollOnce = async () => {
+        if (!isCurrent()) return;
         try {
-          const st = await fetch(`/api/audio/status/${resp.job_id}?model_id=${selectedAudioDriver}`).then(r => r.json());
+          const response = await fetch(`/api/audio/status/${resp.job_id}?model_id=${selectedAudioDriver}`);
+          if (!response.ok) throw new Error(`Audio status request failed (HTTP ${response.status})`);
+          const st = await response.json();
+          if (!isCurrent()) return;
           ttsPollErrors = 0;
           if (st.status === "completed") {
-            clearInterval(interval);
+            pollRef.current = null;
             setStatus("Audio ready!");
             setGenerating(false);
-            const refreshed = await fetchAudioFiles(projectId);
-            setAudioFiles(refreshed);
+            try {
+              const refreshed = await fetchAudioFiles(projectId);
+              if (isCurrent()) setAudioFiles(refreshed);
+            } catch (refreshError) {
+              if (isCurrent()) setError("Audio completed, but the audio library could not be refreshed. Reopen the panel to retry.");
+            }
+            return;
           } else if (st.status === "failed") {
-            clearInterval(interval);
+            pollRef.current = null;
             setError(st.error_message || "TTS failed");
             setGenerating(false);
+            return;
           } else {
             setStatus(st.status === "in_queue" ? "In queue..." : "Processing...");
           }
         } catch (pollErr) {
+          if (!isCurrent()) return;
           ttsPollErrors++;
           if (ttsPollErrors >= 5) {
-            clearInterval(interval);
+            pollRef.current = null;
             setError("Lost connection to backend while polling.");
             setGenerating(false);
+            return;
           }
         }
-      }, 2000);
+        if (isCurrent()) pollRef.current = setTimeout(pollOnce, 2000);
+      };
+      pollRef.current = setTimeout(pollOnce, 2000);
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : "Failed");
       setGenerating(false);
     }

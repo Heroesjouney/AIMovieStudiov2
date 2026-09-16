@@ -98,7 +98,7 @@ Block out camera moves in a real-time 3D stage before spending generation credit
 - **⚡ Live Status** - Watch generation progress in real-time with elapsed timers. Jobs persist across tab switches — switch away and come back to find completed generations updated in the storyboard.
 - **🎛️ Shot Composition Tools** - Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
 - **📸 Multi-Angle & Variations** - Generate alternate camera angles, prompt variations, and retake failed shots.
-- **🎞️ Long Take Mode** *(Experimental)* - Chain keyframe interpolation across multiple segments to generate continuous shots longer than a single clip. Define keyframes by image, prompt, or both. The backend generates missing images via T2I, interpolates between keyframe pairs using first-last-frame-to-video (FLF2V), and stitches segments with ffmpeg. Only available for models that support first+last frame (e.g. LTX Video 2.3, Wan Video).
+- **🎞️ Long Take Mode** *(Experimental)* - Chain keyframe interpolation across multiple segments to generate continuous shots longer than a single clip. Define keyframes by image, prompt, or both. The backend generates missing images via T2I, interpolates between keyframe pairs using first-last-frame-to-video (FLF2V), and stitches segments with ffmpeg. **Scene continuity is automatic**: the scene's establishing frame is injected as the first keyframe when the user hasn't provided one, the scene-context prompt prefix (description, time of day, mood, lighting, character names) is applied to every segment, and the establishing frame is passed as a reference image for scene identity lock. Only available for models that support first+last frame (e.g. LTX Video 2.3, Wan Video).
 - **🔀 Shot Management** - Drag-and-drop reordering, shot duplication, next/prev navigation, keyboard shortcuts (Ctrl+Enter to generate), and a fullscreen lightbox viewer.
 - **📄 Screenplay Import** - Import Fountain (`.fountain`, `.txt`, `.spmd`) or Final Draft (`.fdx`) screenplays. The parser creates scenes with time-of-day, mood, and lighting inferred from the script, and stores the shot breakdown as a screenplay-formatted reference in each scene's recipe. Copy dialogue/action directly into new shots as you build the storyboard — the establish-then-continue workflow stays intact. Bulk-delete an entire imported screenplay with one action.
 - **🎨 LoRA Support** - Add, upload, and manage LoRAs (Low-Rank Adaptation models) directly from the UI. Apply style or character modifications to any local ComfyUI generation with per-LoRA strength sliders. LoRAs auto-populate from ComfyUI's `models/loras/` directory (works offline). Available in all 5 generation surfaces: Generate tab, Shot tab, Camera tab, Shot Create panel, and Retake panel.
@@ -526,6 +526,13 @@ AI Movie Studio 2 lets you seamlessly continue a video from where a previous tak
 3. The backend generates missing images via text-to-image
 4. Interpolates between keyframe pairs using first-last-frame-to-video (FLF2V)
 5. Stitches segments together with ffmpeg into one continuous clip
+
+**Scene continuity in Long Take:**
+- When the first keyframe is empty, the scene's establishing frame is automatically injected as the first keyframe — the long take starts from the scene's established composition
+- The scene-context prompt prefix (description, time of day, mood, lighting, character names) is applied to every segment so all segments share the scene's visual identity
+- The establishing frame is passed as a reference image to every segment for scene identity lock
+- A hint below the keyframe cards indicates when the establishing frame will be used automatically
+- Set **Skip Continuity** to disable all auto-injection for freestyle long takes
 
 ### How It Works
 

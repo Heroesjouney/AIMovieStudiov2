@@ -305,6 +305,18 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+  const pollGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const firstFrameClearedRef = useRef(false);
+  // Tracks which shot the last-frame auto-fill has been applied for (and
+  // the value it filled), so a manual clear is never overridden and a stale
+  // auto-fill from a previous shot is refreshed on shot change.
+  const lastFrameAutoRef = useRef<{ shotId: string; value: string } | null>(null);
+  // Tracks which shot context the current first frame belongs to. When the
+  // selected shot changes, a frame left over from a different shot is stale
+  // and gets refreshed; a deliberately emptied slot (backend chain active)
+  // stays empty. `undefined` means "not evaluated yet" (first render).
+  const firstFrameOriginShotRef = useRef<string | null | undefined>(undefined);
 
   const selectedShot = useMemo(
     () => shots.find((s) => s.id === selectedShotId),
@@ -350,19 +362,104 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     return scene?.name || sceneId;
   }, [scenes, selectedShot, selectedSceneId]);
 
+  // --- Continuity chain (read-only visualization; mirrors backend logic) ---
+  // The previous shot in this scene whose last frame the backend will auto-use
+  // as first frame when the user hasn't picked one and continuity isn't skipped.
+  const continuitySource = useMemo(() => {
+    if (!selectedShot?.scene_id) return null;
+    const sceneId = selectedShot.scene_id;
+    const siblings = shots
+      .filter((s: any) => s.scene_id === sceneId && s.id !== selectedShot.id && !s.hidden)
+      .sort((a: any, b: any) => (b.sequence_order ?? 0) - (a.sequence_order ?? 0));
+    return siblings.find((s: any) => s.last_frame_path) || null;
+  }, [shots, selectedShot]);
+
+  // The scene's establishing frame the backend injects as a scene-identity reference.
+  const sceneEstablishingFrame = useMemo(() => {
+    const sceneId = selectedShot?.scene_id || selectedSceneId;
+    if (!sceneId) return null;
+    return scenes.find((s) => s.id === sceneId)?.establishing_frame_path || null;
+  }, [scenes, selectedShot, selectedSceneId]);
+
+  // Whether the last-frame chain will actually anchor this generation:
+  // no manual first frame picked, continuity not skipped. Mode-independent
+  // because the backend chain auto-fill has no mode gate — even T2V gets
+  // the previous clip's last frame injected as the first-frame anchor.
+  const chainWillApply = !!continuitySource?.last_frame_path
+    && !firstFramePath
+    && !skipContinuity && !longTakeMode;
+
   // When shot changes, auto-fill refs for I2V/R2V modes (only if user hasn't manually picked something)
   useEffect(() => {
     const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
-    if (shotFrame && (mode === "i2v" || mode === "r2v")) {
-      setFirstFramePath((prev) => prev ?? shotFrame);
-      if (mode === "r2v") {
-        setRefImagePaths((prev) => prev.length > 0 ? prev : [shotFrame]);
+    const currentShotId = selectedShot?.id ?? null;
+
+    // R2V: keep the existing fill-if-empty behavior (reference images are
+    // the primary mechanism there; their lifecycle is unchanged).
+    if (mode === "r2v") {
+      if (shotFrame) {
+        setFirstFramePath((prev) => prev ?? shotFrame);
+        setRefImagePaths((prev) => (prev.length > 0 ? prev : [shotFrame]));
       }
+      firstFrameOriginShotRef.current = currentShotId;
+      return;
     }
+
+    if (mode !== "i2v") return;
+
+    // First evaluation — preserve the original fill-if-empty behavior.
+    if (firstFrameOriginShotRef.current === undefined) {
+      firstFrameOriginShotRef.current = currentShotId;
+      if (shotFrame && !firstFrameClearedRef.current) setFirstFramePath((prev) => prev ?? shotFrame);
+      return;
+    }
+
+    // Same shot context — fill if empty (e.g. right after selection).
+    if (firstFrameOriginShotRef.current === currentShotId) {
+      if (shotFrame && !firstFrameClearedRef.current) setFirstFramePath((prev) => prev ?? shotFrame);
+      return;
+    }
+
+    // Shot context changed. A frame left over from a different shot is
+    // stale — refresh it to the new shot's frame. An empty slot stays
+    // empty: the user cleared it to keep the backend last-frame chain
+    // active, and that choice carries to the next shot.
+    firstFrameOriginShotRef.current = currentShotId;
+    setFirstFramePath(() => firstFrameClearedRef.current ? null : (shotFrame || null));
   }, [selectedShot, mode]);
+
+  // Keyframe interpolation chaining (I2V with first_last_frame support):
+  // when the backend last-frame chain will supply the first frame (user
+  // cleared the manual pick) and this shot has a storyboard frame, auto-fill
+  // the last frame so the clip interpolates from the previous clip's end
+  // and lands exactly on the storyboard composition. Manual picks always
+  // win; a stale auto-fill from a previous shot is refreshed on shot change.
+  useEffect(() => {
+    if (mode !== "i2v" || !caps.supportsLastFrame || !selectedShot) return;
+    if (longTakeMode || skipContinuity) return;
+    if (lastFrameAutoRef.current?.shotId === selectedShot.id) return;
+    const storyFrame = selectedShot.frame_image_path;
+    const chainAnchor = continuitySource?.last_frame_path;
+    // Need a distinct anchor pair: previous clip's end (via chain) and
+    // this shot's storyboard. Without a chain source or with the same
+    // image there is nothing to interpolate toward.
+    if (!storyFrame || !chainAnchor || chainAnchor === storyFrame) return;
+    // Only when the chain will actually supply the first frame — a manual
+    // first-frame pick (including Continue) keeps its existing behavior.
+    if (firstFramePath) return;
+    const prevAuto = lastFrameAutoRef.current;
+    lastFrameAutoRef.current = { shotId: selectedShot.id, value: storyFrame };
+    setLastFramePath((prev) => {
+      // Refresh a stale auto-fill from a different shot; keep a manual
+      // pick; fill an empty slot.
+      if (prev === null || (prevAuto && prev === prevAuto.value)) return storyFrame;
+      return prev;
+    });
+  }, [selectedShot, mode, caps.supportsLastFrame, firstFramePath, continuitySource, longTakeMode, skipContinuity]);
 
   // When mode changes, clear refs that aren't relevant
   const handleModeChange = (newMode: GenMode) => {
+    firstFrameClearedRef.current = false;
     setMode(newMode);
     setError(null);
     if (newMode === "t2v") {
@@ -383,10 +480,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       setRefImagePaths([]);
       setRefVideoPath(null);
       setRefAudioPath(null);
+      // Re-enable last-frame auto-fill for this shot on mode entry
+      lastFrameAutoRef.current = null;
       // Auto-fill first frame from selected shot
       const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
       if (shotFrame) {
         setFirstFramePath(shotFrame);
+        firstFrameOriginShotRef.current = selectedShot?.id ?? null;
       }
     } else if (newMode === "r2v") {
       // Clear T2V-only dropdowns since reference image dictates look
@@ -401,6 +501,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
       if (shotFrame) {
         setFirstFramePath(shotFrame);
+        firstFrameOriginShotRef.current = selectedShot?.id ?? null;
         setRefImagePaths((prev) => prev.length > 0 ? prev : [shotFrame]);
       }
     } else if (newMode === "ia2v") {
@@ -419,6 +520,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       const shotFrame = selectedShot?.frame_image_path || selectedShot?.last_frame_path;
       if (shotFrame) {
         setFirstFramePath(shotFrame);
+        firstFrameOriginShotRef.current = selectedShot?.id ?? null;
       }
     }
   };
@@ -488,9 +590,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
   // Cleanup polling and elapsed timer on unmount
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current);
-      if (elapsedRef.current) window.clearInterval(elapsedRef.current);
+      mountedRef.current = false;
+      if (pollRef.current !== null) window.clearTimeout(pollRef.current);
+      pollRef.current = null;
+      if (elapsedRef.current !== null) window.clearInterval(elapsedRef.current);
+      elapsedRef.current = null;
     };
   }, []);
 
@@ -505,15 +611,24 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setStatus("Resuming video status check...");
     startElapsedTimer();
 
+    const generation = ++pollGenerationRef.current;
+    const isCurrent = () => mountedRef.current && pollGenerationRef.current === generation
+      && useStudioStore.getState().activeVideoJob?.job_id === job.job_id;
     let pollErrors = 0;
-    pollRef.current = window.setInterval(async () => {
+    // Sequential polling (same pattern as the generate flows) — the status
+    // endpoints persist takes / advance the long-take state machine inside
+    // the poll, so overlapping polls must not run concurrently.
+    const pollOnce = async (): Promise<void> => {
+      if (!isCurrent()) return;
       try {
         if (job.is_long_take) {
           const st = await checkLongTakeStatus(job.job_id);
+          if (!isCurrent()) return;
+          pollErrors = 0;
           setLongTakeProgress(st.progress);
 
           if (st.status === "completed" && st.video_url) {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setStatus("Long take complete!");
             stopElapsedTimer();
@@ -526,8 +641,9 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             } catch (e) {
               console.error("Failed to refetch shots after long take:", e);
             }
+            return;
           } else if (st.status === "partial_failure" && st.video_url) {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setError(`Partial failure: ${st.error}. Completed ${st.progress.current} of ${st.progress.total} segments.`);
             setStatus("Long take completed with partial failure.");
@@ -538,22 +654,25 @@ export function CameraDirector({ projectId }: { projectId: string }) {
               const fresh = await fetchShots(projectId);
               useStudioStore.getState().setShots(fresh);
             } catch (e) { console.error("Failed to refetch shots:", e); }
+            return;
           } else if (st.status === "failed") {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setError(st.error || "Long take generation failed");
             stopElapsedTimer();
             setGenerating(false);
             setActiveVideoJob(null);
+            return;
           } else {
             setStatus(`Segment ${st.progress.current}/${st.progress.total}...`);
           }
         } else {
           const st = await checkShotVideoStatus(job.job_id, job.model_id);
+          if (!isCurrent()) return;
           pollErrors = 0;
 
           if (st.status === "completed" && st.video_url) {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setStatus("Take generated!");
             stopElapsedTimer();
@@ -584,33 +703,45 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 console.error("Failed to refetch shots:", e);
               }
             }
+            return;
           } else if (st.status === "failed") {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setError(st.error_message || "Generation failed");
             stopElapsedTimer();
             setGenerating(false);
             setActiveVideoJob(null);
+            return;
           } else {
             setStatus(`Status: ${st.status}...`);
           }
         }
       } catch (err) {
+        if (!isCurrent()) return;
         pollErrors++;
         console.error("Resume poll error:", err);
         if (pollErrors >= 5) {
-          if (pollRef.current) window.clearInterval(pollRef.current);
+          if (pollRef.current) window.clearTimeout(pollRef.current);
           pollRef.current = null;
           setError("Lost connection to backend while polling. The video may still be generating — refresh later.");
           stopElapsedTimer();
           setGenerating(false);
           setActiveVideoJob(null);
+          return;
         }
       }
-    }, 3000);
+      // Schedule the next poll only after this one completes (no overlap).
+      if (isCurrent()) {
+        pollRef.current = window.setTimeout(pollOnce, 3000);
+      }
+    };
+    pollRef.current = window.setTimeout(pollOnce, 3000);
 
     return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current);
+      if (pollGenerationRef.current !== generation) return;
+      pollGenerationRef.current++;
+      if (pollRef.current !== null) window.clearTimeout(pollRef.current);
+      pollRef.current = null;
     };
   }, []); // Run once on mount
 
@@ -620,7 +751,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   // Stable callbacks for RefPickerModal to prevent re-renders
   const handlePickerPick = useCallback((path: string) => {
     setActivePicker((current) => {
-      if (current === "firstFrame") setFirstFramePath(path);
+      if (current === "firstFrame") {
+        firstFrameClearedRef.current = false;
+        setFirstFramePath(path);
+        // The pick belongs to the currently selected shot context — record
+        // it so the shot-change refresh never treats it as stale.
+        firstFrameOriginShotRef.current = useStudioStore.getState().selectedShotId ?? null;
+      }
       else if (current === "lastFrame") setLastFramePath(path);
       else if (current === "refVideo") setRefVideoPath(path);
       else if (current === "audio") setRefAudioPath(path);
@@ -652,8 +789,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
   const handlePickerClose = useCallback(() => setActivePicker(null), []);
 
   const handleReset = () => {
+    pollGenerationRef.current++;
+    firstFrameClearedRef.current = false;
     if (pollRef.current) {
       window.clearInterval(pollRef.current);
+      window.clearTimeout(pollRef.current);
       pollRef.current = null;
     }
     if (elapsedRef.current) {
@@ -677,6 +817,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     setResolutionQuality("standard");
     setFirstFramePath(null);
     setLastFramePath(null);
+    firstFrameOriginShotRef.current = undefined;
+    lastFrameAutoRef.current = null;
     setRefImagePaths([]);
     setRefVideoPath(null);
     setRefAudioPath(null);
@@ -701,7 +843,8 @@ export function CameraDirector({ projectId }: { projectId: string }) {
     loadedPickersRef.current.clear();
   };
 
-  const handleLongTakeGenerate = async (effectiveShotId: string) => {
+  const handleLongTakeGenerate = async (effectiveShotId: string, generation: number) => {
+    const isCurrent = () => mountedRef.current && pollGenerationRef.current === generation;
     // Filter out blank keyframes (no image AND no prompt)
     const validIndices = keyframePaths
       .map((kp, i) => (kp || (keyframePrompts[i] || "").trim()) ? i : -1)
@@ -744,9 +887,12 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           ...(checkpointOverride ? { checkpoint_override: checkpointOverride } : {}),
         },
         skip_continuity: skipContinuity,
+        reference_image_paths: refImagePaths,
       });
 
+      if (pollGenerationRef.current !== generation) return;
       if (resp.status === "failed") {
+        if (!isCurrent()) return;
         setError("Failed to start long take generation");
         stopElapsedTimer();
         setGenerating(false);
@@ -761,16 +907,25 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         is_long_take: true,
       });
 
+      if (!isCurrent()) return;
       setStatus(`Generating segment 1/${totalSegments}...`);
 
+      // Sequential polling: the next poll is scheduled only after the previous
+      // one completes. The status endpoint advances a per-poll state machine
+      // (T2I generation, segment chaining), so overlapping polls would race it —
+      // duplicating segments and double-starting the next one. The activeVideoJob
+      // guard stops the chain if generation is reset or replaced mid-flight.
       let pollErrors = 0;
-      pollRef.current = window.setInterval(async () => {
+      const pollOnce = async (): Promise<void> => {
+        if (!isCurrent()) return;
         try {
           const st = await checkLongTakeStatus(resp.job_id);
+          if (!isCurrent()) return;
+          pollErrors = 0;
           setLongTakeProgress(st.progress);
 
           if (st.status === "completed" && st.video_url) {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setStatus("Long take complete!");
             stopElapsedTimer();
@@ -798,8 +953,9 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 shotId: effectiveShotId,
               });
             }
+            return;
           } else if (st.status === "partial_failure" && st.video_url) {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setError(`⚠️ Partial failure: ${st.error}. Completed ${st.progress.current} of ${st.progress.total} segments.`);
             setStatus("Long take completed with partial failure.");
@@ -824,14 +980,16 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 shotId: effectiveShotId,
               });
             }
+            return;
           } else if (st.status === "failed") {
-            if (pollRef.current) window.clearInterval(pollRef.current);
+            if (pollRef.current) window.clearTimeout(pollRef.current);
             pollRef.current = null;
             setError(st.error || "Long take generation failed");
             stopElapsedTimer();
             setGenerating(false);
             setLongTakeProgress(null);
             setActiveVideoJob(null);
+            return;
           } else if (st.status === "stitching") {
             setStatus("Stitching segments...");
           } else if (st.status === "preparing") {
@@ -843,10 +1001,11 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setStatus(`Generating segment ${st.progress.current}/${st.progress.total}...`);
           }
         } catch (e) {
+          if (!isCurrent()) return;
           pollErrors++;
           if (pollErrors >= 5) {
             if (pollRef.current) {
-              window.clearInterval(pollRef.current);
+              window.clearTimeout(pollRef.current);
               pollRef.current = null;
             }
             setError("Lost connection to backend while polling long take.");
@@ -854,10 +1013,17 @@ export function CameraDirector({ projectId }: { projectId: string }) {
             setGenerating(false);
             setLongTakeProgress(null);
             setActiveVideoJob(null);
+            return;
           }
         }
-      }, 3000);
+        // Schedule the next poll only after this one completes (no overlap).
+        if (isCurrent() && useStudioStore.getState().activeVideoJob?.job_id === resp.job_id) {
+          pollRef.current = window.setTimeout(pollOnce, 3000);
+        }
+      };
+      pollRef.current = window.setTimeout(pollOnce, 3000);
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : "Failed to start long take");
       stopElapsedTimer();
       setGenerating(false);
@@ -875,7 +1041,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
     // Skip mode-specific ref validation in Long Take mode (keyframes replace refs)
     if (!longTakeMode) {
-      if (mode === "i2v" && !firstFramePath) {
+      if (mode === "i2v" && !firstFramePath && !chainWillApply) {
         setError("I2V mode requires a first frame");
         return;
       }
@@ -893,6 +1059,10 @@ export function CameraDirector({ projectId }: { projectId: string }) {
       }
     }
 
+    const generation = ++pollGenerationRef.current;
+    const isCurrent = () => mountedRef.current && pollGenerationRef.current === generation;
+    if (pollRef.current !== null) window.clearTimeout(pollRef.current);
+    pollRef.current = null;
     setGenerating(true);
     setError(null);
     setStatus("Submitting video generation...");
@@ -924,8 +1094,10 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           undefined,
           !selectedSceneId, // hidden only if truly freestyle (no scene)
         );
+        if (pollGenerationRef.current !== generation) return;
         effectiveShotId = scratchShot.id;
       } catch (e) {
+        if (!isCurrent()) return;
         setError("Failed to create a shot for this video. Try selecting an existing shot.");
         stopElapsedTimer();
         setGenerating(false);
@@ -935,7 +1107,7 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
     // Branch: Long Take mode uses a separate generation flow
     if (longTakeMode) {
-      await handleLongTakeGenerate(effectiveShotId!);
+      await handleLongTakeGenerate(effectiveShotId!, generation);
       return;
     }
 
@@ -968,14 +1140,16 @@ export function CameraDirector({ projectId }: { projectId: string }) {
 
     try {
       const resp = await generateShotVideo(req);
+      if (pollGenerationRef.current !== generation) return;
       if (resp.status === "failed") {
+        if (!isCurrent()) return;
         setError(resp.error_message || "Failed to start generation");
         stopElapsedTimer();
         setGenerating(false);
         return;
       }
 
-      if (resp.continuity_warning) {
+      if (isCurrent() && resp.continuity_warning) {
         setError(resp.continuity_warning);
       }
 
@@ -987,16 +1161,24 @@ export function CameraDirector({ projectId }: { projectId: string }) {
         is_long_take: false,
       });
 
+      if (!isCurrent()) return;
       setStatus("Generating video...");
 
+      // Sequential polling (same pattern as Long Take): the status endpoint
+      // persists the take inside the poll when it completes, so overlapping
+      // polls could double-persist during that window. The chain schedules
+      // the next poll only after the previous completes; the activeVideoJob
+      // guard stops it if generation is reset or replaced mid-flight.
       let pollErrors = 0;
-      pollRef.current = window.setInterval(async () => {
+      const pollOnce = async (): Promise<void> => {
+        if (!isCurrent()) return;
         try {
           const st = await checkShotVideoStatus(resp.job_id, selectedModelId);
+          if (!isCurrent()) return;
           pollErrors = 0;
           if (st.status === "completed" && st.video_url) {
             if (pollRef.current) {
-              window.clearInterval(pollRef.current);
+              window.clearTimeout(pollRef.current);
               pollRef.current = null;
             }
             setStatus("Take generated!");
@@ -1034,34 +1216,44 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                 console.error("Failed to refetch shots:", e);
               }
             }
+            return;
           } else if (st.status === "failed") {
             if (pollRef.current) {
-              window.clearInterval(pollRef.current);
+              window.clearTimeout(pollRef.current);
               pollRef.current = null;
             }
             setError(st.error_message || "Generation failed");
             stopElapsedTimer();
             setGenerating(false);
             setActiveVideoJob(null);
+            return;
           } else {
             setStatus(`Status: ${st.status}...`);
           }
         } catch (err) {
+          if (!isCurrent()) return;
           pollErrors++;
           console.error("Poll error:", err);
           if (pollErrors >= 5) {
             if (pollRef.current) {
-              window.clearInterval(pollRef.current);
+              window.clearTimeout(pollRef.current);
               pollRef.current = null;
             }
             setError("Lost connection to backend while polling. The video may still be generating — refresh later.");
             stopElapsedTimer();
             setGenerating(false);
             setActiveVideoJob(null);
+            return;
           }
         }
-      }, 3000);
+        // Schedule the next poll only after this one completes (no overlap).
+        if (isCurrent() && useStudioStore.getState().activeVideoJob?.job_id === resp.job_id) {
+          pollRef.current = window.setTimeout(pollOnce, 3000);
+        }
+      };
+      pollRef.current = window.setTimeout(pollOnce, 3000);
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : "Failed to generate");
       stopElapsedTimer();
       setGenerating(false);
@@ -1217,6 +1409,48 @@ export function CameraDirector({ projectId }: { projectId: string }) {
           </div>
         </div>
 
+        {/* ===== Continuity Chain (read-only visualization) ===== */}
+        {selectedShot && (continuitySource?.last_frame_path || sceneEstablishingFrame) && (
+          <div className="mb-4 p-2.5 bg-studio-panel/60 rounded-lg border border-studio-border/70">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Route className="w-3.5 h-3.5 text-studio-accent" />
+              <span className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
+                Continuity Chain
+              </span>
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Chain source: previous shot's last frame */}
+              {continuitySource?.last_frame_path && (
+                <div className="flex items-center gap-2">
+                  <div className="relative w-12 h-8 rounded overflow-hidden bg-studio-bg border border-studio-border shrink-0">
+                    <img src={continuitySource.last_frame_path} alt="" className="w-full h-full object-cover" />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[10px] text-studio-text truncate max-w-[140px]">
+                      {continuitySource.name || "Previous shot"}
+                    </span>
+                    <span className={"text-[9px] " + (chainWillApply ? "text-studio-success" : "text-studio-muted/60")}>
+                      {chainWillApply ? "→ anchors first frame" : firstFramePath ? "first frame set" : skipContinuity ? "skipped" : "chain ready"}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {/* Scene identity anchor: establishing frame */}
+              {sceneEstablishingFrame && (
+                <div className="flex items-center gap-2">
+                  <div className="relative w-12 h-8 rounded overflow-hidden bg-studio-bg border border-studio-border shrink-0">
+                    <img src={sceneEstablishingFrame} alt="" className="w-full h-full object-cover" />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[10px] text-studio-text">Establishing frame</span>
+                    <span className="text-[9px] text-studio-muted/60">scene identity lock</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ===== Mode Tabs ===== */}
         <div className="flex gap-1 mb-3 p-0.5 bg-studio-panel rounded-lg border border-studio-border">
           {availableModes.map((m) => {
@@ -1342,7 +1576,13 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                     type="image"
                     value={firstFramePath}
                     onPick={() => setActivePicker("firstFrame")}
-                    onClear={() => setFirstFramePath(null)}
+                    onClear={() => {
+                      firstFrameClearedRef.current = true;
+                      setFirstFramePath(null);
+                      // Clearing the first frame activates the backend
+                      // last-frame chain — re-enable last-frame auto-fill.
+                      lastFrameAutoRef.current = null;
+                    }}
                     placeholder="Pick frame, asset, or image..."
                   />
                 )}
@@ -1723,6 +1963,18 @@ export function CameraDirector({ projectId }: { projectId: string }) {
                   </button>
                 </div>
               </div>
+
+              {/* Establishing frame anchor hint — shown when the first
+                  keyframe is empty and the scene has an establishing frame,
+                  so the user knows the backend will inject it automatically. */}
+              {sceneEstablishingFrame && keyframePaths.length > 0 && !keyframePaths[0] && !skipContinuity && (
+                <div className="flex items-center gap-2 px-2.5 py-1.5 bg-studio-accent/5 rounded-lg border border-studio-accent/20">
+                  <img src={sceneEstablishingFrame} alt="" className="w-8 h-6 rounded object-cover border border-studio-border shrink-0" />
+                  <span className="text-[10px] text-studio-muted">
+                    First keyframe will use the scene's establishing frame for continuity
+                  </span>
+                </div>
+              )}
 
               {/* Progress indicator during generation */}
               {longTakeProgress && (

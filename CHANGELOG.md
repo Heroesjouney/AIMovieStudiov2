@@ -10,6 +10,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Long Take Scene Continuity
+- **Scene context prompt prefix** — Long Take segments now inherit the same scene-context prompt prefix as regular video generation: scene description, time of day, mood, lighting, and character names are prepended to the global prompt so every segment shares the scene's visual identity. A new `_build_scene_context_prefix()` helper centralizes this logic so Long Take and regular video don't drift apart.
+- **Establishing frame injection** — When the user has not supplied a first keyframe image, the scene's establishing frame is automatically injected as the first keyframe. The long take starts from the scene's established composition instead of a model-invented one. Injection happens before T2I identification so the injected frame doesn't trigger text-to-image generation.
+- **Reference images for Long Take segments** — `LongTakeRequest` now accepts `reference_image_paths`. The establishing frame is auto-injected as a reference image for every segment (scene identity lock), matching the regular video path. User-provided reference images are merged with the establishing frame. Each segment's `VideoGenerationRequest` now carries `reference_image_paths` through to the driver, so FLF2V workflows with reference-image placeholders are populated instead of stripped.
+- **Frontend establishing-frame hint** — Camera Director shows a small indicator below the keyframe cards when the establishing frame will be automatically used as the first long-take keyframe. Only visible when Long Take mode is on, the first keyframe is empty, the scene has an establishing frame, and continuity isn't skipped.
+- **`skip_continuity` honored** — All Long Take scene-continuity features (prompt prefix, establishing-frame injection, reference-image injection) are gated on `skip_continuity`. Freestyle long takes and explicit opt-out preserve the original behavior.
+
+### Fixed
+
+#### Polling Race Conditions (Sequential Polling)
+- **Overlapping async polling eliminated** — All 10 polling surfaces across the app previously used `setInterval(async () => ...)` patterns that could overlap requests when a status call took longer than the polling interval. Since status endpoints mutate state (persist takes, advance segments, download audio, save assets), overlapping polls could double-persist, double-download, or race on file writes. Every polling surface now uses a sequential `setTimeout` chain that schedules the next poll only after the previous completes.
+  - `useGenerationPolling.ts` (shared hook) — sequential chain with cross-instance liveness guard
+  - `CameraDirector.tsx` — 3 pollers (long take, regular video, resume) converted
+  - `GenerationPanel.tsx` — 2 pollers (resume, generate) converted
+  - `DialoguePanel.tsx` — 3 pollers (speech, music, foley) converted
+  - `AudioPanel.tsx` — TTS poller converted
+  - `AssetDetailPanel.tsx` — 2 pollers (analysis, sheet) converted
+  - `TimelineEditor.tsx` — render poll converted
+
+#### Shared Polling Hook Ownership
+- **Cross-instance liveness guard** — The shared `useGenerationPolling` hook now tracks the active timer ID in a module-level map. The poll chain re-schedules only if its own timer ID is still the registered one for the job. This single guard handles every stop path: `stopPolling()`, store-sync cleanup, takeover from another instance, and `reset()`.
+- **Stale completion rejection** — A `runRef` counter invalidates completion callbacks from old hook instances so a previous instance can't fire `onComplete` or cancel a replacement instance's polling.
+- **Ownership-aware reset** — `reset()` only removes the active frame job from the store if the current instance owns it, preventing a stale instance from clearing a replacement's job.
+- **Elapsed timer lifecycle** — The elapsed timer now starts and stops in the correct order and is cleared alongside the poll timer on `stopPolling()`.
+
+#### Panel Cleanup & Unmount Safety
+- **Polling cannot restart after unmount** — `GenerationPanel`, `CameraDirector`, `AudioPanel`, and `TimelineEditor` now use `mountedRef` / generation-token guards checked after every `await`. A delayed response arriving after unmount or reset is discarded without scheduling a new poll.
+- **DialoguePanel dependency array fix** — The speech/music/foley poll effects previously depended on the full job object, which restarted the interval on every progress update. The dependency array now keys on `jobId` and terminal status, keeping the chain uninterrupted during progress.
+
+#### Audio Finalization Concurrency
+- **`_audio_status_inflight` guard** — `get_audio_job_status` now tracks in-flight status requests per job. Concurrent polls return `processing` while another request is finalizing, preventing double-downloads.
+- **`finalizing` state transition** — The job is marked `finalizing` before the audio download begins. Subsequent polls see `finalizing` and skip the driver check, returning the in-progress state until the download finishes.
+- **Filesystem/download failure recovery** — Filesystem errors or download failures during finalization now produce a terminal `failed` status instead of leaving the job stuck in `finalizing`.
+- **Cancelled download is retryable** — If the download is cancelled (e.g. `CancelledError`), the job is restored to `processing` so a subsequent poll can retry. The inflight set is always cleared in `finally`.
+- **Return copy, not reference** — `get_audio_job_status` now returns `dict(job)` so callers can't mutate the in-memory job store.
+
+#### Camera Director First-Frame Clearing
+- **Intentional clear persists across refreshes** — A deliberately cleared I2V first frame (to keep the backend last-frame chain active) now survives same-shot refreshes and shot switching. `firstFrameClearedRef` tracks the user's intent; `firstFrameOriginShotRef` tracks which shot the current frame belongs to.
+- **Stale automatic frames refresh** — A first frame left over from a different shot is refreshed to the new shot's frame on shot change, unless the user deliberately cleared it.
+- **I2V validation gate** — I2V validation now allows generation when the backend continuity chain will provide a valid anchor, even if the first-frame slot is empty. It still rejects I2V when neither a picked frame nor a chain anchor is available.
+
+#### Long Take Retry & Terminal Handling
+- **Retry seed variation** — Retried long-take segments now use `seed = base_seed + seg_idx + retry_count * 10000`, so a failed attempt isn't deterministically repeated. The first attempt keeps the original seed exactly (`retry_count` defaults to 0).
+- **Terminal grace re-delivery** — `completed`, `failed`, and `partial_failure` statuses are re-delivered once before the job is removed from memory. A lost response no longer surfaces as a 404 on the next poll.
+- **`partial_failure` early-return** — The status endpoint returns early on terminal statuses, preventing grace polls from re-running segment/retry logic (which would duplicate partial-take saves).
+
+#### Continuity Chain Visualizer
+- **Read-only continuity visualization** — Camera Director now shows a continuity chain panel when a previous shot's last frame or the scene's establishing frame is available. Displays the chain source (previous shot name + last frame thumbnail) and the scene identity anchor (establishing frame thumbnail), with a status line indicating whether the chain will anchor this generation.
+
+---
+
+## [Previous Release]
+
+### Added
+
 #### Configurable ComfyUI Model Paths
 - **Models Directory setting** — Set the base `models` folder for your ComfyUI installation in Settings → ComfyUI Server → Models Directory. The app derives `loras/`, `checkpoints/`, `unet/`, and `diffusion_models/` subdirectories automatically. No `.env` editing required.
 - **LoRAs Directory override** — Optional field to point LoRAs to a non-standard path if your setup stores them outside `{models_dir}/loras/`.

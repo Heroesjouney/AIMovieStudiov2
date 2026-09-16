@@ -139,6 +139,63 @@ def _save_scenes(project_id: str, scenes: List[dict]):
         json.dump(scenes, f, indent=2, default=str)
 
 
+def _build_scene_context_prefix(shot: dict, scene_obj: dict, prompt: str) -> str:
+    """Build a scene context prompt prefix for visual identity continuity.
+
+    Prepends scene description, time of day, mood, lighting, and character
+    names to the prompt so all shots in the same scene share visual identity
+    even if the user's prompt is brief. Returns the original prompt unchanged
+    if no context applies.
+    """
+    context_parts = []
+    scene_desc = scene_obj.get("description", "")
+    if scene_desc:
+        context_parts.append(scene_desc)
+    tod = scene_obj.get("time_of_day", "")
+    if tod:
+        tod_labels = {
+            "dawn": "dawn light", "morning": "morning light", "day": "daytime",
+            "golden_hour": "golden hour", "dusk": "dusk", "night": "nighttime",
+            "interior": "interior setting",
+        }
+        tod_label = tod_labels.get(tod, tod.replace("_", " "))
+        if tod_label not in prompt.lower():
+            context_parts.append(tod_label)
+    mood = scene_obj.get("mood", "")
+    if mood and mood != "neutral":
+        mood_labels = {
+            "tense": "tense atmosphere", "joyful": "joyful atmosphere",
+            "melancholic": "melancholic atmosphere", "mysterious": "mysterious atmosphere",
+            "action": "high energy", "romantic": "romantic atmosphere",
+            "horror": "dark horror atmosphere",
+        }
+        mood_label = mood_labels.get(mood, f"{mood} mood")
+        if mood_label not in prompt.lower():
+            context_parts.append(mood_label)
+    lighting = scene_obj.get("lighting", "")
+    if lighting and lighting != "natural":
+        lighting_labels = {
+            "low_key": "low-key lighting", "high_key": "high-key lighting",
+            "rembrandt": "Rembrandt lighting", "split": "split lighting",
+            "backlit": "backlit lighting", "practical": "practical lighting",
+            "chiaroscuro": "chiaroscuro lighting", "golden_hour": "golden hour lighting",
+            "blue_hour": "blue hour lighting", "neon": "neon lighting",
+            "moonlight": "moonlight",
+        }
+        light_label = lighting_labels.get(lighting, lighting.replace("_", " "))
+        if light_label not in prompt.lower():
+            context_parts.append(light_label)
+    for a in shot.get("assets", []):
+        role = a.get("asset_type", a.get("role", ""))
+        name = a.get("asset_name", "")
+        if role == "character" and name and name.lower() not in prompt.lower():
+            context_parts.append(f"featuring {name}")
+    if context_parts:
+        prefix = ", ".join(context_parts)
+        return f"{prefix}. {prompt}"
+    return prompt
+
+
 def _load_assets(project_id: str) -> List[dict]:
     idx = _project_dir(project_id) / "assets.json"
     if idx.exists():
@@ -1778,6 +1835,35 @@ async def generate_long_take(req: LongTakeRequest):
     kf_paths = list(req.keyframe_paths) + [""] * (n_keyframes - len(req.keyframe_paths))
     kf_prompts = list(req.keyframe_prompts) + [""] * (n_keyframes - len(req.keyframe_prompts))
 
+    # --- Scene continuity for Long Take ---
+    # 1. Apply scene context prompt prefix (description, time of day, mood,
+    #    lighting, character names) so all segments share visual identity —
+    #    same logic as the regular video path.
+    # 2. Inject the scene's establishing frame as the first keyframe image
+    #    when the user hasn't provided one, so the long take starts from the
+    #    scene's established composition. This happens before T2I
+    #    identification so the injected frame doesn't trigger T2I generation.
+    # 3. Auto-inject the establishing frame as a reference image for every
+    #    segment (scene identity lock), matching the regular video path.
+    effective_prompt = req.prompt
+    effective_ref_images = list(req.reference_image_paths or [])
+    if not req.skip_continuity and shot.get("scene_id"):
+        scenes = _load_scenes(req.project_id)
+        scene_obj = next((s for s in scenes if s["id"] == shot["scene_id"]), None)
+        if scene_obj:
+            effective_prompt = _build_scene_context_prefix(shot, scene_obj, req.prompt)
+            if effective_prompt != req.prompt:
+                print(f"[long-take] prompt prefix continuity — added scene context")
+            est_frame = scene_obj.get("establishing_frame_path")
+            if est_frame and n_keyframes > 0 and not kf_paths[0]:
+                kf_paths[0] = est_frame
+                print(f"[long-take] injected establishing frame as first keyframe: {est_frame}")
+            # Scene identity lock: establishing frame as reference image for
+            # every segment (same as the regular video path).
+            if est_frame and est_frame not in effective_ref_images:
+                effective_ref_images.insert(0, est_frame)
+                print(f"[long-take] auto-adding establishing frame as ref image: {est_frame}")
+
     # Identify which keyframes need T2I generation (no image path)
     t2i_needed = [i for i in range(n_keyframes) if not kf_paths[i]]
     if t2i_needed:
@@ -1790,12 +1876,12 @@ async def generate_long_take(req: LongTakeRequest):
     segments = []
     for i in range(n_keyframes - 1):
         kf_prompt = (kf_prompts[i + 1] or "").strip() if i + 1 < len(kf_prompts) else ""
-        if kf_prompt and req.prompt.strip():
-            seg_prompt = f"{req.prompt}. {kf_prompt}"
+        if kf_prompt and effective_prompt.strip():
+            seg_prompt = f"{effective_prompt}. {kf_prompt}"
         elif kf_prompt:
             seg_prompt = kf_prompt
         else:
-            seg_prompt = req.prompt
+            seg_prompt = effective_prompt
         segments.append({
             "index": i,
             "first_frame": "",  # Will be filled after T2I
@@ -1826,12 +1912,13 @@ async def generate_long_take(req: LongTakeRequest):
         "segments": segments,
         "segment_duration": req.segment_duration,
         "total_duration": total_duration,
-        "prompt": req.prompt,
+        "prompt": effective_prompt,
         "negative_prompt": req.negative_prompt,
         "aspect_ratio": ar,
         "camera_movement": req.camera_movement,
         "extra_params": req.extra_params,
         "base_seed": base_seed,
+        "reference_image_paths": effective_ref_images,
         "current_segment": 0,
         "segment_job_ids": [],
         "segment_video_urls": [],
@@ -1883,6 +1970,10 @@ async def _start_next_segment(long_take_job_id: str):
         job["error"] = f"Driver {job['model_id']} not found"
         return
 
+    # Vary the seed on retries so a failed attempt isn't deterministically
+    # repeated — the first attempt keeps the original seed exactly.
+    retry_count = job.get("segment_retries", {}).get(str(seg_idx), 0)
+
     # Build the video generation request for this segment
     gen_req = VideoGenerationRequest(
         prompt=seg.get("prompt", job["prompt"]),
@@ -1890,9 +1981,10 @@ async def _start_next_segment(long_take_job_id: str):
         mode=VideoGenerationMode.I2V,
         duration_seconds=job["segment_duration"],
         aspect_ratio=job["aspect_ratio"],
-        seed=job["base_seed"] + seg_idx,  # Increment seed per segment for variety while staying consistent
+        seed=job["base_seed"] + seg_idx + retry_count * 10000,
         first_frame_path=seg["first_frame"],
         last_frame_path=seg["last_frame"],
+        reference_image_paths=job.get("reference_image_paths", []),
         camera_movement=job["camera_movement"],
         extra_params=job["extra_params"],
     )
@@ -1987,16 +2079,32 @@ async def check_long_take_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Long take job not found")
 
-    if job["status"] == "failed":
-        return {"status": "failed", "error": job["error"], "progress": {"current": job["current_segment"], "total": len(job["segments"])}}
-
-    if job["status"] == "completed":
+    # Terminal statuses (completed / failed / partial_failure) are re-delivered
+    # once before cleanup — a grace re-delivery covers a lost response so the
+    # frontend doesn't see a 404 for a job that actually finished. Returning
+    # early also keeps a grace poll from re-running the segment/retry logic
+    # (which would duplicate partial-take saves).
+    if job["status"] in ("completed", "failed", "partial_failure"):
+        job["terminal_deliveries"] = job.get("terminal_deliveries", 0) + 1
+        if job["terminal_deliveries"] >= 2:
+            _long_take_jobs.pop(job_id, None)
+        if job["status"] == "failed":
+            return {"status": "failed", "error": job["error"], "progress": {"current": job["current_segment"], "total": len(job["segments"])}}
+        if job["status"] == "completed":
+            return {
+                "status": "completed",
+                "video_url": job.get("final_video_url"),
+                "take_id": job["take_id"],
+                "shot_id": job["shot_id"],
+                "progress": {"current": len(job["segments"]), "total": len(job["segments"])},
+            }
         return {
-            "status": "completed",
+            "status": "partial_failure",
+            "error": job.get("error"),
             "video_url": job.get("final_video_url"),
             "take_id": job["take_id"],
             "shot_id": job["shot_id"],
-            "progress": {"current": len(job["segments"]), "total": len(job["segments"])},
+            "progress": {"current": job["current_segment"], "total": len(job["segments"])},
         }
 
     if job["status"] == "stitching":
@@ -2213,8 +2321,8 @@ async def check_long_take_status(job_id: str):
         result["take_id"] = job["take_id"]
         result["shot_id"] = job["shot_id"]
 
-    # Clean up completed/failed/partial_failure jobs from memory after returning status
-    if job["status"] in ("completed", "failed", "partial_failure"):
-        _long_take_jobs.pop(job_id, None)
+    # NOTE: terminal cleanup is handled by the early-return at the top of
+    # this endpoint (with grace re-delivery) — the job stays in memory for
+    # one more poll so a lost response doesn't surface as a 404.
 
     return result
