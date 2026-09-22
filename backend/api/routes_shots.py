@@ -17,6 +17,7 @@ from datetime import datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
 from core.schemas.shot import (
     Shot, ShotCreateRequest, ShotType, ShotStatus,
@@ -31,7 +32,7 @@ from core.schemas.camera import (
 )
 from core.drivers import get_image_driver, get_video_driver
 from core.drivers.base import VideoGenerationRequest, VideoGenerationMode, AspectRatio, GenerationStatus
-from core.logic.prompt_builder import build_prompt, parse_dialogue_tags
+from core.logic.prompt_builder import build_prompt, parse_dialogue_tags, build_qwen_reference_prompt, character_name_matches
 
 router = APIRouter()
 VAULT_DIR = Path(__file__).parent.parent / "assets"
@@ -290,6 +291,36 @@ async def create_shot(req: ShotCreateRequest):
 # Shot Frame Generation (must be before /{project_id}/{shot_id} routes)
 # =============================================================================
 
+def _shot_reference_paths(
+    shot_assets: List[dict], asset_map: dict, continuity_paths: List[str],
+    establishing_frame: Optional[str], explicit_paths: Optional[List[str]], model_id: str,
+    reference_limit: Optional[int] = None,
+) -> List[str]:
+    required = [establishing_frame] if establishing_frame else []
+    for asset in sorted(shot_assets, key=lambda a: a.get("role", a.get("asset_type")) != "location"):
+        image = asset_map.get(asset.get("asset_id"), {}).get("primary_image") or asset.get("image_path")
+        if not image:
+            raise HTTPException(status_code=400, detail=f"Recipe asset '{asset.get('asset_name') or asset.get('asset_id')}' has no reference image. Assign an image or remove it from the shot.")
+        if image not in required:
+            required.append(image)
+    for image in explicit_paths or []:
+        if image and image not in required:
+            required.append(image)
+    limit = reference_limit if reference_limit is not None else (3 if model_id == "qwen_image_edit" else None)
+    if limit is not None and len(required) > limit:
+        model_name = "Qwen Image Edit" if model_id == "qwen_image_edit" else model_id
+        raise HTTPException(
+            status_code=400,
+            detail=f"{model_name} supports {limit} reference images, but this shot needs {len(required)} "
+            "including recipe assets, linked images, and the establishing frame. "
+            "Reduce the shot's assets or linked images before generating; no recipe images were dropped.",
+        )
+    for image in continuity_paths:
+        if image not in required and (limit is None or len(required) < limit):
+            required.append(image)
+    return required
+
+
 @router.post("/frame")
 async def generate_shot_frame(req: ShotFrameGenerateRequest):
     """Generate a storyboard frame for a shot using the selected image driver."""
@@ -299,7 +330,9 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
 
     # Look up the shot to get asset metadata (types and names)
     shot, shot_project_id = _find_shot_global(req.shot_id)
-    shot_assets = (shot or {}).get("assets", [])
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+    shot_assets = shot.get("assets", [])
 
     # Load full asset records early (needed for scene context and asset descriptions)
     all_assets = _load_assets(shot_project_id) if shot else []
@@ -362,7 +395,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             if mood:
                 mood_labels = {
                     "neutral": "balanced composition",
-                    "tense": "tense atmosphere, tight framing",
+                    "tense": "tense atmosphere",
                     "joyful": "joyful atmosphere, warm tones",
                     "melancholic": "melancholic atmosphere, muted tones",
                     "mysterious": "mysterious atmosphere, shadows and fog",
@@ -399,7 +432,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     # Detect if the user's prompt focuses on a specific character by name.
     # If so, only include that character's reference image and enrichment text.
     user_prompt_lower = req.prompt.lower().strip()
-    focused_character_name = None
+    focused_character_names = []
 
     location_image = None
     character_images = []
@@ -416,15 +449,11 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
         display_name = name
         if name and "generated" in name.lower():
             display_name = desc if desc else name
-        if display_name:
-            name_lower = display_name.lower()
-            name_words = name_lower.split()
-            if name_lower in user_prompt_lower or (name_words and name_words[0] in user_prompt_lower):
-                focused_character_name = display_name
-                break
+        if character_name_matches(display_name, user_prompt_lower):
+            focused_character_names.append(display_name)
 
-    if focused_character_name and establishing_frame:
-        print(f"[routes_shots] character focus detected: '{focused_character_name}' — filtering other characters")
+    if focused_character_names and establishing_frame:
+        print(f"[routes_shots] named characters: {focused_character_names}")
 
     # Second pass: separate assets by role for multi-reference workflow.
     # Prompt enrichments are built by build_prompt() — this pass only
@@ -447,7 +476,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             if name and "generated" in name.lower():
                 display_name = desc if desc else name
             # Skip non-focused characters when a focus is detected (subsequent shots only)
-            if focused_character_name and establishing_frame and display_name != focused_character_name:
+            if focused_character_names and establishing_frame and display_name not in focused_character_names:
                 print(f"[routes_shots] skipping character '{display_name}' (not focused)")
                 continue
             if img:
@@ -555,7 +584,11 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             )
             print(f"[routes_shots] POV shot: skipping <sks> tag, using descriptive text only")
         else:
-            effective_prompt = req.prompt_override.strip() if req.prompt_override else req.prompt
+            effective_prompt = build_prompt(
+                model_id=req.model_id, scene_context=scene_context, shot_assets=shot_assets,
+                asset_map=asset_map, action_prefix=action_prefix, user_prompt=req.prompt,
+                is_pov=True, prompt_override=req.prompt_override,
+            )
 
     # Find previous shot in the same scene for action continuity
     prev_frame_image = None
@@ -609,6 +642,15 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     for r in (req.reference_image_paths or []):
         if r not in ref_paths:
             ref_paths.append(r)
+
+    ref_paths = _shot_reference_paths(
+        shot_assets, asset_map, ref_paths, establishing_frame, req.reference_image_paths, req.model_id,
+        reference_limit=driver.get_info().max_reference_images,
+    )
+    if req.model_id == "qwen_image_edit" and not (req.prompt_override and req.prompt_override.strip()):
+        effective_prompt = build_qwen_reference_prompt(effective_prompt, shot_assets, asset_map, ref_paths, establishing_frame)
+    if len(effective_prompt) > 4000:
+        raise HTTPException(status_code=400, detail="The combined shot prompt and recipe instructions exceed 4000 characters. Shorten the prompt or asset descriptions.")
 
     print(f"[routes_shots] characters={len(character_images)}, location={'yes' if location_image else 'no'}, has_establishing={'yes' if establishing_frame else 'no'}, action={'yes' if has_action else 'no'}")
     print(f"[routes_shots] effective_prompt={effective_prompt}")
@@ -684,17 +726,27 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     )
 
     response = await driver.generate(gen_req)
+    if response.status == GenerationStatus.FAILED:
+        return response.model_dump()
 
     # Store recipe in shot
     if shot:
+        sampler = next(iter(response.metadata.get("samplers", [])), {})
         recipe = GenerationRecipe(
             resolved_prompt=effective_prompt,
-            resolved_negative_prompt=req.negative_prompt,
+            resolved_negative_prompt=effective_negative,
             seed=effective_seed,
             model_id=req.model_id,
+            workflow_hash=response.metadata.get("workflow_hash"),
             params={
+                "user_prompt": req.prompt,
+                "linked_reference_paths": req.reference_image_paths,
+                "execution": response.metadata,
+                "checkpoint_override": extra_params.get("checkpoint_override"),
+                "megapixels": extra_params.get("megapixels"),
                 "width": req.width, "height": req.height,
-                "cfg": req.cfg, "steps": req.steps,
+                "cfg": sampler.get("cfg", extra_params.get("cfg", req.cfg)),
+                "steps": sampler.get("steps", extra_params.get("steps", req.steps)),
                 "horizontal_angle": req.horizontal_angle,
                 "vertical_angle": req.vertical_angle,
                 "zoom": req.zoom,
@@ -920,50 +972,74 @@ async def generate_shot_variation(req: ShotVariationRequest):
         "updated_at": now,
     }
 
-    shots = _load_shots(req.project_id)
-    shots.append(new_shot)
-    _save_shots(req.project_id, shots)
-
-    # Build reference paths: source frame first, then bound asset images
-    ref_paths = [source_shot["frame_image_path"]]
-    for a in inherited_assets:
-        if a.get("image_path") and a["image_path"] not in ref_paths:
-            ref_paths.append(a["image_path"])
-
-    # Generate the frame using the edit driver (supports reference images)
+    source_recipe = source_shot.get("generation_recipe") or {}
+    source_params = source_recipe.get("params") or {}
+    same_model = source_recipe.get("model_id") == req.model_id
+    linked_paths = req.reference_image_paths
+    if linked_paths is None:
+        linked_paths = source_params.get("linked_reference_paths") or []
     driver = get_image_driver(req.model_id)
     if not driver:
         raise HTTPException(status_code=400, detail=f"Unknown model: {req.model_id}")
 
-    from core.drivers.base import ImageGenerationRequest
-    gen_req = ImageGenerationRequest(
-        prompt=req.prompt,
-        negative_prompt=req.negative_prompt,
-        width=req.width,
-        height=req.height,
-        seed=req.seed,
-        reference_image_paths=ref_paths,
+    # Build reference paths: source frame first, then bound asset images
+    asset_map = {a["id"]: a for a in _load_assets(req.project_id)}
+    ref_paths = _shot_reference_paths(
+        inherited_assets, asset_map, [], source_shot["frame_image_path"], linked_paths, req.model_id,
+        reference_limit=driver.get_info().max_reference_images,
     )
+    effective_prompt = req.prompt
+    if req.model_id == "qwen_image_edit":
+        effective_prompt = build_qwen_reference_prompt(req.prompt, inherited_assets, asset_map, ref_paths, source_shot["frame_image_path"])
+    if len(effective_prompt) > 4000:
+        raise HTTPException(status_code=400, detail="The variation prompt and recipe instructions exceed 4000 characters.")
+    effective_seed = req.seed if req.seed is not None else random.randint(0, 2**32 - 1)
+    effective_negative = req.negative_prompt if req.negative_prompt is not None else source_recipe.get("resolved_negative_prompt")
+    extra_params = {key: source_params[key] for key in ("cfg", "steps", "loras", "checkpoint_override", "megapixels")
+                    if same_model and source_params.get(key) is not None}
+    extra_params.update(req.extra_params)
+    denoise = req.denoise if req.denoise is not None else (source_recipe.get("denoise") if same_model else None)
+
+    # Generate the frame using the edit driver (supports reference images)
+    from core.drivers.base import ImageGenerationRequest
+    try:
+        gen_req = ImageGenerationRequest(
+            prompt=effective_prompt,
+            negative_prompt=effective_negative,
+            width=req.width if req.width is not None else source_params.get("width") or 1024,
+            height=req.height if req.height is not None else source_params.get("height") or 1024,
+            seed=effective_seed,
+            reference_image_paths=ref_paths,
+            denoise_strength=denoise,
+            extra_params=extra_params,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid variation settings: {exc.errors()[0]['msg']}") from exc
     response = await driver.generate(gen_req)
+    if response.status == GenerationStatus.FAILED:
+        return {"shot": new_shot, "generation": response.model_dump()}
 
     # Store recipe
+    sampler = next(iter(response.metadata.get("samplers", [])), {})
     recipe = GenerationRecipe(
-        resolved_prompt=req.prompt,
-        resolved_negative_prompt=req.negative_prompt,
-        seed=req.seed,
+        resolved_prompt=effective_prompt,
+        resolved_negative_prompt=effective_negative,
+        seed=effective_seed,
         model_id=req.model_id,
-        params={"width": req.width, "height": req.height},
+        workflow_hash=response.metadata.get("workflow_hash"),
+        params={**extra_params, "width": gen_req.width, "height": gen_req.height, "user_prompt": req.prompt,
+                "linked_reference_paths": linked_paths, "execution": response.metadata,
+                "cfg": sampler.get("cfg", extra_params.get("cfg")), "steps": sampler.get("steps", extra_params.get("steps"))},
         reference_paths=ref_paths,
+        denoise=denoise,
     )
     new_shot["generation_recipe"] = recipe.model_dump()
     new_shot["status"] = ShotStatus.PLANNED.value
 
     # Update shot in storage
     shots = _load_shots(req.project_id)
-    for s in shots:
-        if s["id"] == new_shot_id:
-            s.update(new_shot)
-            break
+    new_shot["sequence_order"] = len(shots)
+    shots.append(new_shot)
     _save_shots(req.project_id, shots)
 
     return {
@@ -1016,11 +1092,15 @@ async def generate_camera_angles(req: MultiAngleRequest):
                 "sub_job_id": response.job_id,
                 "angle": angle.value,
                 "status": response.status,
+                "error_message": response.error_message,
             })
 
+        all_failed = all(sub["status"] == GenerationStatus.FAILED for sub in sub_jobs)
         return {
             "job_id": parent_job_id,
-            "status": "processing",
+            "status": "failed" if all_failed else "processing",
+            "error_message": (next((sub["error_message"] for sub in sub_jobs if sub["error_message"]), None)
+                              or "No camera-angle jobs were submitted") if all_failed else None,
             "method": "qwen_multiangle",
             "sub_jobs": sub_jobs,
             "angles": [a.value for a in req.angles],

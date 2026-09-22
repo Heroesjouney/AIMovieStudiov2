@@ -10,6 +10,7 @@ Requires:
 """
 
 import asyncio
+import hashlib
 import json
 import uuid
 import os
@@ -132,10 +133,14 @@ class ComfyImageDriver(ImageDriver):
             data = aiohttp.FormData()
             data.add_field("image", f, filename=filename)
             async with session.post(f"{self.comfy_url}/upload/image", data=data) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    return result.get("name", filename)
-        return filename
+                if resp.status != 200:
+                    raise ValueError(f"Reference image upload failed (HTTP {resp.status}): {filename}")
+                result = await resp.json()
+                name = result.get("name")
+                if not isinstance(name, str) or not name:
+                    raise ValueError(f"Reference image upload returned no filename: {filename}")
+                subfolder = result.get("subfolder", "")
+                return f"{subfolder}/{name}" if subfolder else name
 
     def _resize_to_aspect(self, image_path: str, target_width: int, target_height: int) -> str:
         """Resize an image to target dimensions using cover+crop. Returns new path."""
@@ -214,10 +219,10 @@ class ComfyImageDriver(ImageDriver):
             # Prompt injection — handle CLIPTextEncode nodes
             if ct == "CLIPTextEncode":
                 text = inputs.get("text", "")
-                if "PROMPT_PLACEHOLDER" in text or "{prompt}" in text or "__PROMPT__" in text:
-                    inputs["text"] = prompt
-                elif "NEGATIVE_PROMPT_PLACEHOLDER" in text or "__NEGATIVE__" in text:
+                if "NEGATIVE_PROMPT_PLACEHOLDER" in text or "{negative_prompt}" in text or "__NEGATIVE__" in text:
                     inputs["text"] = negative or ""
+                elif "PROMPT_PLACEHOLDER" in text or "{prompt}" in text or "__PROMPT__" in text:
+                    inputs["text"] = prompt
 
             # Prompt injection — handle TextEncodeQwenImageEdit and TextEncodeQwenImageEditPlus
             elif ct in ("TextEncodeQwenImageEdit", "TextEncodeQwenImageEditPlus"):
@@ -294,6 +299,11 @@ class ComfyImageDriver(ImageDriver):
                 if is_placeholder:
                     load_image_nodes.append((node_id, img_val))
 
+            # Resize first image to target aspect ratio — it determines the VAE latent size
+            elif ct == "ImageScale" and inputs.get("width") == "{width}":
+                inputs["width"] = width // 8 * 8
+                inputs["height"] = height // 8 * 8
+
             # Image scale for Z-Image
             elif ct == "ImageScaleToTotalPixels":
                 if "megapixels" in inputs:
@@ -326,23 +336,41 @@ class ComfyImageDriver(ImageDriver):
             # the same image 3 times (over-constrains generation).
             # Also remove LoadImage nodes with unresolved placeholders to
             # prevent ComfyUI errors from invalid filenames.
-            if len(ref_paths) < 3:
-                nodes_to_remove = []
-                for nid in wf:
-                    node = wf[nid]
-                    if node.get("class_type") in ("TextEncodeQwenImageEdit", "TextEncodeQwenImageEditPlus"):
-                        inputs = node.get("inputs", {})
-                        if len(ref_paths) < 2 and "image2" in inputs:
-                            del inputs["image2"]
-                        if len(ref_paths) < 3 and "image3" in inputs:
-                            del inputs["image3"]
-                    elif node.get("class_type") == "LoadImage":
-                        img_val = str(node.get("inputs", {}).get("image", ""))
-                        # Check if it still has an unresolved placeholder
-                        if img_val.startswith("{") and img_val.endswith("}"):
-                            nodes_to_remove.append(nid)
-                for nid in nodes_to_remove:
-                    del wf[nid]
+            nodes_to_remove = []
+            for nid, node in wf.items():
+                if node.get("class_type") in ("TextEncodeQwenImageEdit", "TextEncodeQwenImageEditPlus"):
+                    inputs = node.get("inputs", {})
+                    if len(ref_paths) < 2 and "image2" in inputs:
+                        del inputs["image2"]
+                    if len(ref_paths) < 3 and "image3" in inputs:
+                        del inputs["image3"]
+                elif node.get("class_type") == "LoadImage":
+                    img_val = str(node.get("inputs", {}).get("image", ""))
+                    # Check if it still has an unresolved placeholder
+                    if img_val.startswith("{") and img_val.endswith("}"):
+                        nodes_to_remove.append(nid)
+            for nid in nodes_to_remove:
+                del wf[nid]
+            while True:
+                node_count = len(wf)
+                for nid, node in list(wf.items()):
+                    inputs = node.get("inputs", {})
+                    if node.get("class_type") == "FluxKontextImageScale":
+                        image = inputs.get("image")
+                        if isinstance(image, list) and image[0] not in wf:
+                            del wf[nid]
+                    elif node.get("class_type") == "ImageStitch":
+                        for key in ("image1", "image2"):
+                            image = inputs.get(key)
+                            if isinstance(image, list) and image[0] not in wf:
+                                del inputs[key]
+                        if "image1" not in inputs:
+                            if "image2" in inputs:
+                                inputs["image1"] = inputs.pop("image2")
+                            else:
+                                del wf[nid]
+                if len(wf) == node_count:
+                    break
 
         return wf
 
@@ -358,13 +386,36 @@ class ComfyImageDriver(ImageDriver):
     def category(self) -> DriverCategory:
         return DriverCategory.LOCAL
 
+    def _reference_slots(self, workflow: dict) -> set[int]:
+        pending = [nid for nid, node in workflow.items() if node.get("class_type") in ("SaveImage", "PreviewImage")]
+        reachable = set()
+        while pending:
+            nid = pending.pop()
+            if nid in reachable or nid not in workflow:
+                continue
+            reachable.add(nid)
+            pending.extend(value[0] for value in workflow[nid].get("inputs", {}).values()
+                           if isinstance(value, list) and len(value) == 2 and isinstance(value[0], str))
+        placeholders = {
+            "{input_image}": 0, "{reference_image_path}": 0, "__IMAGE__": 0,
+            "{input_image2}": 1, "{input_image3}": 2,
+            **{f"{{reference_image_{i + 1}}}": i for i in range(4)},
+        }
+        return {index for nid in reachable if workflow[nid].get("class_type") == "LoadImage"
+                for marker, index in placeholders.items()
+                if marker in str(workflow[nid].get("inputs", {}).get("image", ""))}
+
     @property
     def supported_features(self) -> List[str]:
-        if self._model_id in ("qwen_image", "comfy_image", "z_image", "krea2", "flux2"):
-            return ["text_to_image", "image_to_image", "inpainting", "multi_reference"]
-        if self._model_id in ("qwen_image_edit", "qwen_multiangle", "flux2_kontext"):
-            return ["image_to_image", "multi_reference", "multi_angle", "storyboard"]
-        return []
+        features = ["text_to_image"] if self._model_id in ("qwen_image", "comfy_image", "z_image", "krea2", "flux2") else []
+        slots = self._reference_slots(self._load_workflow(self._workflow_i2i))
+        if slots:
+            features.append("image_to_image")
+            if len(slots) > 1:
+                features.append("multi_reference")
+            if self._model_id in ("qwen_image_edit", "qwen_multiangle", "flux2_kontext"):
+                features.extend(["multi_angle", "storyboard"])
+        return features
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
         job_id = str(uuid.uuid4())
@@ -372,30 +423,14 @@ class ComfyImageDriver(ImageDriver):
 
         print(f"[ComfyImageDriver] generate: model={self._model_id}, prompt={request.prompt[:80]}..., refs={request.reference_image_paths}")
 
-        # Resolve and upload each reference image separately (up to 3 for multi-reference workflows)
-        uploaded_refs: List[str] = []
-        if request.reference_image_paths:
-            target_w = request.width or 1344
-            target_h = request.height or 768
-            async with self._get_session() as session:
-                for idx, ref_url in enumerate(request.reference_image_paths[:3]):
-                    local_path = self._resolve_local_path(ref_url)
-                    if local_path:
-                        print(f"[ComfyImageDriver]   resolved {ref_url} -> {local_path}")
-                        # Resize first image to target aspect ratio — it determines the VAE latent size
-                        if idx == 0 and self._model_id == "qwen_image_edit":
-                            local_path = self._resize_to_aspect(local_path, target_w, target_h)
-                        uploaded_name = await self._upload_to_comfy(session, local_path)
-                        print(f"[ComfyImageDriver]   uploaded -> {uploaded_name}")
-                        uploaded_refs.append(uploaded_name)
-                    else:
-                        print(f"[ComfyImageDriver]   could NOT resolve {ref_url}")
-
-        # qwen_image_edit requires a reference image; fall back to qwen_image t2i if none provided
-        if self._model_id == "qwen_image_edit" and not uploaded_refs:
-            print(f"[ComfyImageDriver]   no refs for qwen_image_edit, falling back to qwen_image t2i")
-            workflow_name = "qwen_image"
-        elif self._model_id == "qwen_image_edit":
+        # qwen_image_edit requires a reference image; never silently switch models
+        if self._model_id == "qwen_image_edit" and not request.reference_image_paths:
+            return ImageGenerationResponse(
+                job_id=job_id, status=GenerationStatus.FAILED,
+                error_message="Qwen Image Edit requires a reference image. Add a recipe asset or linked image, "
+                              "or explicitly select a text-to-image model such as Z-Image.",
+            )
+        if self._model_id == "qwen_image_edit":
             shot_type = request.extra_params.get("shot_type")
             if shot_type == "establishing":
                 workflow_name = "qwen_image_edit_establishing"
@@ -403,7 +438,6 @@ class ComfyImageDriver(ImageDriver):
                 workflow_name = "qwen_image_edit"
         else:
             workflow_name = self._workflow_i2i if is_img2img else self._workflow_t2i
-        print(f"[ComfyImageDriver]   workflow={workflow_name}, uploaded_refs={uploaded_refs}")
         workflow = self._load_workflow(workflow_name)
 
         if not workflow:
@@ -412,6 +446,36 @@ class ComfyImageDriver(ImageDriver):
                 status=GenerationStatus.FAILED,
                 error_message=f"Workflow template '{workflow_name}' not found",
             )
+
+        # Resolve and upload each reference image separately (up to 3 for multi-reference workflows)
+        uploaded_refs: List[str] = []
+        slots = self._reference_slots(workflow)
+        if slots and not request.reference_image_paths:
+            return ImageGenerationResponse(
+                job_id=job_id, status=GenerationStatus.FAILED,
+                error_message=f"Workflow '{workflow_name}' requires a reference image. "
+                              "Add an image or explicitly select a text-to-image model.",
+            )
+        if any(i not in slots for i in range(len(request.reference_image_paths))):
+            return ImageGenerationResponse(
+                job_id=job_id, status=GenerationStatus.FAILED,
+                error_message=f"Workflow '{workflow_name}' cannot consume {len(request.reference_image_paths)} reference images "
+                f"({len(slots)} connected image inputs). Choose a compatible image-edit workflow or reduce the references.",
+            )
+        try:
+            local_paths = []
+            for ref_url in request.reference_image_paths:
+                local_path = self._resolve_local_path(ref_url)
+                if not local_path:
+                    raise ValueError(f"Required reference image not found locally: {ref_url}")
+                local_paths.append(local_path)
+            if local_paths:
+                async with self._get_session() as session:
+                    for local_path in local_paths:
+                        uploaded_refs.append(await self._upload_to_comfy(session, local_path))
+        except (OSError, ValueError, aiohttp.ClientError) as exc:
+            return ImageGenerationResponse(job_id=job_id, status=GenerationStatus.FAILED, error_message=str(exc))
+        print(f"[ComfyImageDriver]   workflow={workflow_name}, uploaded_refs={uploaded_refs}")
 
         wf = self._inject_params(
             workflow,
@@ -492,7 +556,16 @@ class ComfyImageDriver(ImageDriver):
         return ImageGenerationResponse(
             job_id=job_id,
             status=GenerationStatus.PROCESSING,
-            metadata={"prompt_id": prompt_id, "workflow": workflow_name},
+            metadata={
+                "prompt_id": prompt_id, "workflow": workflow_name,
+                "workflow_hash": hashlib.sha256(json.dumps(wf, sort_keys=True).encode()).hexdigest(),
+                "samplers": [{key: node["inputs"][key] for key in ("seed", "steps", "cfg", "denoise", "sampler_name", "scheduler")
+                              if key in node["inputs"]} for node in wf.values() if node.get("class_type") == "KSampler"],
+                "canvas": [{key: node["inputs"][key] for key in ("width", "height")}
+                           for node in wf.values() if node.get("class_type") == "ImageScale"
+                           and all(isinstance(node.get("inputs", {}).get(key), int) for key in ("width", "height"))],
+                "loras": [node["inputs"] for node in wf.values() if node.get("class_type") in ("LoraLoader", "LoraLoaderModelOnly")],
+            },
         )
 
     ASSET_SHEET_PROMPTS = {
@@ -854,8 +927,8 @@ class ComfyImageDriver(ImageDriver):
                                     if not found_image:
                                         status_info = history[pid].get("status", {})
                                         status_str = status_info.get("status_str", "")
-                                        if status_str == "error":
-                                            print(f"[ComfyImageDriver] turnaround view FAILED: pid={pid}, status=error")
+                                        if status_str == "error" or status_info.get("completed"):
+                                            print(f"[ComfyImageDriver] turnaround view FAILED: pid={pid}, status={status_str}")
                                             child_results[pid] = "FAILED"
                     
                     # Check for timeout (30 minutes — 5 views at 2-5 min each, sequential)
@@ -892,6 +965,14 @@ class ComfyImageDriver(ImageDriver):
                             metadata={"views": successful_labels, "completed_views": completed_count, "total_views": len(child_prompt_ids), "failed_views": failed_count},
                             error_message=error_msg,
                         )
+                    elif pending_count == 0:
+                        job["status"] = GenerationStatus.FAILED
+                        job["error_message"] = "All turnaround views failed or timed out. No sheet was generated."
+                        return ImageGenerationResponse(
+                            job_id=job_id, status=GenerationStatus.FAILED,
+                            error_message=job["error_message"],
+                            metadata={"completed_views": 0, "total_views": len(child_prompt_ids), "failed_views": failed_count},
+                        )
                     else:
                         return ImageGenerationResponse(
                             job_id=job_id,
@@ -923,7 +1004,17 @@ class ComfyImageDriver(ImageDriver):
                     if resp.status == 200:
                         history = await resp.json()
                         if prompt_id in history:
-                            outputs = history[prompt_id].get("outputs", {})
+                            record = history[prompt_id]
+                            execution_status = record.get("status", {})
+                            if execution_status.get("status_str") == "error":
+                                messages = execution_status.get("messages", [])
+                                failure = next((data for event, data in reversed(messages)
+                                                if event in ("execution_error", "execution_interrupted")), {})
+                                job["status"] = GenerationStatus.FAILED
+                                job["error_message"] = failure.get("exception_message") or "ComfyUI generation failed or was interrupted"
+                                return ImageGenerationResponse(job_id=job_id, status=GenerationStatus.FAILED,
+                                                               error_message=job["error_message"])
+                            outputs = record.get("outputs", {})
                             image_paths = []
                             for node_id, node_output in outputs.items():
                                 if "images" in node_output:
@@ -958,6 +1049,13 @@ class ComfyImageDriver(ImageDriver):
                                     image_urls=image_paths,
                                     image_paths=image_paths,
                                 )
+                            if execution_status.get("completed"):
+                                job["status"] = GenerationStatus.FAILED
+                                job["error_message"] = "ComfyUI completed without producing an image"
+                                return ImageGenerationResponse(job_id=job_id, status=GenerationStatus.FAILED,
+                                                               error_message=job["error_message"])
+                    else:
+                        resp.raise_for_status()
         except Exception as e:
             job["status"] = GenerationStatus.FAILED
             job["error_message"] = str(e)
@@ -1159,11 +1257,18 @@ class ComfyImageDriver(ImageDriver):
         return None
 
     def get_info(self) -> DriverInfo:
+        workflow = self._load_workflow(self._workflow_i2i)
+        reference_count = len(self._reference_slots(workflow))
         return DriverInfo(
             driver_id=self.driver_id,
             display_name=self.driver_name,
             category=self.category,
             supported_features=self.supported_features,
             requires_api_key=False,
+            max_reference_images=reference_count,
+            max_reference_videos=0,
+            max_reference_audio=0,
+            max_total_references=reference_count,
             supports_loras=True,
+            supports_megapixels=any(node.get("class_type") == "ImageScaleToTotalPixels" for node in workflow.values()),
         )

@@ -57,7 +57,7 @@
     "inputs": {
       "image1": ["10", 0],
       "image2": ["11", 0],
-      "match_image_size": "longer_side",
+      "match_image_size": true,
       "direction": "right",
       "spacing_width": 0,
       "spacing_color": "white"
@@ -69,7 +69,7 @@
     "inputs": {
       "image1": ["12", 0],
       "image2": ["13", 0],
-      "match_image_size": "longer_side",
+      "match_image_size": true,
       "direction": "right",
       "spacing_width": 0,
       "spacing_color": "white"
@@ -81,7 +81,7 @@
     "inputs": {
       "image1": ["20", 0],
       "image2": ["21", 0],
-      "match_image_size": "longer_side",
+      "match_image_size": true,
       "direction": "right",
       "spacing_width": 0,
       "spacing_color": "white"

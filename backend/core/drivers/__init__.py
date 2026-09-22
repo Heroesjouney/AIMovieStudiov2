@@ -114,60 +114,11 @@ def list_image_drivers() -> List[DriverInfo]:
     """List all available image drivers with their metadata."""
     drivers = []
     # Local - ComfyUI
-    drivers.append(DriverInfo(
-        driver_id="qwen_image",
-        display_name="Qwen Image (ComfyUI)",
-        category=DriverCategory.LOCAL,
-        supported_features=["text_to_image", "image_to_image", "inpainting"],
-        supports_loras=True,
-    ))
-    drivers.append(DriverInfo(
-        driver_id="z_image",
-        display_name="Z-Image (ComfyUI)",
-        category=DriverCategory.LOCAL,
-        supported_features=["text_to_image", "image_to_image"],
-        supports_loras=True,
-    ))
-    drivers.append(DriverInfo(
-        driver_id="krea2",
-        display_name="Krea 2 (ComfyUI)",
-        category=DriverCategory.LOCAL,
-        supported_features=["text_to_image", "image_to_image"],
-        supports_loras=True,
-    ))
-    drivers.append(DriverInfo(
-        driver_id="flux2",
-        display_name="Flux 2 (ComfyUI)",
-        category=DriverCategory.LOCAL,
-        supported_features=["text_to_image", "image_to_image"],
-        supports_loras=True,
-    ))
+    for model_id in ("qwen_image", "z_image", "krea2", "flux2"):
+        drivers.append(get_image_driver(model_id).get_info())
     # Storyboard - ComfyUI
-    drivers.append(DriverInfo(
-        driver_id="qwen_image_edit",
-        display_name="Qwen Image Edit (ComfyUI)",
-        category=DriverCategory.LOCAL,
-        supported_features=["image_to_image", "multi_reference", "storyboard"],
-        max_reference_images=3,
-        max_total_references=3,
-        supports_loras=True,
-    ))
-    drivers.append(DriverInfo(
-        driver_id="qwen_multiangle",
-        display_name="Qwen Multiangle (ComfyUI)",
-        category=DriverCategory.LOCAL,
-        supported_features=["image_to_image", "multi_angle", "multi_reference", "storyboard"],
-        max_reference_images=3,
-        max_total_references=3,
-        supports_loras=True,
-    ))
-    drivers.append(DriverInfo(
-        driver_id="flux2_kontext",
-        display_name="Flux 2 Kontext (ComfyUI)",
-        category=DriverCategory.LOCAL,
-        supported_features=["image_to_image", "multi_reference", "storyboard"],
-        supports_loras=True,
-    ))
+    for model_id in ("qwen_image_edit", "qwen_multiangle", "flux2_kontext"):
+        drivers.append(get_image_driver(model_id).get_info())
     # Cloud - Fal.ai
     for mid, name in [("nano_banana", "Nano Banana (Fal.ai)"), ("krea", "Krea (Fal.ai)"), ("flux_dev", "Flux Dev (Fal.ai)"), ("flux_2", "Flux 2 (Fal.ai)")]:
         if os.getenv("FAL_KEY"):

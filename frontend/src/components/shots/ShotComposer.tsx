@@ -20,7 +20,7 @@ import { type PreviousShotAngle } from "./CameraAngleWidget";
 export function ShotComposer({ projectId }: { projectId: string }) {
   const {
     shots, setShots, selectedShotId, setSelectedShotId, selectedSceneId,
-    scenes, setScenes, imageDrivers, selectedImageDriver,
+    scenes, setScenes, imageDrivers, selectedStoryboardDriver,
     assets,
   } = useStudioStore();
 
@@ -33,6 +33,7 @@ export function ShotComposer({ projectId }: { projectId: string }) {
   const [isDragging, setIsDragging] = useState(false);
   const reorderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const regenPoll = useGenerationPolling();
+  const submissionRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const [shotData, sceneData] = await Promise.all([
@@ -51,8 +52,7 @@ export function ShotComposer({ projectId }: { projectId: string }) {
     .sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0));
   const selectedScene = scenes.find((s) => s.id === selectedSceneId);
   const sceneRecipeCount = (selectedScene?.reference_assets || []).length;
-  const sceneShotCount = selectedSceneId ? sortedShots.filter((s) => s.scene_id === selectedSceneId).length : 0;
-  const isFirstShotInScene = !!selectedSceneId && sceneShotCount === 0;
+  const isFirstShotInScene = !!selectedSceneId && !selectedScene?.establishing_frame_path;
 
   // Last generated frame in scene for reference
   const lastSceneFrame = selectedSceneId
@@ -106,9 +106,12 @@ export function ShotComposer({ projectId }: { projectId: string }) {
   };
 
   const handleRegenerate = async (shot: ShotResponse) => {
+    if (submissionRef.current || regenPoll.isRunning) return;
+    submissionRef.current = true;
     setRegeneratingId(shot.id);
+    regenPoll.setError(null);
     const recipe = shot.generation_recipe;
-    const prompt = recipe?.resolved_prompt || shot.description || shot.name;
+    const prompt = recipe?.params?.user_prompt ?? (shot.description || recipe?.resolved_prompt || shot.name);
     const recipeWidth = recipe?.params?.width || 1344;
     const recipeHeight = recipe?.params?.height || 768;
     const recipeSeed = recipe?.seed;
@@ -120,15 +123,17 @@ export function ShotComposer({ projectId }: { projectId: string }) {
     const recipeVAngle = recipe?.params?.vertical_angle;
     const recipeZoom = recipe?.params?.zoom;
     const recipePreset = recipe?.params?.composition_preset;
-    const recipeRefPaths = recipe?.reference_paths;
+    const recipeRefPaths = recipe?.params?.linked_reference_paths ?? recipe?.reference_paths;
     const recipeLoras = recipe?.params?.loras;
 
     try {
       const extraParams: Record<string, any> = {};
       if (recipeLoras && recipeLoras.length > 0) extraParams.loras = recipeLoras;
+      if (recipe?.params?.checkpoint_override) extraParams.checkpoint_override = recipe.params.checkpoint_override;
+      if (recipe?.params?.megapixels != null) extraParams.megapixels = recipe.params.megapixels;
 
       const resp = await generateShotFrame(
-        shot.id, prompt, selectedImageDriver,
+        shot.id, prompt, selectedStoryboardDriver,
         recipeNegative || undefined,
         recipeWidth, recipeHeight,
         recipeSeed,
@@ -136,15 +141,20 @@ export function ShotComposer({ projectId }: { projectId: string }) {
         recipeDenoise, recipeCfg, recipeSteps,
         recipeHAngle, recipeVAngle, recipeZoom, recipePreset,
         Object.keys(extraParams).length > 0 ? extraParams : undefined,
+        recipe?.params?.prompt_override || undefined,
       );
-      if (resp.status === "failed") { setRegeneratingId(null); return; }
+      if (resp.status === "failed") {
+        regenPoll.setError(resp.error_message || "Failed to regenerate shot");
+        setRegeneratingId(null);
+        return;
+      }
 
       useStudioStore.getState().addActiveFrameJob({
-        job_id: resp.job_id, model_id: selectedImageDriver, shot_id: shot.id, on_complete: "refresh_composer",
+        job_id: resp.job_id, model_id: selectedStoryboardDriver, shot_id: shot.id, on_complete: "refresh_composer",
       });
 
       regenPoll.startPolling(
-        () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
+        () => checkShotFrameStatus(resp.job_id, selectedStoryboardDriver),
         async (st) => {
           const framePath = st.image_urls?.[0] || "";
           await updateShot(projectId, shot.id, {
@@ -157,7 +167,10 @@ export function ShotComposer({ projectId }: { projectId: string }) {
         { intervalMs: 3000, jobId: resp.job_id }
       );
     } catch (err) {
+      regenPoll.setError(err instanceof Error ? err.message : "Failed to regenerate shot");
       setRegeneratingId(null);
+    } finally {
+      submissionRef.current = false;
     }
   };
 
@@ -221,6 +234,9 @@ export function ShotComposer({ projectId }: { projectId: string }) {
             </button>
           </div>
 
+          {regenPoll.error && (
+            <p role="alert" className="mb-4 rounded-lg bg-studio-danger/10 p-3 text-xs text-studio-danger">{regenPoll.error}</p>
+          )}
           {showCreate && !selectedSceneId && (
             <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-xs text-yellow-400">
               Select a scene from the left panel first. Shots need a scene to inherit characters, location, and the establishing frame.

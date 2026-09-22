@@ -142,9 +142,12 @@ class ShotVariationRequest(BaseModel):
     prompt: str
     negative_prompt: Optional[str] = None
     model_id: str = Field(default="qwen_image_edit")
-    width: int = Field(default=1024)
-    height: int = Field(default=1024)
-    seed: Optional[int] = None
+    width: Optional[int] = Field(default=None, ge=256, le=4096)
+    height: Optional[int] = Field(default=None, ge=256, le=4096)
+    seed: Optional[int] = Field(default=None, ge=0)
+    denoise: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    reference_image_paths: Optional[List[str]] = None
+    extra_params: Dict[str, Any] = Field(default_factory=dict)
     shot_type: ShotType = ShotType.MEDIUM
 
 

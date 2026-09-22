@@ -68,6 +68,38 @@ def retention_enrichment_flat(name: str, role: str, retention: str) -> str:
     return f"featuring {name}"
 
 
+def character_name_matches(name: str, prompt: str) -> bool:
+    name = name.strip()
+    return bool(name) and any(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", prompt, re.IGNORECASE)
+                              for term in (name, name.split()[0]))
+
+
+def build_qwen_reference_prompt(
+    prompt: str, shot_assets: List[Dict[str, Any]], asset_map: Dict[str, Dict[str, Any]],
+    reference_paths: List[str], scene_frame: Optional[str] = None,
+) -> str:
+    instructions = []
+    for index, path in enumerate(reference_paths, 1):
+        picture = f"Picture {index}"
+        if path == scene_frame:
+            instructions.append(f"{picture} provides the environment and composition reference.")
+        for asset in shot_assets:
+            record = asset_map.get(asset.get("asset_id"), {})
+            image = record.get("primary_image") or asset.get("image_path")
+            if image != path:
+                continue
+            name = record.get("name") or asset.get("asset_name") or "subject"
+            role = asset.get("role", asset.get("asset_type", "subject"))
+            retention = asset.get("retention", "fully_preserved")
+            instructions.append(f"{picture} defines the {role} {name}; {retention_note(name, retention, role)}")
+            description = record.get("description") or ""
+            if description:
+                instructions.append(f"{name}: {description[:400]}")
+            if role == "character" and retention == "fully_preserved" and path != scene_frame:
+                instructions.append(f"When depicting {name}, use their appearance from {picture}, not the appearance of a person in the environment reference.")
+    return "\n".join([*instructions, prompt]) if instructions else prompt
+
+
 def build_flat_prompt(
     scene_context: str,
     prompt_enrichments: List[str],
@@ -238,14 +270,14 @@ def build_prompt(
     If prompt_override is provided, it replaces the auto-compiled prompt entirely.
     """
     if prompt_override and prompt_override.strip():
-        return prompt_override.strip()
+        return prompt_override
 
     # Build enrichments from shot assets with retention awareness
     # Detect if the user's prompt focuses on a specific character by name.
     # If so, only include that character in enrichments and add a focus instruction
     # so the model doesn't force other characters into frame.
     user_prompt_lower = user_prompt.lower().strip()
-    focused_character = None
+    focused_characters = []
     character_assets = []
     non_character_enrichments = []
 
@@ -267,20 +299,17 @@ def build_prompt(
 
     # Check if user prompt mentions any character by name
     for display_name, retention in character_assets:
-        name_lower = display_name.lower()
         # Match full name or first word (e.g. "pirate" in "Pirate Captain")
-        name_words = name_lower.split()
-        if name_lower in user_prompt_lower or (name_words and name_words[0] in user_prompt_lower):
-            focused_character = display_name
-            break
+        if character_name_matches(display_name, user_prompt_lower):
+            focused_characters.append(display_name)
 
     prompt_enrichments = []
-    if focused_character and not is_establishing:
+    if focused_characters and not is_establishing:
         # User is focusing on a specific character — only include that one
         for display_name, retention in character_assets:
-            if display_name == focused_character:
+            if display_name in focused_characters:
                 prompt_enrichments.append(retention_enrichment_flat(display_name, "character", retention))
-        prompt_enrichments.append(f"focus on {focused_character}, tight framing")
+        prompt_enrichments.append(f"focus on {' and '.join(focused_characters)}")
         prompt_enrichments.extend(non_character_enrichments)
     else:
         # Include all characters as before

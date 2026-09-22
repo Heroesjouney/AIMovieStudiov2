@@ -64,7 +64,7 @@ export interface GenerationResponse {
   audio_path?: string;
   error_message?: string;
   metadata?: any;
-  sub_jobs?: { angle: string; sub_job_id: string }[];
+  sub_jobs?: { angle: string; sub_job_id: string; status?: string; error_message?: string | null }[];
 }
 
 export interface VideoTake {
@@ -628,6 +628,7 @@ export async function generateShotFrame(
   zoom?: number,
   compositionPreset?: string,
   extraParams?: Record<string, any>,
+  promptOverride?: string,
 ): Promise<GenerationResponse> {
   const resp = await fetch(`${API_BASE}/shots/frame`, {
     method: "POST",
@@ -649,13 +650,19 @@ export async function generateShotFrame(
       zoom,
       composition_preset: compositionPreset,
       extra_params: extraParams || {},
+      prompt_override: promptOverride,
     }),
   });
+  if (!resp.ok) {
+    const error = await resp.json().catch(() => ({}));
+    throw new Error(typeof error.detail === "string" ? error.detail : `Shot frame generation failed (HTTP ${resp.status})`);
+  }
   return resp.json();
 }
 
 export async function checkShotFrameStatus(jobId: string, modelId: string): Promise<GenerationResponse> {
   const resp = await fetch(`${API_BASE}/shots/status/${jobId}?model_id=${modelId}`);
+  if (!resp.ok) throw new Error(`Shot frame status check failed (HTTP ${resp.status})`);
   return resp.json();
 }
 
@@ -701,6 +708,10 @@ export async function generateCameraAngles(
       reference_image_paths: referenceImagePaths || [],
     }),
   });
+  if (!resp.ok) {
+    const error = await resp.json().catch(() => ({}));
+    throw new Error(typeof error.detail === "string" ? error.detail : `Camera-angle generation failed (HTTP ${resp.status})`);
+  }
   return resp.json();
 }
 
@@ -709,6 +720,7 @@ export async function checkAnglesStatus(jobId: string, modelId?: string): Promis
     ? `${API_BASE}/shots/angles/status/${jobId}?model_id=${modelId}`
     : `${API_BASE}/shots/angles/status/${jobId}`;
   const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Camera-angle status check failed (HTTP ${resp.status})`);
   return resp.json();
 }
 
@@ -1054,6 +1066,10 @@ export async function generateShotVariation(
       seed,
     }),
   });
+  if (!resp.ok) {
+    const error = await resp.json().catch(() => ({}));
+    throw new Error(typeof error.detail === "string" ? error.detail : `Shot variation failed (HTTP ${resp.status})`);
+  }
   return resp.json();
 }
 
