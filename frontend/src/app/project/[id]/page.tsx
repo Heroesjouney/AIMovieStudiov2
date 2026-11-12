@@ -91,6 +91,10 @@ export default function ProjectWorkspacePage() {
 
     let startY = 0;
     let startPct = 45;
+    // Track the current height in a ref-like local so the effect does not
+    // need to re-run on every drag movement — re-running mid-drag would tear
+    // down the in-flight window listeners and freeze the drag.
+    let currentPct = timelineDockHeight;
 
     const onMouseMove = (e: MouseEvent) => {
       const container = el.parentElement;
@@ -99,6 +103,7 @@ export default function ProjectWorkspacePage() {
       const deltaPx = e.clientY - startY;
       const deltaPct = (deltaPx / rect.height) * 100;
       const newPct = Math.max(20, Math.min(80, startPct - deltaPct));
+      currentPct = newPct;
       setTimelineDockHeight(newPct);
     };
 
@@ -112,7 +117,7 @@ export default function ProjectWorkspacePage() {
     const onMouseDown = (e: MouseEvent) => {
       e.preventDefault();
       startY = e.clientY;
-      startPct = timelineDockHeight;
+      startPct = currentPct;
       document.body.style.cursor = "row-resize";
       document.body.style.userSelect = "none";
       window.addEventListener("mousemove", onMouseMove);
@@ -125,7 +130,8 @@ export default function ProjectWorkspacePage() {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [timelineDockOpen, storyboardCollapsed, timelineDockHeight]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timelineDockOpen, storyboardCollapsed]);
 
   useEffect(() => {
     if (!authLoading && !user) {

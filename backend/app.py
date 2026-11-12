@@ -34,6 +34,9 @@ async def lifespan(app: FastAPI):
     print(f"    Vault: {VAULT_DIR}")
     yield
     print("[*] AI Movie Studio 2 - Shutting down...")
+    # Close shared driver HTTP sessions so pooled connections don't leak warnings
+    from core.drivers import close_cached_drivers
+    await close_cached_drivers()
 
 
 app = FastAPI(

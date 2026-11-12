@@ -43,6 +43,80 @@ class DriverCategory(str, Enum):
 
 
 # =============================================================================
+# In-memory job store pruning
+# =============================================================================
+
+class SharedSessionContext:
+    """Async context manager that yields a shared session without closing it.
+
+    Lets `async with driver._get_session() as session:` reuse one pooled
+    ClientSession across requests/polls instead of creating (and tearing down
+    a TCP connection pool) per call. The driver owns the session lifecycle.
+    """
+
+    def __init__(self, session):
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+def _job_is_terminal(status) -> bool:
+    """True if a job status (enum or string) is terminal."""
+    if isinstance(status, GenerationStatus):
+        return status in (GenerationStatus.COMPLETED, GenerationStatus.FAILED)
+    return status in ("completed", "failed")
+
+
+def prune_job_store(
+    jobs: Dict[str, dict],
+    ttl_seconds: float = 3600.0,
+    max_terminal: int = 200,
+    now: Optional[float] = None,
+) -> None:
+    """Evict finished jobs from an in-memory job store so it stays bounded.
+
+    Drivers are process-lifetime singletons, so their job dicts grow forever
+    without eviction — each entry retains the full workflow graph, request
+    payload, and output lists.
+
+    - Stamps `completed_at` the first time a job is observed in a terminal
+      state (COMPLETED / FAILED).
+    - Removes terminal jobs whose `completed_at` is older than `ttl_seconds`.
+    - Keeps at most `max_terminal` terminal jobs (oldest evicted first).
+    - Never touches pending / processing jobs — active polls need those.
+    """
+    import time as _time
+    now = now if now is not None else _time.time()
+
+    terminal_ids = []
+    for job_id, job in jobs.items():
+        if _job_is_terminal(job.get("status")):
+            if "completed_at" not in job:
+                # First observation of the terminal state — start its retention clock
+                job["completed_at"] = now
+            terminal_ids.append(job_id)
+
+    # TTL eviction
+    stale = [jid for jid in terminal_ids if now - jobs[jid].get("completed_at", now) > ttl_seconds]
+
+    # Count-based cap (oldest terminal jobs first)
+    remaining = sorted(
+        (jid for jid in terminal_ids if jid not in set(stale)),
+        key=lambda jid: jobs[jid].get("completed_at", 0.0),
+    )
+    excess = len(remaining) - max_terminal
+
+    for jid in stale:
+        del jobs[jid]
+    for jid in remaining[:max(0, excess)]:
+        del jobs[jid]
+
+
+# =============================================================================
 # Request / Response Schemas
 # =============================================================================
 

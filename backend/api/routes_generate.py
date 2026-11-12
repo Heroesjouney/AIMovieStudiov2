@@ -4,6 +4,7 @@ Generate Routes - Direct image generation (not shot-bound) + driver listing.
 Used by the Asset generation panel and the model selector dropdown.
 """
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,22 @@ from core.drivers.lora_utils import fetch_lora_list
 router = APIRouter()
 
 VAULT_DIR = Path(__file__).parent.parent / "assets"
+
+
+async def _stream_upload_to_file(file: UploadFile, dest: Path, chunk_size: int = 1024 * 1024) -> int:
+    """Stream an uploaded file to disk in chunks without buffering it all in memory.
+
+    Returns the total number of bytes written.
+    """
+    total = 0
+    with open(dest, "wb") as out:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            await asyncio.to_thread(out.write, chunk)
+            total += len(chunk)
+    return total
 
 
 @router.get("/drivers")
@@ -99,13 +116,12 @@ async def upload_lora(file: UploadFile = File(...), overwrite: bool = False):
             detail=f"A LoRA named '{filename}' already exists. Pass overwrite=true to replace it.",
         )
 
-    # Write the file
-    content = await file.read()
-    dest.write_bytes(content)
+    # Stream the file to disk in chunks (model files can be large)
+    size_bytes = await _stream_upload_to_file(file, dest)
     action = "Overwrote" if dest.exists() and overwrite else "Uploaded"
-    print(f"[LoRA] {action} '{filename}' ({len(content)} bytes) to {dest}")
+    print(f"[LoRA] {action} '{filename}' ({size_bytes} bytes) to {dest}")
 
-    return {"name": filename, "size_bytes": len(content), "path": str(dest), "overwritten": overwrite and dest.exists()}
+    return {"name": filename, "size_bytes": size_bytes, "path": str(dest), "overwritten": overwrite and dest.exists()}
 
 
 @router.get("/models")
@@ -230,12 +246,11 @@ async def upload_model(file: UploadFile = File(...), overwrite: bool = False):
             detail=f"A model named '{filename}' already exists. Pass overwrite=true to replace it.",
         )
 
-    content = await file.read()
-    dest.write_bytes(content)
+    content_len = await _stream_upload_to_file(file, dest)
     action = "Overwrote" if dest.exists() and overwrite else "Uploaded"
-    print(f"[Models] {action} '{filename}' ({len(content)} bytes) to {dest}")
+    print(f"[Models] {action} '{filename}' ({content_len} bytes) to {dest}")
 
-    return {"name": filename, "size_bytes": len(content), "path": str(dest), "overwritten": overwrite and dest.exists()}
+    return {"name": filename, "size_bytes": content_len, "path": str(dest), "overwritten": overwrite and dest.exists()}
 
 
 @router.post("/models/upload-to")
@@ -289,11 +304,10 @@ async def upload_model_to_subdir(subdirectory: str, file: UploadFile = File(...)
             detail=f"A file named '{filename}' already exists in {subdirectory}/.",
         )
 
-    content = await file.read()
-    dest.write_bytes(content)
-    print(f"[Models] Uploaded '{filename}' ({len(content)} bytes) to {dest}")
+    content_len = await _stream_upload_to_file(file, dest)
+    print(f"[Models] Uploaded '{filename}' ({content_len} bytes) to {dest}")
 
-    return {"name": filename, "size_bytes": len(content), "path": str(dest), "subdirectory": subdirectory}
+    return {"name": filename, "size_bytes": content_len, "path": str(dest), "subdirectory": subdirectory}
 
 
 class GenerateImageRequest(BaseModel):
@@ -570,14 +584,13 @@ async def render_previs_to_mp4(
 
     ffmpeg_exe = _get_ffmpeg_exe()
 
-    # Read the uploaded WebM into a temp file
-    content = await file.read()
-    if not content:
+    # Read the uploaded WebM into a temp file (streamed — recordings can be large)
+    tmp = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
+    tmp.close()  # Windows: reopen via the streaming helper, so release the handle first
+    tmp_webm = tmp.name
+    upload_size = await _stream_upload_to_file(file, Path(tmp_webm))
+    if not upload_size:
         raise HTTPException(status_code=400, detail="Empty file upload")
-
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-        tmp.write(content)
-        tmp_webm = tmp.name
 
     # Output MP4 in the project's video directory
     videos_dir = VAULT_DIR / project_id / "videos"
@@ -619,7 +632,10 @@ async def render_previs_to_mp4(
             "-movflags", "+faststart",
             str(output_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        # Encoding can take minutes — run off the event loop
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=180
+        )
         if result.returncode != 0:
             error_tail = result.stderr[-800:] if result.stderr else "unknown error"
             raise HTTPException(
@@ -630,12 +646,12 @@ async def render_previs_to_mp4(
         raise HTTPException(status_code=504, detail="ffmpeg conversion timed out (180s)")
     finally:
         if os.path.exists(tmp_webm):
-            os.unlink(tmp_webm)
+            await asyncio.to_thread(os.unlink, tmp_webm)
 
-    duration_seconds = _probe_duration(ffmpeg_exe, str(output_path))
+    duration_seconds = await asyncio.to_thread(_probe_duration, ffmpeg_exe, str(output_path))
     size_bytes = output_path.stat().st_size
 
-    print(f"[previs/render] converted {len(content)} bytes WebM -> {size_bytes} bytes MP4 ({target_w}x{target_h}, {duration_seconds:.2f}s) -> {output_path}")
+    print(f"[previs/render] converted {upload_size} bytes WebM -> {size_bytes} bytes MP4 ({target_w}x{target_h}, {duration_seconds:.2f}s) -> {output_path}")
 
     return {
         "filename": output_name,

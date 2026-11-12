@@ -84,6 +84,56 @@ def _asset_to_response(a: dict) -> dict:
 # Video Upload Endpoints (MUST be before parameterized routes to avoid conflicts)
 # =============================================================================
 
+async def _stream_upload_to_file(file: UploadFile, dest: Path, chunk_size: int = 1024 * 1024) -> int:
+    """Stream an uploaded file to disk in chunks without buffering it all in memory.
+
+    Returns the total number of bytes written.
+    """
+    total = 0
+    with open(dest, "wb") as out:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            await asyncio.to_thread(out.write, chunk)
+            total += len(chunk)
+    return total
+
+
+def _ffprobe_duration(path: Path) -> Optional[float]:
+    """Return a media file's duration in seconds via ffprobe, or None."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            d = float(result.stdout.strip())
+            if d > 0:
+                return d
+    except Exception:
+        pass
+    return None
+
+
+def _list_videos_sync(videos_dir: Path, project_id: str, allowed_extensions: set) -> list:
+    """Build the video listing (stat + ffprobe per file). Runs in a worker thread."""
+    videos = []
+    for p in sorted(videos_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.is_file() and p.suffix.lower() in allowed_extensions:
+            stat = p.stat()
+            videos.append({
+                "filename": p.name,
+                "video_url": f"/assets/{project_id}/videos/{p.name}",
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.utcfromtimestamp(stat.st_mtime).isoformat(),
+                "duration_seconds": _ffprobe_duration(p),
+            })
+    return videos
+
+
 @router.post("/videos/upload")
 async def upload_video(
     file: UploadFile = File(..., description="Video file to upload"),
@@ -109,29 +159,15 @@ async def upload_video(
         file_path = videos_dir / f"{original_stem}_{counter}{ext}"
         counter += 1
 
-    content = await file.read()
-    file_path.write_bytes(content)
+    size_bytes = await _stream_upload_to_file(file, file_path)
 
-    # Extract duration using ffprobe
-    duration_seconds = None
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            d = float(result.stdout.strip())
-            if d > 0:
-                duration_seconds = d
-    except Exception:
-        pass
+    # Extract duration using ffprobe (in a worker thread — it blocks)
+    duration_seconds = await asyncio.to_thread(_ffprobe_duration, file_path)
 
     return {
         "filename": file_path.name,
         "path": str(file_path),
-        "size_bytes": len(content),
+        "size_bytes": size_bytes,
         "video_url": f"/assets/{project_id}/videos/{file_path.name}",
         "duration_seconds": duration_seconds,
     }
@@ -143,33 +179,9 @@ async def list_videos(project_id: str = Query(default="default")):
     videos_dir.mkdir(parents=True, exist_ok=True)
 
     allowed_extensions = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-    videos = []
 
-    for p in sorted(videos_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if p.is_file() and p.suffix.lower() in allowed_extensions:
-            # Extract duration using ffprobe
-            duration_seconds = None
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", str(p)],
-                    capture_output=True, text=True, timeout=10,
-                )
-                if result.returncode == 0:
-                    d = float(result.stdout.strip())
-                    if d > 0:
-                        duration_seconds = d
-            except Exception:
-                pass
-
-            videos.append({
-                "filename": p.name,
-                "video_url": f"/assets/{project_id}/videos/{p.name}",
-                "size_bytes": p.stat().st_size,
-                "modified_at": datetime.utcfromtimestamp(p.stat().st_mtime).isoformat(),
-                "duration_seconds": duration_seconds,
-            })
+    # stat + ffprobe per file blocks; run the whole listing off the event loop
+    videos = await asyncio.to_thread(_list_videos_sync, videos_dir, project_id, allowed_extensions)
 
     return {"project_id": project_id, "videos": videos}
 
@@ -223,13 +235,12 @@ async def upload_image(
         file_path = images_dir / f"{original_stem}_{counter}{ext}"
         counter += 1
 
-    content = await file.read()
-    file_path.write_bytes(content)
+    size_bytes = await _stream_upload_to_file(file, file_path)
 
     return {
         "filename": file_path.name,
         "image_url": f"/assets/{project_id}/images/{file_path.name}",
-        "size_bytes": len(content),
+        "size_bytes": size_bytes,
     }
 
 
@@ -290,7 +301,7 @@ async def save_image_from_url(project_id: str, image_url: str, filename: Optiona
         if image_url.startswith("/assets/"):
             src = VAULT_DIR / image_url[len("/assets/"):]
             if src.exists():
-                shutil.copy2(str(src), str(dest))
+                await asyncio.to_thread(shutil.copy2, str(src), str(dest))
             else:
                 raise HTTPException(status_code=400, detail=f"Local image not found: {src}")
         else:
@@ -298,7 +309,7 @@ async def save_image_from_url(project_id: str, image_url: str, filename: Optiona
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.get(image_url)
                 resp.raise_for_status()
-                dest.write_bytes(resp.content)
+                await asyncio.to_thread(dest.write_bytes, resp.content)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Failed to download image: {e}")
     except Exception as e:
@@ -527,7 +538,7 @@ async def save_generated_image(req: SaveGeneratedRequest):
 
     filename = f"primary{ext}"
     filepath = asset_folder / filename
-    filepath.write_bytes(image_bytes)
+    await asyncio.to_thread(filepath.write_bytes, image_bytes)
 
     # Also save a copy of the prompt as metadata
     if req.prompt:
@@ -654,6 +665,12 @@ async def _auto_analyze_asset(project_id: str, asset_id: str, image_path: str):
 @router.get("/waveform/{project_id}/{filename:path}")
 async def get_waveform(project_id: str, filename: str):
     """Generate waveform peaks from an audio/video file using ffmpeg."""
+    # ffmpeg + sample parsing blocks; run off the event loop
+    return await asyncio.to_thread(_waveform_sync, project_id, filename)
+
+
+def _waveform_sync(project_id: str, filename: str) -> dict:
+    """Blocking waveform generation. Runs in a worker thread."""
     import subprocess
     import struct
 
@@ -731,6 +748,12 @@ async def get_waveform(project_id: str, filename: str):
 @router.get("/thumbnails/{project_id}/{filename:path}")
 async def get_video_thumbnails(project_id: str, filename: str, count: int = Query(default=6, ge=1, le=20)):
     """Generate thumbnail strip from a video file using ffmpeg."""
+    # ffprobe + ffmpeg per thumbnail blocks; run off the event loop
+    return await asyncio.to_thread(_video_thumbnails_sync, project_id, filename, count)
+
+
+def _video_thumbnails_sync(project_id: str, filename: str, count: int) -> dict:
+    """Blocking thumbnail generation. Runs in a worker thread."""
     import subprocess
     import base64
 

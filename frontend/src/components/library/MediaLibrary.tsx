@@ -133,6 +133,15 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
   const [pendingImageName, setPendingImageName] = useState("");
   const [pendingImageType, setPendingImageType] = useState("character");
 
+  // Object URL for the pending image preview — created once per file and
+  // revoked on change/unmount. Creating it inline in JSX would leak a new
+  // URL (pinning the blob in memory) on every re-render.
+  const pendingImagePreviewUrl = useMemo(
+    () => (pendingImage ? URL.createObjectURL(pendingImage) : null),
+    [pendingImage]
+  );
+  useEffect(() => () => { if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl); }, [pendingImagePreviewUrl]);
+
   // Timeline mode state
   const [videoAssets, setVideoAssets] = useState<VideoAsset[]>([]);
   const [videoAssetsLoading, setVideoAssetsLoading] = useState(false);
@@ -1154,7 +1163,7 @@ export function AssetLibrary({ projectId, mode = "default" }: AssetLibraryProps)
             {/* Preview */}
             <div className="rounded-lg overflow-hidden border border-studio-border max-h-32">
               <img
-                src={URL.createObjectURL(pendingImage)}
+                src={pendingImagePreviewUrl ?? undefined}
                 alt="preview"
                 className="w-full max-h-32 object-contain bg-studio-bg"
               />

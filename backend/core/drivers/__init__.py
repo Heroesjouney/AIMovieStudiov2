@@ -17,6 +17,20 @@ _comfy_image_cache: Dict[str, ImageDriver] = {}
 _comfy_video_cache: Dict[str, object] = {}
 
 
+async def close_cached_drivers() -> None:
+    """Close shared HTTP sessions of cached drivers. Called on app shutdown."""
+    for driver in list(_comfy_image_cache.values()):
+        close = getattr(driver, "close", None)
+        if close:
+            await close()
+    for driver in list(_comfy_video_cache.values()):
+        close = getattr(driver, "close", None)
+        if close:
+            await close()
+    _comfy_image_cache.clear()
+    _comfy_video_cache.clear()
+
+
 def get_image_driver(model_id: str) -> Optional[ImageDriver]:
     """Get an image generation driver by model ID."""
     if model_id in ("qwen_image", "comfy_image", "z_image", "krea2", "flux2", "qwen_image_edit", "qwen_multiangle", "flux2_kontext"):
@@ -31,12 +45,8 @@ def get_image_driver(model_id: str) -> Optional[ImageDriver]:
         if model_id not in _comfy_image_cache:
             from .comfy_image import ComfyImageDriver
             driver = ComfyImageDriver(model_id=model_id)
-            # Inject custom workflow into MODEL_INFO so _load_workflow finds it
-            driver.MODEL_INFO[model_id] = {
-                "name": custom["display_name"],
-                "workflow_t2i": model_id,
-                "workflow_i2i": model_id,
-            }
+            # Custom workflow: point the instance at its own workflow file.
+            # (Instance attrs only — never mutate the shared class MODEL_INFO.)
             driver._model_name = custom["display_name"]
             driver._workflow_t2i = model_id
             driver._workflow_i2i = model_id
@@ -73,11 +83,8 @@ def get_video_driver(model_id: str) -> Optional[VideoDriver]:
         if model_id not in _comfy_video_cache:
             from .comfy_video import ComfyVideoDriver
             driver = ComfyVideoDriver(model_id=model_id)
-            driver.MODEL_INFO[model_id] = {
-                "name": custom["display_name"],
-                "workflow_t2i": model_id,
-                "workflow_i2i": model_id,
-            }
+            # Custom workflow: point the instance at its own workflow file.
+            # (Instance attrs only — never mutate the shared class MODEL_INFO.)
             driver._model_name = custom["display_name"]
             driver._workflow_t2i = model_id
             driver._workflow_i2i = model_id

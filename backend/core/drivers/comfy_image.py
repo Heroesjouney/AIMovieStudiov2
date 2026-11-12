@@ -23,7 +23,7 @@ from PIL import Image as PILImage
 
 from .base import (
     ImageDriver, ImageGenerationRequest, ImageGenerationResponse,
-    GenerationStatus, DriverCategory, DriverInfo,
+    GenerationStatus, DriverCategory, DriverInfo, prune_job_store, SharedSessionContext,
 )
 from .lora_utils import inject_loras
 
@@ -95,13 +95,22 @@ class ComfyImageDriver(ImageDriver):
         self.output_dir = output_dir or os.getenv("COMFY_OUTPUT_DIR", "")
         self._jobs: Dict[str, dict] = {}
         self._workflows: Dict[str, dict] = {}
+        self._session: Optional[aiohttp.ClientSession] = None
 
-    def _get_session(self) -> aiohttp.ClientSession:
-        """Create an aiohttp session with auth headers if configured."""
-        headers = {}
-        if self._auth_token:
-            headers["Authorization"] = f"Bearer {self._auth_token}"
-        return aiohttp.ClientSession(headers=headers)
+    def _get_session(self) -> SharedSessionContext:
+        """Yield the shared aiohttp session (created once, reused across requests)."""
+        if self._session is None or self._session.closed:
+            headers = {}
+            if self._auth_token:
+                headers["Authorization"] = f"Bearer {self._auth_token}"
+            self._session = aiohttp.ClientSession(headers=headers)
+        return SharedSessionContext(self._session)
+
+    async def close(self) -> None:
+        """Close the shared HTTP session. Called on app shutdown."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     def _load_workflow(self, name: str) -> dict:
         """Load a workflow JSON template from the workflows directory."""
@@ -141,69 +150,6 @@ class ComfyImageDriver(ImageDriver):
                     raise ValueError(f"Reference image upload returned no filename: {filename}")
                 subfolder = result.get("subfolder", "")
                 return f"{subfolder}/{name}" if subfolder else name
-
-    def _resize_to_aspect(self, image_path: str, target_width: int, target_height: int) -> str:
-        """Resize an image to target dimensions using cover+crop. Returns new path."""
-        img = PILImage.open(image_path).convert("RGB")
-        # Cover fit: scale to fill target, then crop center
-        ratio = max(target_width / img.width, target_height / img.height)
-        new_w, new_h = int(img.width * ratio), int(img.height * ratio)
-        img = img.resize((new_w, new_h), PILImage.LANCZOS)
-        left = (new_w - target_width) // 2
-        top = (new_h - target_height) // 2
-        img = img.crop((left, top, left + target_width, top + target_height))
-        out_path = str(Path(image_path).parent / f"resized_{int(time.time())}_{Path(image_path).name}")
-        img.save(out_path)
-        print(f"[ComfyImageDriver]   resized {image_path} -> {target_width}x{target_height} -> {out_path}")
-        return out_path
-
-    def _composite_references(self, local_paths: List[str], target_width: int, target_height: int) -> Optional[str]:
-        """Composite reference images into a single image for img2img workflows.
-        
-        The first image (typically the location) is used as the background,
-        scaled to fill the target dimensions. Subsequent images (characters, props)
-        are overlaid centered on top. This gives the edit model a single coherent
-        scene to work with for consistency.
-        """
-        if not local_paths:
-            return None
-        if len(local_paths) == 1:
-            # Single image — just resize/pad to target aspect ratio
-            img = PILImage.open(local_paths[0]).convert("RGB")
-            canvas = PILImage.new("RGB", (target_width, target_height), (0, 0, 0))
-            img.thumbnail((target_width, target_height), PILImage.LANCZOS)
-            x = (target_width - img.width) // 2
-            y = (target_height - img.height) // 2
-            canvas.paste(img, (x, y))
-            output_path = str(Path(local_paths[0]).parent / f"composite_{int(time.time())}.png")
-            canvas.save(output_path)
-            return output_path
-
-        # Multiple images — first is background (location), rest are overlaid centered
-        base = PILImage.open(local_paths[0]).convert("RGB")
-        # Scale base to fill target dimensions (cover fit)
-        base_ratio = max(target_width / base.width, target_height / base.height)
-        base = base.resize((int(base.width * base_ratio), int(base.height * base_ratio)), PILImage.LANCZOS)
-        # Crop to target
-        left = (base.width - target_width) // 2
-        top = (base.height - target_height) // 2
-        canvas = base.crop((left, top, left + target_width, top + target_height))
-
-        # Overlay additional images (characters/props) centered, scaled to 40% of canvas width
-        overlay_w = int(target_width * 0.4)
-        for p in local_paths[1:]:
-            overlay = PILImage.open(p).convert("RGBA")
-            overlay.thumbnail((overlay_w, target_height), PILImage.LANCZOS)
-            x = (target_width - overlay.width) // 2
-            y = (target_height - overlay.height) // 2
-            canvas = canvas.convert("RGBA")
-            canvas.paste(overlay, (x, y), overlay)
-            canvas = canvas.convert("RGB")
-
-        output_path = str(Path(local_paths[0]).parent / f"composite_{int(time.time())}.png")
-        canvas.save(output_path)
-        print(f"[ComfyImageDriver]   composited {len(local_paths)} refs (base+overlay) into {target_width}x{target_height} -> {output_path}")
-        return output_path
 
     def _inject_params(self, workflow: dict, prompt: str, negative: str, width: int, height: int, seed: Optional[int], reference_path: Optional[str] = None, denoise: Optional[float] = None, reference_image_paths: Optional[List[str]] = None, user_cfg: Optional[float] = None, user_steps: Optional[int] = None, user_megapixels: Optional[float] = None) -> dict:
         """Inject generation parameters into a ComfyUI workflow template."""
@@ -418,6 +364,7 @@ class ComfyImageDriver(ImageDriver):
         return features
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
+        prune_job_store(self._jobs)
         job_id = str(uuid.uuid4())
         is_img2img = bool(request.reference_image_paths)
 
@@ -866,6 +813,7 @@ class ComfyImageDriver(ImageDriver):
         return out_path
 
     async def check_status(self, job_id: str) -> ImageGenerationResponse:
+        prune_job_store(self._jobs)
         job = self._jobs.get(job_id)
         if not job:
             return ImageGenerationResponse(
@@ -917,7 +865,7 @@ class ComfyImageDriver(ImageDriver):
                                                 async with session.get(view_url) as img_resp:
                                                     if img_resp.status == 200:
                                                         img_data = await img_resp.read()
-                                                        local_path.write_bytes(img_data)
+                                                        await asyncio.to_thread(local_path.write_bytes, img_data)
                                                         backend_url = f"/assets/generated/{local_filename}"
                                                         child_results[pid] = str(local_path)
                                                         job["view_images"].append(backend_url)
@@ -950,7 +898,8 @@ class ComfyImageDriver(ImageDriver):
                         # All views done (some may have failed) — composite the successful ones
                         local_image_paths = [child_results[pid] for pid in child_prompt_ids if child_results[pid] not in (None, "FAILED")]
                         successful_labels = [view_labels[i] for i, pid in enumerate(child_prompt_ids) if child_results[pid] not in (None, "FAILED")]
-                        composite_path = self._composite_turnaround_views(local_image_paths, successful_labels)
+                        # PIL compositing is CPU-bound — run off the event loop
+                        composite_path = await asyncio.to_thread(self._composite_turnaround_views, local_image_paths, successful_labels)
                         composite_filename = Path(composite_path).name
                         composite_url = f"/assets/generated/{composite_filename}"
                         job["status"] = GenerationStatus.COMPLETED
@@ -1033,7 +982,7 @@ class ComfyImageDriver(ImageDriver):
                                         async with session.get(view_url) as img_resp:
                                             if img_resp.status == 200:
                                                 img_data = await img_resp.read()
-                                                local_path.write_bytes(img_data)
+                                                await asyncio.to_thread(local_path.write_bytes, img_data)
                                                 # Return backend-served URL
                                                 backend_url = f"/assets/generated/{local_filename}"
                                                 image_paths.append(backend_url)
@@ -1157,6 +1106,7 @@ class ComfyImageDriver(ImageDriver):
 
     async def check_analysis_status(self, job_id: str) -> ImageGenerationResponse:
         """Check status of a VLM captioning job. Returns text in metadata.description when complete."""
+        prune_job_store(self._jobs)
         job = self._jobs.get(job_id)
         if not job:
             return ImageGenerationResponse(
