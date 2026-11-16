@@ -33,30 +33,41 @@ interface Props {
 }
 
 export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Props) {
-  const { imageDrivers, selectedImageDriver, assets } = useStudioStore();
+  const { imageDrivers, selectedStoryboardDriver, assets } = useStudioStore();
 
-  const [prompt, setPrompt] = useState(shot.generation_recipe?.resolved_prompt || shot.description || "");
+  const [prompt, setPrompt] = useState(shot.generation_recipe?.params?.prompt_override || (shot.generation_recipe?.params?.user_prompt ?? (shot.description || shot.generation_recipe?.resolved_prompt || "")));
   const [negativePrompt, setNegativePrompt] = useState(shot.generation_recipe?.resolved_negative_prompt || "");
   const [showAssetPicker, setShowAssetPicker] = useState(false);
-  const [linkedImagePaths, setLinkedImagePaths] = useState<string[]>([]);
+  const [linkedImagePaths, setLinkedImagePaths] = useState<string[]>(shot.generation_recipe?.params?.linked_reference_paths ?? shot.generation_recipe?.reference_paths ?? []);
   const [showImageLinker, setShowImageLinker] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const poll = useGenerationPolling();
+  const submissionRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const busy = submitting || poll.isRunning;
 
   // LoRA selections
-  const [loras, setLoras] = useState<LoRASelection[]>([]);
-  const [checkpointOverride, setCheckpointOverride] = useState("");
+  const [loras, setLoras] = useState<LoRASelection[]>(shot.generation_recipe?.params?.loras ?? []);
+  const [checkpointOverride, setCheckpointOverride] = useState(shot.generation_recipe?.params?.checkpoint_override ?? "");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Steps & CFG overrides
-  const [userSteps, setUserSteps] = useState<number | null>(null);
-  const [userCfg, setUserCfg] = useState<number | null>(null);
-  const [userMegapixels, setUserMegapixels] = useState<number | null>(null);
+  const [userSteps, setUserSteps] = useState<number | null>(shot.generation_recipe?.params?.steps ?? null);
+  const [userCfg, setUserCfg] = useState<number | null>(shot.generation_recipe?.params?.cfg ?? null);
+  const [userMegapixels, setUserMegapixels] = useState<number | null>(shot.generation_recipe?.params?.megapixels ?? null);
 
   // Sync prompt when navigating between shots
   useEffect(() => {
-    setPrompt(shot.generation_recipe?.resolved_prompt || shot.description || "");
+    const params = shot.generation_recipe?.params;
+    setPrompt(params?.prompt_override || (params?.user_prompt ?? (shot.description || shot.generation_recipe?.resolved_prompt || "")));
     setNegativePrompt(shot.generation_recipe?.resolved_negative_prompt || "");
+    setLinkedImagePaths(params?.linked_reference_paths ?? shot.generation_recipe?.reference_paths ?? []);
+    setLoras(params?.loras ?? []);
+    setCheckpointOverride(params?.checkpoint_override ?? "");
+    setUserSteps(params?.steps ?? null);
+    setUserCfg(params?.cfg ?? null);
+    setUserMegapixels(params?.megapixels ?? null);
   }, [shot.id]);
 
   const availableAssets = assets.filter((a) => a.primary_image);
@@ -93,7 +104,9 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
   };
 
   const handleGenerateFrame = async () => {
-    if (!prompt.trim()) return;
+    if (submissionRef.current || busy || (!prompt.trim() && shot.generation_recipe?.params?.horizontal_angle == null)) return;
+    submissionRef.current = true;
+    setSubmitting(true);
     const recipeParams = shot.generation_recipe?.params;
     const genWidth = recipeParams?.width ?? 1344;
     const genHeight = recipeParams?.height ?? 768;
@@ -110,20 +123,22 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       if (userCfg !== null) extraParams.cfg = userCfg;
       if (userMegapixels !== null) extraParams.megapixels = userMegapixels;
       const resp = await generateShotFrame(
-        shot.id, prompt, selectedImageDriver,
-        negativePrompt || undefined, genWidth, genHeight, undefined,
+        shot.id, prompt, selectedStoryboardDriver,
+        negativePrompt || undefined, genWidth, genHeight, shot.generation_recipe?.seed ?? undefined,
         linkedImagePaths.length > 0 ? linkedImagePaths : undefined,
-        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        shot.generation_recipe?.denoise ?? undefined, undefined, undefined,
+        recipeParams?.horizontal_angle, recipeParams?.vertical_angle, recipeParams?.zoom, recipeParams?.composition_preset,
         Object.keys(extraParams).length > 0 ? extraParams : undefined,
+        recipeParams?.prompt_override ? prompt : undefined,
       );
       if (resp.status === "failed") { poll.setError(resp.error_message || "Failed"); return; }
 
       useStudioStore.getState().addActiveFrameJob({
-        job_id: resp.job_id, model_id: selectedImageDriver, shot_id: shot.id, on_complete: "update_shot",
+        job_id: resp.job_id, model_id: selectedStoryboardDriver, shot_id: shot.id, on_complete: "update_shot",
       });
 
       poll.startPolling(
-        () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
+        () => checkShotFrameStatus(resp.job_id, selectedStoryboardDriver),
         async (st) => {
           const remoteFramePath = st.image_urls?.[0] || "";
           // Save the generated image to the vault so it appears in the library
@@ -146,6 +161,9 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
       );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      submissionRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -154,21 +172,22 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
   generateRef.current = handleGenerateFrame;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !poll.isRunning && prompt.trim()) {
+      if (e.defaultPrevented || !(e.target instanceof Node) || !panelRef.current?.contains(e.target)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !busy) {
         e.preventDefault();
         generateRef.current();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [poll.isRunning, prompt]);
+  }, [busy]);
 
   const navigateToShot = (shotId: string) => {
     useStudioStore.getState().setSelectedShotId(shotId);
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div ref={panelRef} className="h-full flex flex-col">
       {/* Header bar with nav */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-studio-border shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -287,7 +306,7 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
             <h3 className="text-xs font-semibold mb-2">Generate Storyboard Frame</h3>
             <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={2} placeholder="Describe the shot composition..."
               className="w-full bg-studio-bg border border-studio-border rounded-lg p-2 text-xs mb-1 focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
-              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleGenerateFrame(); }} />
+              />
             <div className="flex justify-end mb-1.5">
               <span className={`text-[9px] ${prompt.trim().split(/\s+/).filter(Boolean).length >= 350 ? "text-green-400" : prompt.trim().split(/\s+/).filter(Boolean).length > 0 ? "text-yellow-400" : "text-studio-muted"}`}>
                 Words: {prompt.trim().split(/\s+/).filter(Boolean).length} / 350-500
@@ -301,8 +320,8 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
               <div className="flex-1">
                 <ModelSelector
                   drivers={imageDrivers}
-                  value={selectedImageDriver}
-                  onChange={(v) => useStudioStore.getState().setSelectedImageDriver(v)}
+                  value={selectedStoryboardDriver}
+                  onChange={(v) => useStudioStore.getState().setSelectedStoryboardDriver(v)}
                   compact
                   showBadges
                 />
@@ -344,9 +363,9 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
                     megapixels={userMegapixels}
                     onChange={setUserMegapixels}
                     compact
-                    disabled={!imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_megapixels}
+                    disabled={!imageDrivers.find((d) => d.driver_id === selectedStoryboardDriver)?.supports_megapixels}
                   />
-                  {imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_loras && (
+                  {imageDrivers.find((d) => d.driver_id === selectedStoryboardDriver)?.supports_loras && (
                     <div>
                       <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
                         <Layers className="w-3 h-3" />
@@ -366,11 +385,11 @@ export function ShotDetail({ shot, projectId, allShots, onRefresh, onClose }: Pr
 
             <button
               onClick={handleGenerateFrame}
-              disabled={poll.isRunning || prompt.trim().length === 0}
+              disabled={busy || (!prompt.trim() && shot.generation_recipe?.params?.horizontal_angle == null)}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-all"
             >
-              {poll.isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-              {poll.isRunning ? (
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {busy ? (
                 <span className="flex items-center gap-1.5">
                   {poll.status}
                   <span className="text-[9px] opacity-70">({poll.elapsedDisplay})</span>

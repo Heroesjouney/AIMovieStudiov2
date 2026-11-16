@@ -27,7 +27,7 @@ import aiohttp
 from .base import (
     VideoDriver, VideoGenerationRequest, VideoGenerationResponse,
     GenerationStatus, DriverCategory, DriverInfo, AspectRatio,
-    VideoGenerationMode,
+    VideoGenerationMode, prune_job_store, SharedSessionContext,
 )
 from .lora_utils import inject_loras
 
@@ -114,13 +114,22 @@ class ComfyVideoDriver(VideoDriver):
         self.output_dir = output_dir or os.getenv("COMFY_OUTPUT_DIR", "")
         self._model_id = model_id
         self._jobs: Dict[str, dict] = {}
+        self._session: Optional[aiohttp.ClientSession] = None
 
-    def _get_session(self) -> aiohttp.ClientSession:
-        """Create an aiohttp session with auth headers if configured."""
-        headers = {}
-        if self._auth_token:
-            headers["Authorization"] = f"Bearer {self._auth_token}"
-        return aiohttp.ClientSession(headers=headers)
+    def _get_session(self) -> SharedSessionContext:
+        """Yield the shared aiohttp session (created once, reused across requests)."""
+        if self._session is None or self._session.closed:
+            headers = {}
+            if self._auth_token:
+                headers["Authorization"] = f"Bearer {self._auth_token}"
+            self._session = aiohttp.ClientSession(headers=headers)
+        return SharedSessionContext(self._session)
+
+    async def close(self) -> None:
+        """Close the shared HTTP session. Called on app shutdown."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     def _load_workflow(self, name: str) -> dict:
         workflow_path = Path(__file__).parent.parent / "workflows" / f"{name}.json"
@@ -217,7 +226,7 @@ class ComfyVideoDriver(VideoDriver):
             return str(local.resolve()) if return_full_path else local.name
         return path
 
-    def _build_workflow(self, request: VideoGenerationRequest, upload_map: dict = None) -> dict:
+    async def _build_workflow(self, request: VideoGenerationRequest, upload_map: dict = None) -> dict:
         """Build a ComfyUI workflow from the template, injecting all request params."""
         upload_map = upload_map or {}
         # MiniMax H3 uses different workflows + model weights for R2V vs T2V/I2V
@@ -354,7 +363,8 @@ class ComfyVideoDriver(VideoDriver):
                         # Inject a VHS_LoadVideoPath node to load the reference video as image sequence
                         # VHS_LoadVideoPath always extracts audio — ensure the video has an audio track
                         resolved_video = self._resolve_local_path(request.reference_video_path, return_full_path=True)
-                        safe_video = self._ensure_audio_track(resolved_video)
+                        # ffprobe/ffmpeg remux blocks — run off the event loop
+                        safe_video = await asyncio.to_thread(self._ensure_audio_track, resolved_video)
                         new_node_id = f"ref_vid_{idx}"
                         nodes_to_add[new_node_id] = {
                             "class_type": "VHS_LoadVideoPath",
@@ -624,37 +634,19 @@ class ComfyVideoDriver(VideoDriver):
 
     async def _upload_to_comfy(self, session: aiohttp.ClientSession, local_path: str) -> str:
         """Upload a file to ComfyUI's input directory and return the filename."""
-        import os
         filename = os.path.basename(local_path)
-        data = aiohttp.FormData()
-        data.add_field("image", open(local_path, "rb"), filename=filename)
-        async with session.post(f"{self.comfy_url}/upload/image", data=data) as resp:
-            if resp.status == 200:
+        with open(local_path, "rb") as f:
+            data = aiohttp.FormData()
+            data.add_field("image", f, filename=filename)
+            async with session.post(f"{self.comfy_url}/upload/image", data=data) as resp:
+                if resp.status != 200:
+                    raise ValueError(f"Reference upload failed (HTTP {resp.status}): {filename}")
                 result = await resp.json()
-                return result.get("name", filename)
-            return filename
-
-    def _resolve_and_upload_paths(self, request: VideoGenerationRequest) -> dict:
-        """Pre-resolve all image paths to local filesystem paths for later upload.
-        Returns a dict mapping original paths to local absolute paths."""
-        paths_to_upload = {}
-        if request.first_frame_path:
-            local = self._resolve_to_local_abs(request.first_frame_path)
-            if local:
-                paths_to_upload[request.first_frame_path] = local
-        if request.last_frame_path:
-            local = self._resolve_to_local_abs(request.last_frame_path)
-            if local:
-                paths_to_upload[request.last_frame_path] = local
-        for ref in request.reference_image_paths:
-            local = self._resolve_to_local_abs(ref)
-            if local:
-                paths_to_upload[ref] = local
-        if request.reference_audio_path:
-            local = self._resolve_to_local_abs(request.reference_audio_path)
-            if local:
-                paths_to_upload[request.reference_audio_path] = local
-        return paths_to_upload
+                name = result.get("name")
+                if not isinstance(name, str) or not name:
+                    raise ValueError(f"Reference upload returned no filename: {filename}")
+                subfolder = result.get("subfolder", "")
+                return f"{subfolder}/{name}" if subfolder else name
 
     def _resolve_to_local_abs(self, path: str) -> Optional[str]:
         """Resolve a served asset path to an absolute filesystem path."""
@@ -667,24 +659,58 @@ class ComfyVideoDriver(VideoDriver):
             return str(local)
         return None
 
+    def _resolve_and_upload_paths(self, request) -> dict:
+        """Collect the local paths to upload for a request.
+
+        Raises ValueError when a requested /assets/ reference is missing on
+        disk — silently dropping a required frame would only fail later
+        inside ComfyUI with a confusing error.
+        """
+        paths_to_upload = {}
+        missing = []
+        candidates = []
+        if request.first_frame_path:
+            candidates.append(request.first_frame_path)
+        if request.last_frame_path:
+            candidates.append(request.last_frame_path)
+        candidates.extend(request.reference_image_paths)
+        if request.reference_audio_path:
+            candidates.append(request.reference_audio_path)
+        for path in candidates:
+            if path in paths_to_upload:
+                continue
+            local = self._resolve_to_local_abs(path)
+            if local:
+                paths_to_upload[path] = local
+            elif path.startswith("/assets/"):
+                missing.append(path)
+        if missing:
+            raise ValueError(f"Reference file(s) not found locally: {', '.join(missing)}")
+        return paths_to_upload
+
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResponse:
+        prune_job_store(self._jobs)
         job_id = str(uuid.uuid4())
 
         # Upload images to ComfyUI before building the workflow
         upload_map = {}  # original_path -> comfy_filename
-        paths_to_upload = self._resolve_and_upload_paths(request)
-        if paths_to_upload:
-            async with self._get_session() as session:
-                for orig_path, local_abs in paths_to_upload.items():
-                    try:
+        try:
+            paths_to_upload = self._resolve_and_upload_paths(request)
+            if paths_to_upload:
+                async with self._get_session() as session:
+                    for orig_path, local_abs in paths_to_upload.items():
                         comfy_name = await self._upload_to_comfy(session, local_abs)
                         upload_map[orig_path] = comfy_name
                         print(f"[ComfyVideoDriver] uploaded {orig_path} -> {comfy_name}")
-                    except Exception as e:
-                        print(f"[ComfyVideoDriver] upload failed for {orig_path}: {e}")
+        except (OSError, ValueError, aiohttp.ClientError) as exc:
+            return VideoGenerationResponse(
+                job_id=job_id,
+                status=GenerationStatus.FAILED,
+                error_message=f"Failed to deliver reference to ComfyUI: {exc}",
+            )
 
         # Build workflow with uploaded filenames
-        workflow = self._build_workflow(request, upload_map)
+        workflow = await self._build_workflow(request, upload_map)
 
         if not workflow:
             return VideoGenerationResponse(
@@ -758,6 +784,7 @@ class ComfyVideoDriver(VideoDriver):
         )
 
     async def check_status(self, job_id: str) -> VideoGenerationResponse:
+        prune_job_store(self._jobs)
         job = self._jobs.get(job_id)
         if not job:
             return VideoGenerationResponse(
@@ -853,8 +880,9 @@ class ComfyVideoDriver(VideoDriver):
         async with self._get_session() as session:
             async with session.get(video_urls[0]) as resp:
                 if resp.status == 200:
+                    data = await resp.read()
                     with open(output_path, "wb") as f:
-                        f.write(await resp.read())
+                        await asyncio.to_thread(f.write, data)
                     return str(output_path)
         raise IOError("Failed to download video")
 

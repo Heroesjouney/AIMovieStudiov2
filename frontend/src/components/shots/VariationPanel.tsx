@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useStudioStore } from "@/lib/store";
 import {
   type ShotResponse, updateShot,
@@ -29,20 +29,25 @@ interface VariationPanelProps {
 }
 
 export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelProps) {
-  const { selectedImageDriver } = useStudioStore();
+  const { selectedStoryboardDriver } = useStudioStore();
   const [show, setShow] = useState(false);
   const [variationPrompt, setVariationPrompt] = useState("");
   const [variationName, setVariationName] = useState("");
   const poll = useGenerationPolling();
+  const submissionRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const busy = submitting || poll.isRunning;
 
   const handleGenerate = async (presetPrompt?: string, presetShotType?: string) => {
     const p = presetPrompt || variationPrompt;
-    if (!p.trim() || !shot.frame_image_path) return;
+    if (submissionRef.current || busy || !p.trim() || !shot.frame_image_path) return;
+    submissionRef.current = true;
+    setSubmitting(true);
     const name = variationName.trim() || `${shot.name} - Variation`;
 
     try {
       const resp = await generateShotVariation(
-        projectId, shot.id, name, p, presetShotType || "medium", selectedImageDriver,
+        projectId, shot.id, name, p, presetShotType || "medium", selectedStoryboardDriver,
       );
 
       if (resp.generation.status === "failed") {
@@ -53,11 +58,11 @@ export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelPro
       const jobId = resp.generation.job_id;
 
       useStudioStore.getState().addActiveFrameJob({
-        job_id: jobId, model_id: selectedImageDriver, shot_id: resp.shot.id, on_complete: "refresh_shots",
+        job_id: jobId, model_id: selectedStoryboardDriver, shot_id: resp.shot.id, on_complete: "refresh_shots",
       });
 
       poll.startPolling(
-        () => checkVariationStatus(jobId, selectedImageDriver),
+        () => checkVariationStatus(jobId, selectedStoryboardDriver),
         async (st) => {
           const imageUrl = st.image_urls?.[0] || "";
           if (imageUrl && resp.shot.id) {
@@ -73,6 +78,9 @@ export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelPro
       );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      submissionRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -83,7 +91,7 @@ export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelPro
           <Wand2 className="w-3.5 h-3.5 text-studio-accent" /> Build Scene in Frames
         </h3>
         <div className="flex items-center gap-2">
-          {poll.isRunning && <span className="text-[10px] text-studio-muted/70 tabular-nums">{poll.elapsedDisplay}</span>}
+          {busy && <span className="text-[10px] text-studio-muted/70 tabular-nums">{poll.elapsedDisplay}</span>}
           <button onClick={() => setShow(!show)} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors">
             {show ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
@@ -98,7 +106,7 @@ export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelPro
               <button
                 key={preset.id}
                 onClick={() => handleGenerate(preset.prompt, preset.shot_type)}
-                disabled={poll.isRunning}
+                disabled={busy}
                 className="flex items-center gap-1 px-2 py-1 text-[10px] rounded-lg border border-studio-border hover:border-studio-accent/40 hover:bg-studio-accent/5 text-studio-muted hover:text-studio-text transition-all disabled:opacity-40"
               >
                 <Copy className="w-2.5 h-2.5" />
@@ -124,11 +132,11 @@ export function VariationPanel({ shot, projectId, onRefresh }: VariationPanelPro
             />
             <button
               onClick={() => handleGenerate()}
-              disabled={poll.isRunning || !variationPrompt.trim()}
+              disabled={busy || !variationPrompt.trim()}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-[10px] font-medium rounded-lg transition-all"
             >
-              {poll.isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-              {poll.isRunning ? (poll.status || "Generating...") : "Generate Variation"}
+              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+              {busy ? (poll.status || "Generating...") : "Generate Variation"}
             </button>
           </div>
           {poll.error && <p className="text-[10px] text-studio-danger bg-studio-danger/10 p-1.5 rounded">{poll.error}</p>}

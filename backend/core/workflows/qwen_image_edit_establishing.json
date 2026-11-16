@@ -134,7 +134,7 @@
       "prompt": "{negative_prompt}",
       "clip": ["38", 0],
       "vae": ["39", 0],
-      "image1": ["142", 0],
+      "image1": ["78", 0],
       "image2": ["79", 0],
       "image3": ["80", 0]
     },
@@ -146,7 +146,7 @@
       "prompt": "{prompt}",
       "clip": ["38", 0],
       "vae": ["39", 0],
-      "image1": ["142", 0],
+      "image1": ["78", 0],
       "image2": ["79", 0],
       "image3": ["80", 0]
     },
@@ -163,9 +163,13 @@
   },
   "142": {
     "inputs": {
-      "image": ["78", 0]
+      "image": ["78", 0],
+      "upscale_method": "lanczos",
+      "width": "{width}",
+      "height": "{height}",
+      "crop": "center"
     },
-    "class_type": "FluxKontextImageScale",
-    "_meta": {"title": "FluxKontextImageScale (Image 1)"}
+    "class_type": "ImageScale",
+    "_meta": {"title": "Output Canvas Size"}
   }
 }

@@ -2,15 +2,15 @@
   "39": {
     "class_type": "CLIPLoader",
     "inputs": {
-      "clip_name": "qwen_3_4b.safetensors",
-      "type": "lumina2",
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
       "device": "default"
     }
   },
   "40": {
     "class_type": "VAELoader",
     "inputs": {
-      "vae_name": "ae.safetensors"
+      "vae_name": "qwen_image_vae.safetensors"
     }
   },
   "41": {
@@ -22,9 +22,10 @@
     }
   },
   "42": {
-    "class_type": "ConditioningZeroOut",
+    "class_type": "CLIPTextEncode",
     "inputs": {
-      "conditioning": ["45", 0]
+      "text": "{negative_prompt}",
+      "clip": ["39", 0]
     }
   },
   "43": {
@@ -38,9 +39,9 @@
     "class_type": "KSampler",
     "inputs": {
       "seed": 0,
-      "steps": 20,
-      "cfg": 1,
-      "sampler_name": "res_multistep",
+      "steps": 50,
+      "cfg": 4,
+      "sampler_name": "euler",
       "scheduler": "simple",
       "denoise": 1,
       "model": ["47", 0],
@@ -59,14 +60,14 @@
   "46": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "z_image_turbo_bf16.safetensors",
+      "unet_name": "qwen_image_fp8_e4m3fn.safetensors",
       "weight_dtype": "default"
     }
   },
   "47": {
     "class_type": "ModelSamplingAuraFlow",
     "inputs": {
-      "shift": 3,
+      "shift": 3.1,
       "model": ["46", 0]
     }
   },

@@ -77,7 +77,7 @@ export function ShotCreatePanel({
   referenceFrameUrl, widgetPreviousShots, actionAxisAngle, lastShotAngle,
   sortedShots, assets, sceneRecipeAssetIds, onClose, onRefresh,
 }: ShotCreatePanelProps) {
-  const { imageDrivers, selectedImageDriver, setSelectedImageDriver } = useStudioStore();
+  const { imageDrivers, selectedStoryboardDriver, setSelectedStoryboardDriver } = useStudioStore();
 
   const [newPrompt, setNewPrompt] = useState("");
   const [artStyle, setArtStyle] = useState("");
@@ -101,13 +101,19 @@ export function ShotCreatePanel({
   const [userMegapixels, setUserMegapixels] = useState<number | null>(null);
 
   const poll = useGenerationPolling();
+  const submissionRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const busy = submitting || poll.isRunning;
 
   const availableAssets = assets.filter((a) => a.primary_image && !newShotAssets.some((na) => na.asset_id === a.id) && !sceneRecipeAssetIds.has(a.id));
   const extraAssetCount = newShotAssets.filter((a) => !sceneRecipeAssetIds.has(a.asset_id)).length;
   const crossesLine = lastShotAngle !== null && wouldCrossLine(lastShotAngle, camHorizontal);
 
   const handleCreateAndGenerate = async () => {
-    if (isFirstShotInScene && !newPrompt.trim()) return;
+    if (submissionRef.current || busy || (isFirstShotInScene && !newPrompt.trim())) return;
+    submissionRef.current = true;
+    setSubmitting(true);
     const wasFirstShot = isFirstShotInScene;
 
     poll.setStatus("Creating shot...");
@@ -152,7 +158,7 @@ export function ShotCreatePanel({
       if (userMegapixels !== null) extraParams.megapixels = userMegapixels;
 
       const resp = await generateShotFrame(
-        shot.id, fullPrompt, selectedImageDriver,
+        shot.id, fullPrompt, selectedStoryboardDriver,
         advNegativePrompt || undefined,
         aspectData.width, aspectData.height,
         advSeed ? parseInt(advSeed) : undefined,
@@ -174,13 +180,13 @@ export function ShotCreatePanel({
 
       useStudioStore.getState().addActiveFrameJob({
         job_id: resp.job_id,
-        model_id: selectedImageDriver,
+        model_id: selectedStoryboardDriver,
         shot_id: shot.id,
         on_complete: "refresh_shots",
       });
 
       poll.startPolling(
-        () => checkShotFrameStatus(resp.job_id, selectedImageDriver),
+        () => checkShotFrameStatus(resp.job_id, selectedStoryboardDriver),
         async (st) => {
           const remoteFramePath = st.image_urls?.[0] || "";
           // Save the generated image to the vault so it appears in the library
@@ -212,6 +218,9 @@ export function ShotCreatePanel({
       );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      submissionRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -220,14 +229,15 @@ export function ShotCreatePanel({
   createRef.current = handleCreateAndGenerate;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !poll.isRunning && (newPrompt.trim() || !isFirstShotInScene)) {
+      if (e.defaultPrevented || !(e.target instanceof Node) || !panelRef.current?.contains(e.target)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !busy && (newPrompt.trim() || !isFirstShotInScene)) {
         e.preventDefault();
         createRef.current();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [poll.isRunning, newPrompt, isFirstShotInScene]);
+  }, [busy, newPrompt, isFirstShotInScene]);
 
   const handleClose = () => {
     poll.reset();
@@ -244,13 +254,13 @@ export function ShotCreatePanel({
   };
 
   return (
-    <div className="mb-4 p-4 bg-studio-panel rounded-xl border border-studio-border animate-fade-in">
+    <div ref={panelRef} className="mb-4 p-4 bg-studio-panel rounded-xl border border-studio-border animate-fade-in">
       <div className="flex items-center justify-between mb-2">
         <label className="text-[10px] font-semibold text-studio-muted uppercase tracking-wider">
-          {(isFirstShotInScene || poll.isRunning) ? "New Shot Prompt" : "Camera Position"}
+          {(isFirstShotInScene || busy) ? "New Shot Prompt" : "Camera Position"}
         </label>
         <div className="flex items-center gap-2">
-          {poll.isRunning && (
+          {busy && (
             <span className="text-[10px] text-studio-muted/70 tabular-nums">{poll.elapsedDisplay}</span>
           )}
           <button onClick={handleClose} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted transition-colors">
@@ -259,7 +269,7 @@ export function ShotCreatePanel({
         </div>
       </div>
 
-      {(isFirstShotInScene || (poll.isRunning && !useStudioStore.getState().selectedShotId)) && (
+      {(isFirstShotInScene || (busy && !useStudioStore.getState().selectedShotId)) && (
         <textarea
           value={newPrompt}
           onChange={(e) => setNewPrompt(e.target.value)}
@@ -267,14 +277,13 @@ export function ShotCreatePanel({
           rows={3}
           autoFocus
           className="w-full bg-studio-bg border border-studio-border rounded-lg p-2.5 text-xs focus:border-studio-accent focus:ring-2 focus:ring-studio-accent/20 focus:outline-none resize-none"
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCreateAndGenerate(); }}
         />
       )}
 
       {/* Cinematic quick-select options */}
       <div className="flex items-center gap-2 mt-2 flex-wrap">
         <Camera className="w-3 h-3 text-studio-muted shrink-0" />
-        {(isFirstShotInScene || poll.isRunning) && (
+        {(isFirstShotInScene || busy) && (
           <select
             value="establishing"
             disabled
@@ -302,18 +311,17 @@ export function ShotCreatePanel({
         <div className="w-40">
           <ModelSelector
             drivers={imageDrivers}
-            value={selectedImageDriver}
-            onChange={setSelectedImageDriver}
-            filterFn={(d) => d.driver_id === "qwen_image_edit"}
+            value={selectedStoryboardDriver}
+            onChange={setSelectedStoryboardDriver}
             compact
           />
         </div>
-        {isFirstShotInScene && !poll.isRunning && (
+        {isFirstShotInScene && !busy && (
           <span className="text-[10px] text-studio-accent font-medium">
             First shot — auto establishing
           </span>
         )}
-        {!isFirstShotInScene && !poll.isRunning && (
+        {!isFirstShotInScene && !busy && (
           <div className="w-full mt-2 flex flex-col gap-2">
             {/* 180° rule warning */}
             {crossesLine && (
@@ -512,7 +520,7 @@ export function ShotCreatePanel({
           </p>
 
           {/* LoRAs */}
-          {imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_loras && (
+          {imageDrivers.find((d) => d.driver_id === selectedStoryboardDriver)?.supports_loras && (
             <div className="mt-3">
               <label className="flex items-center gap-1.5 text-[10px] font-semibold text-studio-muted uppercase tracking-wider mb-1.5">
                 <Layers className="w-3 h-3" />
@@ -537,7 +545,7 @@ export function ShotCreatePanel({
               megapixels={userMegapixels}
               onChange={setUserMegapixels}
               compact
-              disabled={!imageDrivers.find((d) => d.driver_id === selectedImageDriver)?.supports_megapixels}
+              disabled={!imageDrivers.find((d) => d.driver_id === selectedStoryboardDriver)?.supports_megapixels}
             />
           </div>
         </div>
@@ -547,11 +555,11 @@ export function ShotCreatePanel({
         <div className="flex-1" />
         <button
           onClick={handleCreateAndGenerate}
-          disabled={poll.isRunning || (isFirstShotInScene && !newPrompt.trim())}
+          disabled={busy || (isFirstShotInScene && !newPrompt.trim())}
           className="flex items-center gap-1.5 px-4 py-1.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
         >
-          {poll.isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-          {poll.isRunning ? (poll.status || "Working...") : (
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          {busy ? (poll.status || "Working...") : (
             <span className="flex items-center gap-1.5">
               Create & Generate
               <kbd className="hidden sm:inline text-[9px] px-1 py-0.5 rounded bg-white/10 border border-white/20">Ctrl+↵</kbd>

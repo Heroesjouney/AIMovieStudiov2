@@ -22,7 +22,7 @@ import aiohttp
 
 from .base import (
     AudioDriver, AudioGenerationRequest, AudioGenerationResponse,
-    GenerationStatus, DriverCategory, DriverInfo,
+    GenerationStatus, DriverCategory, DriverInfo, prune_job_store, SharedSessionContext,
 )
 
 
@@ -71,6 +71,7 @@ class ComfyAudioDriver(AudioDriver):
         self._auth_token = os.getenv("COMFY_AUTH_TOKEN", "")
         self._jobs: Dict[str, dict] = {}
         self._workflows: Dict[str, dict] = {}
+        self._session: Optional[aiohttp.ClientSession] = None
 
     # --- AudioDriver abstract properties ---
 
@@ -96,11 +97,20 @@ class ComfyAudioDriver(AudioDriver):
 
     # --- Session / workflow loading ---
 
-    def _get_session(self) -> aiohttp.ClientSession:
-        headers = {}
-        if self._auth_token:
-            headers["Authorization"] = f"Bearer {self._auth_token}"
-        return aiohttp.ClientSession(headers=headers)
+    def _get_session(self) -> SharedSessionContext:
+        """Yield the shared aiohttp session (created once, reused across requests)."""
+        if self._session is None or self._session.closed:
+            headers = {}
+            if self._auth_token:
+                headers["Authorization"] = f"Bearer {self._auth_token}"
+            self._session = aiohttp.ClientSession(headers=headers)
+        return SharedSessionContext(self._session)
+
+    async def close(self) -> None:
+        """Close the shared HTTP session. Called on app shutdown."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     def _load_workflow(self, name: str) -> dict:
         if name in self._workflows:
@@ -217,6 +227,7 @@ class ComfyAudioDriver(AudioDriver):
         For TTS drivers, 'text' is the dialogue to synthesize, and
         'reference_audio_path' is the voice cloning reference.
         """
+        prune_job_store(self._jobs)
         job_id = str(uuid.uuid4())
 
         workflow_name = self._workflow_name
@@ -288,6 +299,7 @@ class ComfyAudioDriver(AudioDriver):
 
     async def check_status(self, job_id: str) -> AudioGenerationResponse:
         """Poll ComfyUI for job completion and download audio output."""
+        prune_job_store(self._jobs)
         job = self._jobs.get(job_id)
         if not job:
             return AudioGenerationResponse(

@@ -27,6 +27,7 @@ interface StudioState {
   videoDrivers: DriverInfo[];
   audioDrivers: DriverInfo[];
   selectedImageDriver: string;
+  selectedStoryboardDriver: string;
   selectedVideoDriver: string;
   selectedAudioDriver: string;
   
@@ -54,6 +55,7 @@ interface StudioState {
   setScenes: (scenes: SceneResponse[]) => void;
   setDrivers: (image: DriverInfo[], video: DriverInfo[], audio: DriverInfo[]) => void;
   setSelectedImageDriver: (id: string) => void;
+  setSelectedStoryboardDriver: (id: string) => void;
   setSelectedVideoDriver: (id: string) => void;
   setSelectedAudioDriver: (id: string) => void;
   setSelectedAssetId: (id: string | null) => void;
@@ -152,6 +154,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   videoDrivers: [],
   audioDrivers: [],
   selectedImageDriver: "qwen_image_edit",
+  selectedStoryboardDriver: "qwen_image_edit",
   selectedVideoDriver: "minimax_h3",
   selectedAudioDriver: "fish_speech",
   selectedAssetId: null,
@@ -212,6 +215,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setDrivers: (image, video, audio) =>
     set({ imageDrivers: image, videoDrivers: video, audioDrivers: audio }),
   setSelectedImageDriver: (id) => set({ selectedImageDriver: id }),
+  setSelectedStoryboardDriver: (id) => set({ selectedStoryboardDriver: id }),
   setSelectedVideoDriver: (id) => set({ selectedVideoDriver: id }),
   setSelectedAudioDriver: (id) => set({ selectedAudioDriver: id }),
   setSelectedAssetId: (id) => set({ selectedAssetId: id }),

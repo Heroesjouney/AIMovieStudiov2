@@ -5,18 +5,21 @@ Shots are the core unit of the storyboard. Each shot stores its full
 generation recipe for reproducibility.
 """
 
+import asyncio
 import json
 import uuid
 import random
 import shutil
 import subprocess
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional, Dict
 from datetime import datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
 from core.schemas.shot import (
     Shot, ShotCreateRequest, ShotType, ShotStatus,
@@ -31,7 +34,7 @@ from core.schemas.camera import (
 )
 from core.drivers import get_image_driver, get_video_driver
 from core.drivers.base import VideoGenerationRequest, VideoGenerationMode, AspectRatio, GenerationStatus
-from core.logic.prompt_builder import build_prompt, parse_dialogue_tags
+from core.logic.prompt_builder import build_prompt, parse_dialogue_tags, build_qwen_reference_prompt, character_name_matches
 
 router = APIRouter()
 VAULT_DIR = Path(__file__).parent.parent / "assets"
@@ -120,7 +123,7 @@ async def _download_image_to_vault(project_id: str, shot_id: str, image_url: str
     shot_folder = _shot_dir(project_id, shot_id)
     filename = f"{prefix}{ext}"
     filepath = shot_folder / filename
-    filepath.write_bytes(image_bytes)
+    await asyncio.to_thread(filepath.write_bytes, image_bytes)
 
     return f"/assets/{project_id}/shots/{shot_id}/{filename}"
 
@@ -137,6 +140,33 @@ def _save_scenes(project_id: str, scenes: List[dict]):
     idx = _project_dir(project_id) / "scenes.json"
     with open(idx, "w") as f:
         json.dump(scenes, f, indent=2, default=str)
+
+
+# Serialize read-modify-write cycles on the vault's JSON files. Handlers run
+# concurrently on one event loop; a load → mutate → save section that awaits
+# in the middle (e.g. ffmpeg frame extraction off-thread) could otherwise be
+# interleaved by another writer and lose updates. Re-entrant per task so a
+# locked section can call helpers that also lock.
+_vault_lock = asyncio.Lock()
+_vault_lock_depth: Dict[object, int] = {}
+
+
+@asynccontextmanager
+async def _vault_write_lock():
+    task = asyncio.current_task()
+    if _vault_lock_depth.get(task):
+        _vault_lock_depth[task] += 1
+        try:
+            yield
+        finally:
+            _vault_lock_depth[task] -= 1
+        return
+    async with _vault_lock:
+        _vault_lock_depth[task] = 1
+        try:
+            yield
+        finally:
+            _vault_lock_depth.pop(task, None)
 
 
 def _build_scene_context_prefix(shot: dict, scene_obj: dict, prompt: str) -> str:
@@ -290,6 +320,36 @@ async def create_shot(req: ShotCreateRequest):
 # Shot Frame Generation (must be before /{project_id}/{shot_id} routes)
 # =============================================================================
 
+def _shot_reference_paths(
+    shot_assets: List[dict], asset_map: dict, continuity_paths: List[str],
+    establishing_frame: Optional[str], explicit_paths: Optional[List[str]], model_id: str,
+    reference_limit: Optional[int] = None,
+) -> List[str]:
+    required = [establishing_frame] if establishing_frame else []
+    for asset in sorted(shot_assets, key=lambda a: a.get("role", a.get("asset_type")) != "location"):
+        image = asset_map.get(asset.get("asset_id"), {}).get("primary_image") or asset.get("image_path")
+        if not image:
+            raise HTTPException(status_code=400, detail=f"Recipe asset '{asset.get('asset_name') or asset.get('asset_id')}' has no reference image. Assign an image or remove it from the shot.")
+        if image not in required:
+            required.append(image)
+    for image in explicit_paths or []:
+        if image and image not in required:
+            required.append(image)
+    limit = reference_limit if reference_limit is not None else (3 if model_id == "qwen_image_edit" else None)
+    if limit is not None and len(required) > limit:
+        model_name = "Qwen Image Edit" if model_id == "qwen_image_edit" else model_id
+        raise HTTPException(
+            status_code=400,
+            detail=f"{model_name} supports {limit} reference images, but this shot needs {len(required)} "
+            "including recipe assets, linked images, and the establishing frame. "
+            "Reduce the shot's assets or linked images before generating; no recipe images were dropped.",
+        )
+    for image in continuity_paths:
+        if image not in required and (limit is None or len(required) < limit):
+            required.append(image)
+    return required
+
+
 @router.post("/frame")
 async def generate_shot_frame(req: ShotFrameGenerateRequest):
     """Generate a storyboard frame for a shot using the selected image driver."""
@@ -299,7 +359,9 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
 
     # Look up the shot to get asset metadata (types and names)
     shot, shot_project_id = _find_shot_global(req.shot_id)
-    shot_assets = (shot or {}).get("assets", [])
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+    shot_assets = shot.get("assets", [])
 
     # Load full asset records early (needed for scene context and asset descriptions)
     all_assets = _load_assets(shot_project_id) if shot else []
@@ -362,7 +424,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             if mood:
                 mood_labels = {
                     "neutral": "balanced composition",
-                    "tense": "tense atmosphere, tight framing",
+                    "tense": "tense atmosphere",
                     "joyful": "joyful atmosphere, warm tones",
                     "melancholic": "melancholic atmosphere, muted tones",
                     "mysterious": "mysterious atmosphere, shadows and fog",
@@ -399,7 +461,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     # Detect if the user's prompt focuses on a specific character by name.
     # If so, only include that character's reference image and enrichment text.
     user_prompt_lower = req.prompt.lower().strip()
-    focused_character_name = None
+    focused_character_names = []
 
     location_image = None
     character_images = []
@@ -416,15 +478,11 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
         display_name = name
         if name and "generated" in name.lower():
             display_name = desc if desc else name
-        if display_name:
-            name_lower = display_name.lower()
-            name_words = name_lower.split()
-            if name_lower in user_prompt_lower or (name_words and name_words[0] in user_prompt_lower):
-                focused_character_name = display_name
-                break
+        if character_name_matches(display_name, user_prompt_lower):
+            focused_character_names.append(display_name)
 
-    if focused_character_name and establishing_frame:
-        print(f"[routes_shots] character focus detected: '{focused_character_name}' — filtering other characters")
+    if focused_character_names and establishing_frame:
+        print(f"[routes_shots] named characters: {focused_character_names}")
 
     # Second pass: separate assets by role for multi-reference workflow.
     # Prompt enrichments are built by build_prompt() — this pass only
@@ -447,7 +505,7 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             if name and "generated" in name.lower():
                 display_name = desc if desc else name
             # Skip non-focused characters when a focus is detected (subsequent shots only)
-            if focused_character_name and establishing_frame and display_name != focused_character_name:
+            if focused_character_names and establishing_frame and display_name not in focused_character_names:
                 print(f"[routes_shots] skipping character '{display_name}' (not focused)")
                 continue
             if img:
@@ -555,7 +613,11 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
             )
             print(f"[routes_shots] POV shot: skipping <sks> tag, using descriptive text only")
         else:
-            effective_prompt = req.prompt_override.strip() if req.prompt_override else req.prompt
+            effective_prompt = build_prompt(
+                model_id=req.model_id, scene_context=scene_context, shot_assets=shot_assets,
+                asset_map=asset_map, action_prefix=action_prefix, user_prompt=req.prompt,
+                is_pov=True, prompt_override=req.prompt_override,
+            )
 
     # Find previous shot in the same scene for action continuity
     prev_frame_image = None
@@ -609,6 +671,15 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     for r in (req.reference_image_paths or []):
         if r not in ref_paths:
             ref_paths.append(r)
+
+    ref_paths = _shot_reference_paths(
+        shot_assets, asset_map, ref_paths, establishing_frame, req.reference_image_paths, req.model_id,
+        reference_limit=driver.get_info().max_reference_images,
+    )
+    if req.model_id == "qwen_image_edit" and not (req.prompt_override and req.prompt_override.strip()):
+        effective_prompt = build_qwen_reference_prompt(effective_prompt, shot_assets, asset_map, ref_paths, establishing_frame)
+    if len(effective_prompt) > 4000:
+        raise HTTPException(status_code=400, detail="The combined shot prompt and recipe instructions exceed 4000 characters. Shorten the prompt or asset descriptions.")
 
     print(f"[routes_shots] characters={len(character_images)}, location={'yes' if location_image else 'no'}, has_establishing={'yes' if establishing_frame else 'no'}, action={'yes' if has_action else 'no'}")
     print(f"[routes_shots] effective_prompt={effective_prompt}")
@@ -684,17 +755,27 @@ async def generate_shot_frame(req: ShotFrameGenerateRequest):
     )
 
     response = await driver.generate(gen_req)
+    if response.status == GenerationStatus.FAILED:
+        return response.model_dump()
 
     # Store recipe in shot
     if shot:
+        sampler = next(iter(response.metadata.get("samplers", [])), {})
         recipe = GenerationRecipe(
             resolved_prompt=effective_prompt,
-            resolved_negative_prompt=req.negative_prompt,
+            resolved_negative_prompt=effective_negative,
             seed=effective_seed,
             model_id=req.model_id,
+            workflow_hash=response.metadata.get("workflow_hash"),
             params={
+                "user_prompt": req.prompt,
+                "linked_reference_paths": req.reference_image_paths,
+                "execution": response.metadata,
+                "checkpoint_override": extra_params.get("checkpoint_override"),
+                "megapixels": extra_params.get("megapixels"),
                 "width": req.width, "height": req.height,
-                "cfg": req.cfg, "steps": req.steps,
+                "cfg": sampler.get("cfg", extra_params.get("cfg", req.cfg)),
+                "steps": sampler.get("steps", extra_params.get("steps", req.steps)),
                 "horizontal_angle": req.horizontal_angle,
                 "vertical_angle": req.vertical_angle,
                 "zoom": req.zoom,
@@ -809,53 +890,54 @@ async def delete_video_take(project_id: str, shot_id: str, take_id: str):
     was_selected = take_to_delete.get("selected", False)
     take_path = take_to_delete.get("path", "")
 
-    # Delete the MP4 file from vault
-    if take_path and take_path.startswith("/assets/"):
-        local_file = VAULT_DIR / take_path[len("/assets/"):]
-        if local_file.exists():
-            try:
-                local_file.unlink()
-                print(f"[routes_shots] deleted take file: {local_file}")
-            except Exception as e:
-                print(f"[routes_shots] failed to delete take file: {e}")
+    async with _vault_write_lock():
+        # Delete the MP4 file from vault
+        if take_path and take_path.startswith("/assets/"):
+            local_file = VAULT_DIR / take_path[len("/assets/"):]
+            if local_file.exists():
+                try:
+                    local_file.unlink()
+                    print(f"[routes_shots] deleted take file: {local_file}")
+                except Exception as e:
+                    print(f"[routes_shots] failed to delete take file: {e}")
 
-    # Also delete spliced retake file if it exists
-    spliced_path = shot.get("video_clip_path", "")
-    if take_to_delete.get("retake_of") and spliced_path.startswith("/assets/"):
-        spliced_file = VAULT_DIR / spliced_path[len("/assets/"):]
-        if spliced_file.exists() and spliced_file != local_file:
-            try:
-                spliced_file.unlink()
-                print(f"[routes_shots] deleted spliced file: {spliced_file}")
-            except Exception as e:
-                print(f"[routes_shots] failed to delete spliced file: {e}")
+        # Also delete spliced retake file if it exists
+        spliced_path = shot.get("video_clip_path", "")
+        if take_to_delete.get("retake_of") and spliced_path.startswith("/assets/"):
+            spliced_file = VAULT_DIR / spliced_path[len("/assets/"):]
+            if spliced_file.exists() and spliced_file != local_file:
+                try:
+                    spliced_file.unlink()
+                    print(f"[routes_shots] deleted spliced file: {spliced_file}")
+                except Exception as e:
+                    print(f"[routes_shots] failed to delete spliced file: {e}")
 
-    # Remove the take from the list
-    takes = [t for t in takes if t["id"] != take_id]
-    shot["video_takes"] = takes
+        # Remove the take from the list
+        takes = [t for t in takes if t["id"] != take_id]
+        shot["video_takes"] = takes
 
-    if was_selected:
-        if takes:
-            # Promote the last remaining take to active
-            takes[-1]["selected"] = True
-            shot["video_clip_path"] = takes[-1]["path"]
-            shot["video_takes"] = takes
+        if was_selected:
+            if takes:
+                # Promote the last remaining take to active
+                takes[-1]["selected"] = True
+                shot["video_clip_path"] = takes[-1]["path"]
+                shot["video_takes"] = takes
 
-            # Re-extract last frame from the new active take
-            shot_folder = _shot_dir(project_id, shot_id)
-            last_frame_path = shot_folder / "last_frame.png"
-            if _extract_last_frame(takes[-1]["path"], last_frame_path):
-                shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+                # Re-extract last frame from the new active take
+                shot_folder = _shot_dir(project_id, shot_id)
+                last_frame_path = shot_folder / "last_frame.png"
+                if await asyncio.to_thread(_extract_last_frame, takes[-1]["path"], last_frame_path):
+                    shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+                else:
+                    shot["last_frame_path"] = None
             else:
+                # No takes left — clear video state
+                shot["video_clip_path"] = None
                 shot["last_frame_path"] = None
-        else:
-            # No takes left — clear video state
-            shot["video_clip_path"] = None
-            shot["last_frame_path"] = None
-            shot["status"] = ShotStatus.PLANNED.value
+                shot["status"] = ShotStatus.PLANNED.value
 
-    shot["updated_at"] = datetime.utcnow().isoformat()
-    _save_shots(project_id, shots)
+        shot["updated_at"] = datetime.utcnow().isoformat()
+        _save_shots(project_id, shots)
 
     return {"status": "deleted", "take_id": take_id, "remaining_takes": len(takes)}
 
@@ -920,50 +1002,74 @@ async def generate_shot_variation(req: ShotVariationRequest):
         "updated_at": now,
     }
 
-    shots = _load_shots(req.project_id)
-    shots.append(new_shot)
-    _save_shots(req.project_id, shots)
-
-    # Build reference paths: source frame first, then bound asset images
-    ref_paths = [source_shot["frame_image_path"]]
-    for a in inherited_assets:
-        if a.get("image_path") and a["image_path"] not in ref_paths:
-            ref_paths.append(a["image_path"])
-
-    # Generate the frame using the edit driver (supports reference images)
+    source_recipe = source_shot.get("generation_recipe") or {}
+    source_params = source_recipe.get("params") or {}
+    same_model = source_recipe.get("model_id") == req.model_id
+    linked_paths = req.reference_image_paths
+    if linked_paths is None:
+        linked_paths = source_params.get("linked_reference_paths") or []
     driver = get_image_driver(req.model_id)
     if not driver:
         raise HTTPException(status_code=400, detail=f"Unknown model: {req.model_id}")
 
-    from core.drivers.base import ImageGenerationRequest
-    gen_req = ImageGenerationRequest(
-        prompt=req.prompt,
-        negative_prompt=req.negative_prompt,
-        width=req.width,
-        height=req.height,
-        seed=req.seed,
-        reference_image_paths=ref_paths,
+    # Build reference paths: source frame first, then bound asset images
+    asset_map = {a["id"]: a for a in _load_assets(req.project_id)}
+    ref_paths = _shot_reference_paths(
+        inherited_assets, asset_map, [], source_shot["frame_image_path"], linked_paths, req.model_id,
+        reference_limit=driver.get_info().max_reference_images,
     )
+    effective_prompt = req.prompt
+    if req.model_id == "qwen_image_edit":
+        effective_prompt = build_qwen_reference_prompt(req.prompt, inherited_assets, asset_map, ref_paths, source_shot["frame_image_path"])
+    if len(effective_prompt) > 4000:
+        raise HTTPException(status_code=400, detail="The variation prompt and recipe instructions exceed 4000 characters.")
+    effective_seed = req.seed if req.seed is not None else random.randint(0, 2**32 - 1)
+    effective_negative = req.negative_prompt if req.negative_prompt is not None else source_recipe.get("resolved_negative_prompt")
+    extra_params = {key: source_params[key] for key in ("cfg", "steps", "loras", "checkpoint_override", "megapixels")
+                    if same_model and source_params.get(key) is not None}
+    extra_params.update(req.extra_params)
+    denoise = req.denoise if req.denoise is not None else (source_recipe.get("denoise") if same_model else None)
+
+    # Generate the frame using the edit driver (supports reference images)
+    from core.drivers.base import ImageGenerationRequest
+    try:
+        gen_req = ImageGenerationRequest(
+            prompt=effective_prompt,
+            negative_prompt=effective_negative,
+            width=req.width if req.width is not None else source_params.get("width") or 1024,
+            height=req.height if req.height is not None else source_params.get("height") or 1024,
+            seed=effective_seed,
+            reference_image_paths=ref_paths,
+            denoise_strength=denoise,
+            extra_params=extra_params,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid variation settings: {exc.errors()[0]['msg']}") from exc
     response = await driver.generate(gen_req)
+    if response.status == GenerationStatus.FAILED:
+        return {"shot": new_shot, "generation": response.model_dump()}
 
     # Store recipe
+    sampler = next(iter(response.metadata.get("samplers", [])), {})
     recipe = GenerationRecipe(
-        resolved_prompt=req.prompt,
-        resolved_negative_prompt=req.negative_prompt,
-        seed=req.seed,
+        resolved_prompt=effective_prompt,
+        resolved_negative_prompt=effective_negative,
+        seed=effective_seed,
         model_id=req.model_id,
-        params={"width": req.width, "height": req.height},
+        workflow_hash=response.metadata.get("workflow_hash"),
+        params={**extra_params, "width": gen_req.width, "height": gen_req.height, "user_prompt": req.prompt,
+                "linked_reference_paths": linked_paths, "execution": response.metadata,
+                "cfg": sampler.get("cfg", extra_params.get("cfg")), "steps": sampler.get("steps", extra_params.get("steps"))},
         reference_paths=ref_paths,
+        denoise=denoise,
     )
     new_shot["generation_recipe"] = recipe.model_dump()
     new_shot["status"] = ShotStatus.PLANNED.value
 
     # Update shot in storage
     shots = _load_shots(req.project_id)
-    for s in shots:
-        if s["id"] == new_shot_id:
-            s.update(new_shot)
-            break
+    new_shot["sequence_order"] = len(shots)
+    shots.append(new_shot)
     _save_shots(req.project_id, shots)
 
     return {
@@ -1016,11 +1122,15 @@ async def generate_camera_angles(req: MultiAngleRequest):
                 "sub_job_id": response.job_id,
                 "angle": angle.value,
                 "status": response.status,
+                "error_message": response.error_message,
             })
 
+        all_failed = all(sub["status"] == GenerationStatus.FAILED for sub in sub_jobs)
         return {
             "job_id": parent_job_id,
-            "status": "processing",
+            "status": "failed" if all_failed else "processing",
+            "error_message": (next((sub["error_message"] for sub in sub_jobs if sub["error_message"]), None)
+                              or "No camera-angle jobs were submitted") if all_failed else None,
             "method": "qwen_multiangle",
             "sub_jobs": sub_jobs,
             "angles": [a.value for a in req.angles],
@@ -1074,7 +1184,7 @@ async def _download_video_to_vault(project_id: str, shot_id: str, video_url: str
     shot_folder = _shot_dir(project_id, shot_id)
     filename = f"take_{take_id}.mp4"
     filepath = shot_folder / filename
-    filepath.write_bytes(video_bytes)
+    await asyncio.to_thread(filepath.write_bytes, video_bytes)
     return f"/assets/{project_id}/shots/{shot_id}/{filename}"
 
 
@@ -1354,69 +1464,70 @@ async def check_video_status(job_id: str, model_id: str = "fal_seedance_2_5"):
             )
 
             # Load shot and append take
-            shots = _load_shots(project_id)
-            shot = next((s for s in shots if s["id"] == shot_id), None)
-            if shot:
-                takes = shot.get("video_takes", [])
-                # Skip if take already persisted (re-poll after completion)
-                if any(t.get("id") == take_id for t in takes):
-                    print(f"[routes_shots] take {take_id} already persisted, skipping")
-                else:
-                    new_take = {
-                        "id": take_id,
-                        "path": local_path,
-                        "seed": req_data.get("seed"),
-                        "prompt": req_data.get("prompt"),
-                        "negative_prompt": req_data.get("negative_prompt"),
-                        "model_id": req_data.get("model_id"),
-                        "camera_movement": req_data.get("camera_movement"),
-                        "mode": req_data.get("mode"),
-                        "created_at": datetime.utcnow().isoformat(),
-                        "selected": len(takes) == 0,  # Auto-select first take
-                    }
-                    takes.append(new_take)
-                    shot["video_takes"] = takes
-
-                    # Auto-select first take → set video_clip_path
-                    if len(takes) == 1:
-                        shot["video_clip_path"] = local_path
-                        shot["status"] = ShotStatus.VIDEO_GENERATED.value
-
-                    # Extract last frame for continuity chain
-                    shot_folder = _shot_dir(project_id, shot_id)
-                    last_frame_path = shot_folder / "last_frame.png"
-                    if _extract_last_frame(local_path, last_frame_path):
-                        shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
-                        print(f"[routes_shots] extracted last frame for shot {shot_id}: {shot['last_frame_path']}")
+            async with _vault_write_lock():
+                shots = _load_shots(project_id)
+                shot = next((s for s in shots if s["id"] == shot_id), None)
+                if shot:
+                    takes = shot.get("video_takes", [])
+                    # Skip if take already persisted (re-poll after completion)
+                    if any(t.get("id") == take_id for t in takes):
+                        print(f"[routes_shots] take {take_id} already persisted, skipping")
                     else:
-                        print(f"[routes_shots] failed to extract last frame for shot {shot_id}")
+                        new_take = {
+                            "id": take_id,
+                            "path": local_path,
+                            "seed": req_data.get("seed"),
+                            "prompt": req_data.get("prompt"),
+                            "negative_prompt": req_data.get("negative_prompt"),
+                            "model_id": req_data.get("model_id"),
+                            "camera_movement": req_data.get("camera_movement"),
+                            "mode": req_data.get("mode"),
+                            "created_at": datetime.utcnow().isoformat(),
+                            "selected": len(takes) == 0,  # Auto-select first take
+                        }
+                        takes.append(new_take)
+                        shot["video_takes"] = takes
 
-                    # Extract first frame as storyboard image if shot has no frame_image_path
-                    if not shot.get("frame_image_path"):
-                        first_frame_path = shot_folder / "first_frame.png"
-                        if _extract_first_frame(local_path, first_frame_path):
-                            shot["frame_image_path"] = f"/assets/{project_id}/shots/{shot_id}/first_frame.png"
-                            print(f"[routes_shots] extracted first frame as storyboard image for shot {shot_id}: {shot['frame_image_path']}")
+                        # Auto-select first take → set video_clip_path
+                        if len(takes) == 1:
+                            shot["video_clip_path"] = local_path
+                            shot["status"] = ShotStatus.VIDEO_GENERATED.value
+
+                        # Extract last frame for continuity chain
+                        shot_folder = _shot_dir(project_id, shot_id)
+                        last_frame_path = shot_folder / "last_frame.png"
+                        if await asyncio.to_thread(_extract_last_frame, local_path, last_frame_path):
+                            shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+                            print(f"[routes_shots] extracted last frame for shot {shot_id}: {shot['last_frame_path']}")
                         else:
-                            print(f"[routes_shots] failed to extract first frame for shot {shot_id}")
+                            print(f"[routes_shots] failed to extract last frame for shot {shot_id}")
 
-                    # Handle retake: splice new segment back into original video
-                    if job_info.get("is_retake"):
-                        original_path = job_info["original_video_path"]
-                        start_sec = job_info["start_seconds"]
-                        end_sec = job_info["end_seconds"]
-                        spliced_path = shot_folder / f"take_{take_id}_spliced.mp4"
-                        if _splice_video(original_path, local_path, start_sec, end_sec, spliced_path):
-                            spliced_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_spliced.mp4"
-                            new_take["path"] = spliced_url
-                            new_take["retake_of"] = original_path
-                            new_take["retake_range"] = [start_sec, end_sec]
-                            print(f"[routes_shots] retake spliced into {spliced_url}")
-                        else:
-                            print(f"[routes_shots] retake splice failed, keeping unspliced segment")
+                        # Extract first frame as storyboard image if shot has no frame_image_path
+                        if not shot.get("frame_image_path"):
+                            first_frame_path = shot_folder / "first_frame.png"
+                            if await asyncio.to_thread(_extract_first_frame, local_path, first_frame_path):
+                                shot["frame_image_path"] = f"/assets/{project_id}/shots/{shot_id}/first_frame.png"
+                                print(f"[routes_shots] extracted first frame as storyboard image for shot {shot_id}: {shot['frame_image_path']}")
+                            else:
+                                print(f"[routes_shots] failed to extract first frame for shot {shot_id}")
 
-                    shot["updated_at"] = datetime.utcnow().isoformat()
-                    _save_shots(project_id, shots)
+                        # Handle retake: splice new segment back into original video
+                        if job_info.get("is_retake"):
+                            original_path = job_info["original_video_path"]
+                            start_sec = job_info["start_seconds"]
+                            end_sec = job_info["end_seconds"]
+                            spliced_path = shot_folder / f"take_{take_id}_spliced.mp4"
+                            if await asyncio.to_thread(_splice_video, original_path, local_path, start_sec, end_sec, spliced_path):
+                                spliced_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_spliced.mp4"
+                                new_take["path"] = spliced_url
+                                new_take["retake_of"] = original_path
+                                new_take["retake_range"] = [start_sec, end_sec]
+                                print(f"[routes_shots] retake spliced into {spliced_url}")
+                            else:
+                                print(f"[routes_shots] retake splice failed, keeping unspliced segment")
+
+                        shot["updated_at"] = datetime.utcnow().isoformat()
+                        _save_shots(project_id, shots)
 
             # Remove job from memory after processing
             _video_jobs.pop(job_id, None)
@@ -1439,35 +1550,36 @@ async def select_video_take(project_id: str, shot_id: str, take_id: str):
 
     Updates shot.video_clip_path to the selected take's path and marks it as selected.
     """
-    shots = _load_shots(project_id)
-    shot = next((s for s in shots if s["id"] == shot_id), None)
-    if not shot:
-        raise HTTPException(status_code=404, detail="Shot not found")
+    async with _vault_write_lock():
+        shots = _load_shots(project_id)
+        shot = next((s for s in shots if s["id"] == shot_id), None)
+        if not shot:
+            raise HTTPException(status_code=404, detail="Shot not found")
 
-    takes = shot.get("video_takes", [])
-    selected_take = next((t for t in takes if t["id"] == take_id), None)
-    if not selected_take:
-        raise HTTPException(status_code=404, detail="Take not found")
+        takes = shot.get("video_takes", [])
+        selected_take = next((t for t in takes if t["id"] == take_id), None)
+        if not selected_take:
+            raise HTTPException(status_code=404, detail="Take not found")
 
-    for t in takes:
-        t["selected"] = (t["id"] == take_id)
+        for t in takes:
+            t["selected"] = (t["id"] == take_id)
 
-    shot["video_clip_path"] = selected_take["path"]
-    shot["video_takes"] = takes
-    shot["status"] = ShotStatus.VIDEO_GENERATED.value
+        shot["video_clip_path"] = selected_take["path"]
+        shot["video_takes"] = takes
+        shot["status"] = ShotStatus.VIDEO_GENERATED.value
 
-    # Re-extract last frame from the newly selected take so the continuity
-    # chain uses the correct ending frame for subsequent shots.
-    shot_folder = _shot_dir(project_id, shot_id)
-    last_frame_path = shot_folder / "last_frame.png"
-    if _extract_last_frame(selected_take["path"], last_frame_path):
-        shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
-        print(f"[routes_shots] re-extracted last frame for shot {shot_id} from take {take_id}")
-    else:
-        print(f"[routes_shots] failed to re-extract last frame for shot {shot_id} from take {take_id}")
+        # Re-extract last frame from the newly selected take so the continuity
+        # chain uses the correct ending frame for subsequent shots.
+        shot_folder = _shot_dir(project_id, shot_id)
+        last_frame_path = shot_folder / "last_frame.png"
+        if await asyncio.to_thread(_extract_last_frame, selected_take["path"], last_frame_path):
+            shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+            print(f"[routes_shots] re-extracted last frame for shot {shot_id} from take {take_id}")
+        else:
+            print(f"[routes_shots] failed to re-extract last frame for shot {shot_id} from take {take_id}")
 
-    shot["updated_at"] = datetime.utcnow().isoformat()
-    _save_shots(project_id, shots)
+        shot["updated_at"] = datetime.utcnow().isoformat()
+        _save_shots(project_id, shots)
 
     return {"status": "selected", "take_id": take_id, "video_clip_path": selected_take["path"]}
 
@@ -1581,12 +1693,14 @@ async def generate_retake(
     if video_path.startswith("/assets/"):
         orig_local = str(VAULT_DIR / video_path[len("/assets/"):])
 
-    subprocess.run(
+    await asyncio.to_thread(
+        subprocess.run,
         ["ffmpeg", "-y", "-ss", str(start_seconds), "-i", orig_local,
          "-frames:v", "1", "-q:v", "2", str(anchor_start)],
         capture_output=True, text=True, timeout=15,
     )
-    subprocess.run(
+    await asyncio.to_thread(
+        subprocess.run,
         ["ffmpeg", "-y", "-ss", str(end_seconds), "-i", orig_local,
          "-frames:v", "1", "-q:v", "2", str(anchor_end)],
         capture_output=True, text=True, timeout=15,
@@ -1655,63 +1769,64 @@ async def cleanup_stale_video_refs(project_id: str):
     missing. If the active video_clip_path points to a missing file, clears it
     and promotes a remaining take (or resets status if none survive).
     """
-    shots = _load_shots(project_id)
-    cleaned = 0
+    async with _vault_write_lock():
+        shots = _load_shots(project_id)
+        cleaned = 0
 
-    for shot in shots:
-        takes = shot.get("video_takes", [])
-        if not takes:
-            continue
+        for shot in shots:
+            takes = shot.get("video_takes", [])
+            if not takes:
+                continue
 
-        surviving = []
-        for take in takes:
-            path = take.get("path", "")
-            if path and path.startswith("/assets/"):
-                local_file = VAULT_DIR / path[len("/assets/"):]
-                if local_file.exists():
-                    surviving.append(take)
+            surviving = []
+            for take in takes:
+                path = take.get("path", "")
+                if path and path.startswith("/assets/"):
+                    local_file = VAULT_DIR / path[len("/assets/"):]
+                    if local_file.exists():
+                        surviving.append(take)
+                    else:
+                        cleaned += 1
+                        print(f"[cleanup] removing stale take {take.get('id')} from shot {shot['id']}")
                 else:
-                    cleaned += 1
-                    print(f"[cleanup] removing stale take {take.get('id')} from shot {shot['id']}")
-            else:
-                surviving.append(take)
+                    surviving.append(take)
 
-        if len(surviving) == len(takes):
-            # Check if active video_clip_path still exists
-            vcp = shot.get("video_clip_path", "")
-            if vcp and vcp.startswith("/assets/"):
-                vcp_file = VAULT_DIR / vcp[len("/assets/"):]
-                if not vcp_file.exists():
-                    shot["video_clip_path"] = None
-                    shot["status"] = ShotStatus.PLANNED.value
+            if len(surviving) == len(takes):
+                # Check if active video_clip_path still exists
+                vcp = shot.get("video_clip_path", "")
+                if vcp and vcp.startswith("/assets/"):
+                    vcp_file = VAULT_DIR / vcp[len("/assets/"):]
+                    if not vcp_file.exists():
+                        shot["video_clip_path"] = None
+                        shot["status"] = ShotStatus.PLANNED.value
+                        shot["last_frame_path"] = None
+                        cleaned += 1
+                        print(f"[cleanup] cleared missing video_clip_path for shot {shot['id']}")
+                continue
+
+            # Some takes were removed
+            if surviving:
+                # Ensure one take is selected
+                has_selected = any(t.get("selected") for t in surviving)
+                if not has_selected:
+                    surviving[-1]["selected"] = True
+                shot["video_takes"] = surviving
+                shot["video_clip_path"] = surviving[-1]["path"]
+                # Re-extract last frame from new active take
+                shot_folder = _shot_dir(project_id, shot["id"])
+                last_frame_path = shot_folder / "last_frame.png"
+                if await asyncio.to_thread(_extract_last_frame, surviving[-1]["path"], last_frame_path):
+                    shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot['id']}/last_frame.png"
+                else:
                     shot["last_frame_path"] = None
-                    cleaned += 1
-                    print(f"[cleanup] cleared missing video_clip_path for shot {shot['id']}")
-            continue
-
-        # Some takes were removed
-        if surviving:
-            # Ensure one take is selected
-            has_selected = any(t.get("selected") for t in surviving)
-            if not has_selected:
-                surviving[-1]["selected"] = True
-            shot["video_takes"] = surviving
-            shot["video_clip_path"] = surviving[-1]["path"]
-            # Re-extract last frame from new active take
-            shot_folder = _shot_dir(project_id, shot["id"])
-            last_frame_path = shot_folder / "last_frame.png"
-            if _extract_last_frame(surviving[-1]["path"], last_frame_path):
-                shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot['id']}/last_frame.png"
             else:
+                # All takes gone
+                shot["video_takes"] = []
+                shot["video_clip_path"] = None
                 shot["last_frame_path"] = None
-        else:
-            # All takes gone
-            shot["video_takes"] = []
-            shot["video_clip_path"] = None
-            shot["last_frame_path"] = None
-            shot["status"] = ShotStatus.PLANNED.value
+                shot["status"] = ShotStatus.PLANNED.value
 
-    _save_shots(project_id, shots)
+        _save_shots(project_id, shots)
     return {"status": "ok", "cleaned": cleaned}
 
 
@@ -2001,7 +2116,7 @@ async def _start_next_segment(long_take_job_id: str):
     job["segment_job_ids"].append(response.job_id)
 
 
-def _save_partial_long_take(job: dict, seg_idx: int) -> None:
+async def _save_partial_long_take(job: dict, seg_idx: int) -> None:
     """Stitch completed segments and store as a partial take on the shot.
 
     Called when a segment fails permanently after retry and we have
@@ -2015,12 +2130,12 @@ def _save_partial_long_take(job: dict, seg_idx: int) -> None:
     final_path = shot_folder / f"take_{take_id}_longtake.mp4"
 
     if len(completed) >= 2:
-        stitch_ok = _concat_videos(completed, final_path)
+        stitch_ok = await asyncio.to_thread(_concat_videos, completed, final_path)
     else:
         import shutil as _shutil
         single_local = _resolve_asset_path(completed[0])
         if single_local and Path(single_local).exists():
-            _shutil.copy2(single_local, final_path)
+            await asyncio.to_thread(_shutil.copy2, single_local, final_path)
             stitch_ok = True
         else:
             stitch_ok = False
@@ -2030,38 +2145,39 @@ def _save_partial_long_take(job: dict, seg_idx: int) -> None:
         job["final_video_url"] = final_url
         print(f"[long-take] saved partial take: {len(completed)} segments → {final_url}")
 
-        shots = _load_shots(project_id)
-        shot = next((s for s in shots if s["id"] == shot_id), None)
-        if shot:
-            takes = shot.get("video_takes", [])
-            new_take = {
-                "id": take_id,
-                "path": final_url,
-                "seed": job["base_seed"],
-                "prompt": job["prompt"],
-                "negative_prompt": job["negative_prompt"],
-                "model_id": job["model_id"],
-                "camera_movement": job["camera_movement"],
-                "mode": "long_take",
-                "segment_count": len(completed),
-                "total_segments": len(job["segments"]),
-                "total_duration": len(completed) * job["segment_duration"],
-                "partial": True,
-                "segment_prompts": [s["prompt"] for s in job["segments"][:len(completed)]],
-                "keyframe_paths": [s["first_frame"] for s in job["segments"][:len(completed)]] + [job["segments"][len(completed) - 1]["last_frame"]],
-                "created_at": datetime.utcnow().isoformat(),
-                "selected": len(takes) == 0,
-            }
-            takes.append(new_take)
-            shot["video_takes"] = takes
-            if len(takes) == 1:
-                shot["video_clip_path"] = final_url
-                shot["status"] = ShotStatus.VIDEO_GENERATED.value
-            last_frame_path = shot_folder / "last_frame.png"
-            if _extract_last_frame(final_url, last_frame_path):
-                shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
-            shot["updated_at"] = datetime.utcnow().isoformat()
-            _save_shots(project_id, shots)
+        async with _vault_write_lock():
+            shots = _load_shots(project_id)
+            shot = next((s for s in shots if s["id"] == shot_id), None)
+            if shot:
+                takes = shot.get("video_takes", [])
+                new_take = {
+                    "id": take_id,
+                    "path": final_url,
+                    "seed": job["base_seed"],
+                    "prompt": job["prompt"],
+                    "negative_prompt": job["negative_prompt"],
+                    "model_id": job["model_id"],
+                    "camera_movement": job["camera_movement"],
+                    "mode": "long_take",
+                    "segment_count": len(completed),
+                    "total_segments": len(job["segments"]),
+                    "total_duration": len(completed) * job["segment_duration"],
+                    "partial": True,
+                    "segment_prompts": [s["prompt"] for s in job["segments"][:len(completed)]],
+                    "keyframe_paths": [s["first_frame"] for s in job["segments"][:len(completed)]] + [job["segments"][len(completed) - 1]["last_frame"]],
+                    "created_at": datetime.utcnow().isoformat(),
+                    "selected": len(takes) == 0,
+                }
+                takes.append(new_take)
+                shot["video_takes"] = takes
+                if len(takes) == 1:
+                    shot["video_clip_path"] = final_url
+                    shot["status"] = ShotStatus.VIDEO_GENERATED.value
+                last_frame_path = shot_folder / "last_frame.png"
+                if await asyncio.to_thread(_extract_last_frame, final_url, last_frame_path):
+                    shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+                shot["updated_at"] = datetime.utcnow().isoformat()
+                _save_shots(project_id, shots)
     else:
         job["status"] = "failed"
         job["error"] = f"Segment {seg_idx + 1} failed after retry and stitching partial result also failed."
@@ -2224,7 +2340,7 @@ async def check_long_take_status(job_id: str):
             final_path = shot_folder / f"take_{take_id}_longtake.mp4"
             segment_urls = job["segment_video_urls"]
 
-            stitch_ok = _concat_videos(segment_urls, final_path)
+            stitch_ok = await asyncio.to_thread(_concat_videos, segment_urls, final_path)
             if stitch_ok:
                 final_url = f"/assets/{project_id}/shots/{shot_id}/take_{take_id}_longtake.mp4"
                 job["final_video_url"] = final_url
@@ -2232,40 +2348,41 @@ async def check_long_take_status(job_id: str):
                 print(f"[long-take] stitched final video: {final_url}")
 
                 # Store as a take on the shot
-                shots = _load_shots(project_id)
-                shot = next((s for s in shots if s["id"] == shot_id), None)
-                if shot:
-                    takes = shot.get("video_takes", [])
-                    new_take = {
-                        "id": take_id,
-                        "path": final_url,
-                        "seed": job["base_seed"],
-                        "prompt": job["prompt"],
-                        "negative_prompt": job["negative_prompt"],
-                        "model_id": job["model_id"],
-                        "camera_movement": job["camera_movement"],
-                        "mode": "long_take",
-                        "segment_count": len(segment_urls),
-                        "total_duration": job["total_duration"],
-                        "segment_prompts": [s["prompt"] for s in job["segments"]],
-                        "keyframe_paths": [s["first_frame"] for s in job["segments"]] + [job["segments"][-1]["last_frame"]],
-                        "created_at": datetime.utcnow().isoformat(),
-                        "selected": len(takes) == 0,
-                    }
-                    takes.append(new_take)
-                    shot["video_takes"] = takes
+                async with _vault_write_lock():
+                    shots = _load_shots(project_id)
+                    shot = next((s for s in shots if s["id"] == shot_id), None)
+                    if shot:
+                        takes = shot.get("video_takes", [])
+                        new_take = {
+                            "id": take_id,
+                            "path": final_url,
+                            "seed": job["base_seed"],
+                            "prompt": job["prompt"],
+                            "negative_prompt": job["negative_prompt"],
+                            "model_id": job["model_id"],
+                            "camera_movement": job["camera_movement"],
+                            "mode": "long_take",
+                            "segment_count": len(segment_urls),
+                            "total_duration": job["total_duration"],
+                            "segment_prompts": [s["prompt"] for s in job["segments"]],
+                            "keyframe_paths": [s["first_frame"] for s in job["segments"]] + [job["segments"][-1]["last_frame"]],
+                            "created_at": datetime.utcnow().isoformat(),
+                            "selected": len(takes) == 0,
+                        }
+                        takes.append(new_take)
+                        shot["video_takes"] = takes
 
-                    if len(takes) == 1:
-                        shot["video_clip_path"] = final_url
-                        shot["status"] = ShotStatus.VIDEO_GENERATED.value
+                        if len(takes) == 1:
+                            shot["video_clip_path"] = final_url
+                            shot["status"] = ShotStatus.VIDEO_GENERATED.value
 
-                    # Extract last frame for continuity chain
-                    last_frame_path = shot_folder / "last_frame.png"
-                    if _extract_last_frame(final_url, last_frame_path):
-                        shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
+                        # Extract last frame for continuity chain
+                        last_frame_path = shot_folder / "last_frame.png"
+                        if await asyncio.to_thread(_extract_last_frame, final_url, last_frame_path):
+                            shot["last_frame_path"] = f"/assets/{project_id}/shots/{shot_id}/last_frame.png"
 
-                    shot["updated_at"] = datetime.utcnow().isoformat()
-                    _save_shots(project_id, shots)
+                        shot["updated_at"] = datetime.utcnow().isoformat()
+                        _save_shots(project_id, shots)
             else:
                 job["status"] = "failed"
                 job["error"] = "ffmpeg stitching failed"
@@ -2292,7 +2409,7 @@ async def check_long_take_status(job_id: str):
                     job["status"] = "partial_failure"
                     job["error"] = f"Segment {seg_idx + 1} failed after retry: {retry_err}. {len(completed)} of {len(job['segments'])} segments completed."
                     print(f"[long-take] segment {seg_idx + 1} failed permanently. Saving {len(completed)} partial segments.")
-                    _save_partial_long_take(job, seg_idx)
+                    await _save_partial_long_take(job, seg_idx)
                 # else: no completed segments, keep "failed" status
         else:
             # Already retried — check if we have any completed segments to save as partial
@@ -2301,7 +2418,7 @@ async def check_long_take_status(job_id: str):
                 job["status"] = "partial_failure"
                 job["error"] = f"Segment {seg_idx + 1} failed after retry. {len(completed)} of {len(job['segments'])} segments completed."
                 print(f"[long-take] segment {seg_idx + 1} failed permanently. Saving {len(completed)} partial segments.")
-                _save_partial_long_take(job, seg_idx)
+                await _save_partial_long_take(job, seg_idx)
             else:
                 job["status"] = "failed"
                 job["error"] = f"Segment {seg_idx + 1} generation failed: {response.error_message}"
