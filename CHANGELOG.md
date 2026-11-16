@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Recipe-to-Storyboard Reference Pipeline
+- **Ordered reference selection** — `_shot_reference_paths()` in `routes_shots.py` builds the reference image list sent to the storyboard model in a deterministic order: establishing frame first (if present), then recipe assets (locations prioritized), then explicitly linked reference images, then continuity frames from the previous shot while reference capacity remains. Used by both shot frame generation and variations so every surface gets the same references.
+- **Current asset-image resolution** — Recipe assets resolve to the asset's current `primary_image` (falling back to the shot asset's `image_path`), so regenerating an asset's portrait updates every subsequent storyboard generation automatically.
+- **Automatic identity mapping** — `build_qwen_reference_prompt()` in `prompt_builder.py` generates ordered instructions connecting each reference to its actual input slot: "Picture 1 provides the environment and composition reference", "Picture 2 defines the character Arra — preserve her white hair, animal-like ears…", plus retention instructions and an explicit "use the character's appearance from their picture, not a person visible in the environment reference". Character names match on word boundaries, multiple named characters are all included ("focus on Character A and Character B"), and naming a character no longer forces "tight framing" — the camera controls own shot size. Manual prompt overrides bypass all automatic instructions.
+- **Third Qwen reference slot** — `qwen_image_edit.json` and `qwen_image_edit_establishing.json` support three reference images (`input_image`, `input_image2`, `input_image3`), each wired into both positive and negative `TextEncodeQwenImageEditPlus` encoders. Reference portraits are sent uncropped; a separate `ImageScale` node owns the output canvas at the requested dimensions (aligned to multiples of 8).
+- **Driver capability metadata** — `list_image_drivers()` now derives capabilities (`image_to_image`, `multi_reference`, reference-slot counts) from each driver's actual workflow graph instead of hard-coded lists, so the UI can't advertise reference support a workflow doesn't have.
+
 #### Long Take Scene Continuity
 - **Scene context prompt prefix** — Long Take segments now inherit the same scene-context prompt prefix as regular video generation: scene description, time of day, mood, lighting, and character names are prepended to the global prompt so every segment shares the scene's visual identity. A new `_build_scene_context_prefix()` helper centralizes this logic so Long Take and regular video don't drift apart.
 - **Establishing frame injection** — When the user has not supplied a first keyframe image, the scene's establishing frame is automatically injected as the first keyframe. The long take starts from the scene's established composition instead of a model-invented one. Injection happens before T2I identification so the injected frame doesn't trigger text-to-image generation.
@@ -18,6 +25,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`skip_continuity` honored** — All Long Take scene-continuity features (prompt prefix, establishing-frame injection, reference-image injection) are gated on `skip_continuity`. Freestyle long takes and explicit opt-out preserve the original behavior.
 
 ### Fixed
+
+#### Event-Loop Blocking Eliminated (Backend Responsiveness)
+- **ffmpeg/subprocess work moved off the event loop** — Long-take stitching (up to 5 min of encoding), retake splicing, last/first-frame extraction, ffprobe duration probes, Media Library video listing, waveform generation, thumbnail strips, and the previs WebM→MP4 transcode now run in worker threads via `asyncio.to_thread`. Previously any one of these froze the entire backend — every status poll stalled and the frontend reported "Lost connection to backend" after ~15s.
+- **Uploads stream to disk** — Model, LoRA, video, and image uploads (including previs recordings) stream to disk in 1MB chunks instead of buffering the whole file in RAM and writing synchronously. A multi-GB model upload no longer spikes memory or blocks the loop.
+- **Generated-output writes threaded** — Vault downloads of generated frames, turnaround views, takes, and audio write files from worker threads.
+
+#### Memory Leaks & Resource Cleanup
+- **Job-store eviction** — `prune_job_store()` in `core/drivers/base.py` evicts finished jobs from the in-memory job dicts (ComfyUI image/video/audio drivers and `_audio_jobs`) after a 1-hour TTL / 200-terminal-job cap. Drivers are process-lifetime singletons, so finished jobs (which retain entire workflow graphs and request payloads) previously accumulated forever. Pending/processing jobs are never evicted while polls need them.
+- **Shared HTTP sessions** — ComfyUI drivers reuse a single pooled `aiohttp.ClientSession` instead of creating a new session (and TCP connection pool) for every generate, upload, and status poll — a 3-minute render polled at 3s previously discarded ~60 sessions. Sessions close cleanly on app shutdown via the lifespan hook.
+- **Frontend object-URL leak** — The Media Library's "Create Asset" preview created a new `URL.createObjectURL` on every render (each keystroke in the name field leaked a URL pinning the image blob in memory). The preview URL is now created once per file via `useMemo` and revoked on change/unmount.
+- **Video driver file-handle leak** — `ComfyVideoDriver._upload_to_comfy` closed over an unclosed `open()` handle; now uses a `with` block and preserves ComfyUI's `subfolder/name` return path.
+
+#### Generation Failure Handling
+- **No silent model fallback** — `qwen_image_edit` with no references returns a clear failure ("add a recipe asset or linked image, or explicitly select a text-to-image model") instead of silently falling back to the text-to-image workflow. The text-only `qwen_image` workflow was also corrected from a Z-Image checkpoint to a real Qwen Image configuration.
+- **Reference delivery failures are explicit** — Missing reference files, failed ComfyUI uploads, and reference counts exceeding a workflow's slots fail generation with a user-facing error instead of silently dropping assets or shifting remaining images into different slots.
+- **Terminal ComfyUI errors stop polling** — Execution errors and "completed without producing an image" are surfaced as terminal failures instead of polling forever.
+- **Video reference failures are explicit** — `ComfyVideoDriver` now rejects missing `/assets/` reference files and failed uploads before submission with a clear message (previously it printed and continued, letting the workflow fail confusingly inside ComfyUI).
+- **Multi-angle & turnaround failures counted once** — The multi-angle panel tracks finished sub-jobs in a `Set`, so a failed angle is counted once per poll instead of repeatedly — one failed angle plus one still running can no longer be reported as complete. All-failed turnarounds resolve as terminal failures; partial success composites only the successful views.
+- **Rejected variations leave no blank shots** — Variation validation (reference capacity, prompt length, driver availability) and generation submission now happen before the new shot is persisted; a rejected request no longer leaves a blank draft shot in storage.
+
+#### Saved Generation Settings Preserved Across Surfaces
+- **Variations inherit source settings** — Variations carry the source shot's dimensions, seed-compatible settings, negative prompt, denoise, CFG, steps, LoRAs, checkpoint override, megapixels, and linked references (new `ShotVariationRequest` fields), instead of resetting to 1024×1024 defaults.
+- **Regeneration restores saved settings** — Shot card regeneration, Shot Detail, and the create panel restore saved LoRAs, checkpoint override, steps, CFG, megapixels, linked references, camera angles, zoom, and composition preset. Regeneration errors are rendered in the UI instead of being silently discarded.
+- **Duplicate submissions blocked** — All shot surfaces guard against double submission (mouse + Ctrl+Enter + event bubbling) with `submissionRef` locks released on failure.
+
+#### Workflow Graph Corrections
+- **Flux Kontext** — Reference removal no longer leaves dangling `ImageStitch`/`FluxKontextImageScale` node references; `match_image_size` uses the supported boolean form.
+- **Qwen Multiangle** — Switch placeholders replaced with valid boolean/node connections.
+
+#### Vault Write Atomicity
+- **Re-entrant write lock** — `routes_shots.py` serializes read-modify-write cycles on `shots.json`/`scenes.json` with a per-task re-entrant `asyncio.Lock`. Frame extraction now runs in worker threads (an `await` inside load→modify→save), which would otherwise let a concurrent writer interleave and lose updates — e.g. a take persisted by a status poll being overwritten by a simultaneous angle save. Locking covers take persist/select/delete, long-take stitching, and cleanup; long encodes run outside the lock so they don't block other mutations.
+
+#### Other Fixes
+- **Timeline dock drag** — The dock resize handle no longer tears down its own mouse listeners after the first pixel of movement (the effect re-ran on every height change, removing the in-flight `mousemove`/`mouseup` listeners mid-drag).
+- **Custom workflows don't mutate shared class state** — Registering a custom workflow driver no longer writes into the class-level `MODEL_INFO` dict shared by all driver instances.
+- **Settings file cache** — `settings.json` is cached by mtime (invalidated on save), instead of being re-read and re-parsed on every driver lookup.
 
 #### Polling Race Conditions (Sequential Polling)
 - **Overlapping async polling eliminated** — All 10 polling surfaces across the app previously used `setInterval(async () => ...)` patterns that could overlap requests when a status call took longer than the polling interval. Since status endpoints mutate state (persist takes, advance segments, download audio, save assets), overlapping polls could double-persist, double-download, or race on file writes. Every polling surface now uses a sequential `setTimeout` chain that schedules the next poll only after the previous completes.

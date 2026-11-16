@@ -88,12 +88,12 @@ Block out camera moves in a real-time 3D stage before spending generation credit
 
 - **🗂️ Project & Asset Vault** - All your projects, scenes, shots, and assets are stored locally. No cloud dependency required.
 - **🎬 3D Storyboard** - Place a virtual camera in 3D space and frame your shots visually. Drag to position, see compass directions, FOV cone, and get warnings when you break the 180° rule.
-- **🧠 Continuity System** - Keep characters and locations consistent across frames using reference images.
+- **🧠 Continuity System** - Keep characters and locations consistent across frames using reference images. Recipe assets are automatically injected as visual references in a deterministic order (establishing frame → location → characters/props → linked images), and the prompt tells the model exactly which picture defines each character's identity — "Picture 2 defines Arra: preserve her white hair and armor" — instead of hoping the name alone carries the likeness.
 - **🔌 Works with Any AI Model** - The "Driver System" lets you swap between local ComfyUI and cloud providers (Fal, Replicate) without changing the UI.
   - **Image generation:** 7+ local models, 7+ cloud models
   - **Video generation:** 3 local models, 4 cloud models
   - **Audio:** Fish Speech (TTS + voice cloning), Chatterbox TTS (ComfyUI), MiniMax Music 3 (music), HunyuanVideo Foley (video-to-SFX)
-- **🖼️ Multi-Reference Generation** - Feed the AI multiple character/scene reference images to maintain visual consistency.
+- **🖼️ Multi-Reference Generation** - Feed the AI multiple character/scene reference images to maintain visual consistency. Qwen Image Edit supports up to 3 references; reference counts that exceed a workflow's slots fail with a clear error instead of silently dropping images.
 - **🎞️ Timeline & Export** - Assemble shots into a timeline, add audio, and export to XML for editing in Premiere, DaVinci, etc.
 - **⚡ Live Status** - Watch generation progress in real-time with elapsed timers. Jobs persist across tab switches — switch away and come back to find completed generations updated in the storyboard.
 - **🎛️ Shot Composition Tools** - Cinematic presets (establishing, over-shoulder, close-up, POV), art styles, aspect ratios, and advanced controls (negative prompt, seed, denoise, CFG, steps).
@@ -368,7 +368,7 @@ Once the app is running in your browser:
    - See compass directions, FOV cone, and previous shot angles
    - Get warnings if you cross the 180° line
 4. **Pick a preset** - Choose from cinematic presets (establishing, over-shoulder, close-up, POV, etc.) or position the camera manually.
-5. **Generate frames** - Click "Create & Generate" (or press Ctrl+Enter). The AI creates a storyboard frame using your scene's reference images.
+5. **Generate frames** - Click "Create & Generate" (or press Ctrl+Enter). The AI creates a storyboard frame using your scene's reference images. Assets from the scene recipe are automatically injected as visual references (current primary images), ordered deterministically with the establishing frame and location first, and Qwen Edit receives explicit picture-to-asset identity instructions so characters keep their appearance. Missing asset images fail with a clear error rather than being silently dropped.
 6. **Refine** - Click any shot to open its detail panel where you can:
    - Generate alternate camera angles
    - Create prompt variations
@@ -605,7 +605,7 @@ You can add new AI models without writing any code. Build a workflow in ComfyUI,
 | ------------------- | --------------------------- | ----------------------------- |
 | `z_image`           | Z-Image (ComfyUI)           | Text-to-image, 9 steps        |
 | `qwen_image`        | Qwen Image (ComfyUI)        | Text-to-image, 20 steps       |
-| `qwen_image_edit`   | Qwen Image Edit (ComfyUI)   | Image-to-image, 4 steps       |
+| `qwen_image_edit`   | Qwen Image Edit (ComfyUI)   | Image-to-image, up to 3 refs, 4 steps |
 | `qwen_multiangle`   | Qwen Multiangle (ComfyUI)   | Multi-reference, multi-angle  |
 | `flux2`             | Flux 2 (ComfyUI)            | Text-to-image                 |
 | `flux2_kontext`     | Flux 2 Kontext (ComfyUI)    | Multi-reference storyboard    |
@@ -799,6 +799,18 @@ class ImageDriver(ABC):
 
 ---
 
+## ⚡ Performance & Reliability
+
+The backend is built to stay responsive during long generations:
+
+- **Non-blocking media work** — All ffmpeg operations (long-take stitching, retake splicing, frame extraction, waveforms, thumbnails, previs transcoding) and file writes run in worker threads via `asyncio.to_thread`, so status polls and the UI never freeze behind a 5-minute encode.
+- **Streamed uploads** — Model, LoRA, and media uploads stream to disk in chunks instead of buffering whole files in memory.
+- **Self-pruning job stores** — Finished generation jobs are evicted from memory after a retention window, so long editing sessions don't accumulate leaked workflow graphs.
+- **Pooled connections** — ComfyUI drivers reuse one shared HTTP session per driver instead of opening a new connection pool on every poll.
+- **Atomic vault writes** — Read-modify-write cycles on the vault's JSON stores are serialized with a re-entrant lock, so concurrent job completions can't overwrite each other's changes.
+
+---
+
 ## 🛠️ Troubleshooting
 
 **Generation status not updating**
@@ -894,6 +906,8 @@ This project began as an ambitious AI filmmaking tool over a year ago. The origi
 - [x] **Cloud-Only Execution** — Full execution support without local ComfyUI via API keys
 - [x] **Screenplay Ingestion** — Automatic scene parsing and shot-list extraction
 - [x] **Video Timeline Preview & Scrubbing** — Multi-track video and audio timeline playback
+- [x] **Recipe-to-Storyboard Reference Pipeline** — Ordered reference injection with automatic picture-to-character identity instructions
+- [x] **Performance & Reliability Hardening** — Threaded media work, streamed uploads, job-store eviction, pooled HTTP sessions, and atomic vault writes
 
 ---
 
