@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   type ShotResponse, updateShot,
   generateCameraAngles, checkAnglesStatus,
@@ -24,58 +24,91 @@ export function MultiAnglePanel({ shot, projectId, prompt, onRefresh }: MultiAng
   const [show, setShow] = useState(false);
   const [selectedAngles, setSelectedAngles] = useState<string[]>([]);
   const poll = useGenerationPolling();
+  const submissionRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const busy = submitting || poll.isRunning;
 
   const toggleAngle = (a: string) => setSelectedAngles((p) => p.includes(a) ? p.filter((x) => x !== a) : [...p, a]);
 
   const handleGenerate = async () => {
-    if (!shot.frame_image_path || selectedAngles.length === 0) return;
+    if (submissionRef.current || busy || !shot.frame_image_path || selectedAngles.length === 0) return;
+    submissionRef.current = true;
+    setSubmitting(true);
+    poll.setError(null);
     const boundRefPaths = (shot.assets || []).map((a: any) => a.image_path).filter(Boolean);
 
     try {
       const resp = await generateCameraAngles(
         shot.frame_image_path, selectedAngles, 1024, 1024, undefined, "qwen_multiangle", prompt, boundRefPaths
       );
-
-      if (resp.sub_jobs) {
-        const subJobs = resp.sub_jobs;
-        const results: Record<string, string> = {};
-        let done = 0;
-
-        useStudioStore.getState().addActiveFrameJob({
-          job_id: resp.job_id || "multi_angle", model_id: "qwen_multiangle", shot_id: shot.id, on_complete: "refresh_shots",
-        });
-
-        poll.startPolling(
-          async () => {
-            for (const sub of subJobs) {
-              if (results[sub.angle]) continue;
-              const st = await checkAnglesStatus(sub.sub_job_id, "qwen_multiangle");
-              if (st.status === "completed" && st.image_urls?.[0]) { results[sub.angle] = st.image_urls[0]; done++; }
-              else if (st.status === "failed") done++;
-            }
-            return { status: done >= subJobs.length ? "completed" : "processing", image_urls: [] };
-          },
-          async () => {
-            // Save angle images to vault so they appear in the library
-            const savedResults: Record<string, string> = {};
-            for (const [angle, url] of Object.entries(results)) {
-              try {
-                const saved = await saveImageFromUrl(projectId, url);
-                savedResults[angle] = saved.image_url;
-              } catch (e) {
-                console.error(`Failed to save angle image ${angle}:`, e);
-                savedResults[angle] = url;
-              }
-            }
-            await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...savedResults } });
-            setSelectedAngles([]);
-            await onRefresh();
-          },
-          { intervalMs: 3000, jobId: resp.job_id || "multi_angle" }
-        );
+      if (resp.status === "failed") {
+        poll.setError(resp.error_message || "Camera-angle generation failed");
+        return;
       }
+      if (!resp.sub_jobs?.length) {
+        poll.setError("No camera-angle jobs were returned");
+        return;
+      }
+
+      const subJobs = resp.sub_jobs;
+      const results: Record<string, string> = {};
+      const finished = new Set<string>();
+      const failures = new Map<string, string>();
+      for (const sub of subJobs) {
+        if (sub.status === "failed") {
+          finished.add(sub.sub_job_id);
+          failures.set(sub.sub_job_id, sub.error_message || `${sub.angle} failed`);
+        }
+      }
+      if (finished.size === subJobs.length) {
+        poll.setError([...failures.values()].join("; "));
+        return;
+      }
+
+      useStudioStore.getState().addActiveFrameJob({
+        job_id: resp.job_id || "multi_angle", model_id: "qwen_multiangle", shot_id: shot.id, on_complete: "refresh_shots",
+      });
+
+      poll.startPolling(
+        async () => {
+          for (const sub of subJobs) {
+            if (finished.has(sub.sub_job_id)) continue;
+            const st = await checkAnglesStatus(sub.sub_job_id, "qwen_multiangle");
+            if (st.status === "completed" || st.status === "failed") {
+              finished.add(sub.sub_job_id);
+              if (st.status === "completed" && st.image_urls?.[0]) results[sub.angle] = st.image_urls[0];
+              else failures.set(sub.sub_job_id, st.error_message || `${sub.angle} produced no image`);
+            }
+          }
+          if (finished.size < subJobs.length) return { status: "processing", image_urls: [] };
+          return Object.keys(results).length > 0
+            ? { status: "completed", image_urls: [] }
+            : { status: "failed", image_urls: [], error_message: [...failures.values()].join("; ") };
+        },
+        async () => {
+          // Save angle images to vault so they appear in the library
+          const savedResults: Record<string, string> = {};
+          for (const [angle, url] of Object.entries(results)) {
+            try {
+              const saved = await saveImageFromUrl(projectId, url);
+              savedResults[angle] = saved.image_url;
+            } catch (e) {
+              console.error(`Failed to save angle image ${angle}:`, e);
+              savedResults[angle] = url;
+            }
+          }
+          await updateShot(projectId, shot.id, { angle_images: { ...(shot.angle_images || {}), ...savedResults } });
+          setSelectedAngles([]);
+          await onRefresh();
+          if (failures.size > 0) poll.setError(`${failures.size} angle(s) failed; successful images were saved. ${[...failures.values()].join("; ")}`);
+        },
+        { intervalMs: 3000, jobId: resp.job_id || "multi_angle" }
+      );
     } catch (err) {
       poll.setError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      submissionRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -86,7 +119,7 @@ export function MultiAnglePanel({ shot, projectId, prompt, onRefresh }: MultiAng
           <Camera className="w-3.5 h-3.5 text-studio-accent" /> Multi-Angle Generation
         </h3>
         <div className="flex items-center gap-2">
-          {poll.isRunning && <span className="text-[10px] text-studio-muted/70 tabular-nums">{poll.elapsedDisplay}</span>}
+          {busy && <span className="text-[10px] text-studio-muted/70 tabular-nums">{poll.elapsedDisplay}</span>}
           <button onClick={() => setShow(!show)} className="p-1 rounded-lg hover:bg-studio-panelHover text-studio-muted hover:text-studio-accent transition-colors">
             {show ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
@@ -112,10 +145,10 @@ export function MultiAnglePanel({ shot, projectId, prompt, onRefresh }: MultiAng
             <button onClick={() => setSelectedAngles(["three_quarter_left", "three_quarter_right", "side_left", "side_right"])} className="text-[10px] text-studio-muted hover:text-studio-accent">Coverage Set</button>
             <button onClick={() => setSelectedAngles(["front", "back", "side_left", "side_right"])} className="text-[10px] text-studio-muted hover:text-studio-accent">360° Set</button>
           </div>
-          <button onClick={handleGenerate} disabled={poll.isRunning || selectedAngles.length === 0}
+          <button onClick={handleGenerate} disabled={busy || selectedAngles.length === 0}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-accent hover:bg-studio-accentHover disabled:opacity-40 disabled:cursor-not-allowed text-white text-[10px] font-medium rounded-lg transition-all">
-            {poll.isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Camera className="w-3 h-3" />}
-            {poll.isRunning ? (poll.status || "Working...") : `Generate ${selectedAngles.length} Angle${selectedAngles.length !== 1 ? "s" : ""}`}
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Camera className="w-3 h-3" />}
+            {busy ? (poll.status || "Working...") : `Generate ${selectedAngles.length} Angle${selectedAngles.length !== 1 ? "s" : ""}`}
           </button>
           {poll.error && <p className="mt-2 text-[10px] text-studio-danger bg-studio-danger/10 p-1.5 rounded">{poll.error}</p>}
         </div>

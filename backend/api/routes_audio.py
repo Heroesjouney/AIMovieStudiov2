@@ -5,6 +5,7 @@ Supports both direct TTS (query-param) and job-based generation (JSON body)
 for speech, music, and foley with async polling.
 """
 
+import asyncio
 import json
 import os
 import uuid
@@ -17,7 +18,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Body
 from pydantic import BaseModel
 
 from core.drivers import get_audio_driver
-from core.drivers.base import AudioGenerationRequest
+from core.drivers.base import AudioGenerationRequest, prune_job_store
 
 router = APIRouter()
 VAULT_DIR = Path(__file__).parent.parent / "assets"
@@ -75,6 +76,7 @@ def _foley_dir(project_id: str) -> Path:
 @router.post("/job")
 async def start_audio_job(req: AudioJobRequest):
     """Start an audio generation job (speech, music, or foley)."""
+    prune_job_store(_audio_jobs)
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
 
@@ -203,14 +205,14 @@ async def start_audio_job(req: AudioJobRequest):
             # Local URL (e.g. /assets/...) — copy from vault
             source_path = VAULT_DIR / remote_audio_url.lstrip("/").removeprefix("assets/")
             if source_path.exists():
-                shutil.copy2(source_path, filepath)
+                await asyncio.to_thread(shutil.copy2, source_path, filepath)
                 job["audio_url"] = f"/assets/{req.project_id}/audio/{job_id}/{filename}"
                 job["status"] = "completed"
             else:
                 job["status"] = "failed"
                 job["error_message"] = f"Audio file not found at {source_path}"
         elif local_audio_path and os.path.exists(local_audio_path):
-            shutil.copy2(local_audio_path, filepath)
+            await asyncio.to_thread(shutil.copy2, local_audio_path, filepath)
             job["audio_url"] = f"/assets/{req.project_id}/audio/{job_id}/{filename}"
             job["status"] = "completed"
         else:
@@ -243,6 +245,7 @@ async def get_audio_job_status(job_id: str):
     For ComfyUI drivers, this polls the driver for updates when the job
     is still processing.
     """
+    prune_job_store(_audio_jobs)
     job = _audio_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Audio job not found")
@@ -283,7 +286,7 @@ async def get_audio_job_status(job_id: str):
                             async with _aiohttp.ClientSession() as session:
                                 async with session.get(remote_url) as dl_resp:
                                     if dl_resp.status == 200:
-                                        filepath.write_bytes(await dl_resp.read())
+                                        await asyncio.to_thread(filepath.write_bytes, await dl_resp.read())
                                         job["audio_url"] = f"/assets/{project_id}/audio/{job_id}/{filename}"
                                         job["status"] = "completed"
                                     else:

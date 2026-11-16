@@ -33,11 +33,26 @@ SUPPORTED_KEYS = {
 }
 
 
+# Parsed-settings cache keyed by the settings file's mtime — driver lookups
+# read settings on every request, and re-reading/parsing the file each time is
+# wasted disk I/O. Invalidated automatically when the file is rewritten.
+_settings_cache: dict = {"mtime": None, "data": {}}
+
+
 def _load_settings() -> dict:
-    """Load settings from the JSON file."""
+    """Load settings from the JSON file (cached until the file changes)."""
+    try:
+        mtime = SETTINGS_FILE.stat().st_mtime
+    except OSError:
+        mtime = None
+    if mtime is not None and _settings_cache["mtime"] == mtime:
+        return _settings_cache["data"]
     if SETTINGS_FILE.exists():
         try:
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8-sig"))
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8-sig"))
+            _settings_cache["mtime"] = mtime
+            _settings_cache["data"] = data
+            return data
         except (json.JSONDecodeError, IOError):
             pass
     return {}
@@ -47,6 +62,8 @@ def _save_settings(data: dict):
     """Save settings to the JSON file."""
     VAULT_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+    # Invalidate the read cache so the next _load_settings re-reads the file
+    _settings_cache["mtime"] = None
 
 
 def _auto_detect_models_dir() -> Optional[str]:

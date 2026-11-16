@@ -252,7 +252,7 @@ class FalVideoDriver(VideoDriver):
         async with httpx.AsyncClient() as client:
             resp = await client.get(video_url)
             resp.raise_for_status()
-            output_path.write_bytes(resp.content)
+            await asyncio.to_thread(output_path.write_bytes, resp.content)
 
         return str(output_path)
 
